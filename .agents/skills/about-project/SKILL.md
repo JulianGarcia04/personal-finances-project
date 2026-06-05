@@ -36,6 +36,7 @@ vault-personal-finances (Root)
 * `/accounts/{accountId}`: Only the owner (`resource.data.userId == request.auth.uid`) can read, update, or delete. Owners can create accounts where they are designated as the owner.
 * `/transactions/{transactionId}`: Restricts all reads, writes, and deletions to the authenticated owner.
 * `/categories/{categoryId}`: Users can read categories that belong to them OR global categories (`userId == null`). Only the owner can write/delete their custom categories.
+* `/goals/{goalId}`: Only the owner (`resource.data.userId == request.auth.uid`) can read, update, or delete. Owners can create goals where they are designated as the owner.
 
 ### Storage Rules
 * File uploads are restricted to `/users/{userId}/*` where only the authenticated owner can read or write files.
@@ -46,6 +47,8 @@ vault-personal-finances (Root)
 * `uid`: string (Firebase Auth UID)
 * `email`: string
 * `displayName`: string
+* `country`: string | null (e.g. "CO", "MX", "ES", "US", "CL", "AR", "PE")
+* `currency`: string | null (e.g. "COP", "MXN", "EUR", "USD", "CLP", "ARS", "PEN")
 * `createdAt`: timestamp
 
 #### 2. `/accounts/{accountId}`
@@ -71,6 +74,7 @@ vault-personal-finances (Root)
 * `statementImportId`: string | null (optional, tracks statement parser origin)
 * `receiptUrl`: string | null (optional, download URL for receipt uploaded to Storage)
 * `currency`: string (copied from account)
+* `embedding`: number[] | null (optional, 768-dimension semantic vector from text-embedding-004)
 * `createdAt`: timestamp
 
 #### 4. `/categories/{categoryId}`
@@ -80,6 +84,16 @@ vault-personal-finances (Root)
 * `icon`: string (Lucide icon name)
 * `color`: string (HEX color code)
 * `type`: "income" | "expense" | "both"
+
+#### 5. `/goals/{goalId}`
+* `id`: string
+* `userId`: string (FK to user)
+* `name`: string (e.g., "Comprar Carro")
+* `targetAmount`: number
+* `currentAmount`: number
+* `currency`: string (e.g., "COP", "USD", "EUR")
+* `targetDate`: timestamp
+* `createdAt`: timestamp
 
 ---
 
@@ -98,7 +112,8 @@ vault-personal-finances (Root)
 * [authStore.ts](file:///Users/juliangarcia/Documents/personal-projects.nosync/personal-finances-project/src/stores/authStore.ts): Manages Firebase user session.
 * [accountsStore.ts](file:///Users/juliangarcia/Documents/personal-projects.nosync/personal-finances-project/src/stores/accountsStore.ts): Manages bank/credit account state.
 * [transactionsStore.ts](file:///Users/juliangarcia/Documents/personal-projects.nosync/personal-finances-project/src/stores/transactionsStore.ts): Handles transaction history, batch inserts, receipt uploads, and Firestore sync.
-* [settingsStore.ts](file:///Users/juliangarcia/Documents/personal-projects.nosync/personal-finances-project/src/stores/settingsStore.ts): Manages Gemini API integration, user API key encryption, and AI toggle settings.
+* [settingsStore.ts](file:///Users/juliangarcia/Documents/personal-projects.nosync/personal-finances-project/src/stores/settingsStore.ts): Manages Gemini API integration, user API key encryption, and AI country/currency preferences.
+* [goalsStore.ts](file:///Users/juliangarcia/Documents/personal-projects.nosync/personal-finances-project/src/stores/goalsStore.ts): Manages savings goals, budget preferences (50/30/20 rule), and Firestore updates.
 
 ---
 
@@ -119,3 +134,7 @@ Vault runs entirely offline using the **Firebase Emulator Suite** and **Genkit D
 Backend secrets must be set in `functions/.env`:
 * `GEMINI_API_KEY`: Google AI Studio API Key.
 * `ENCRYPTION_SECRET`: A secure 32-character string used to encrypt/decrypt user-provided Gemini API keys.
+
+### AI Chatbot & Tax Context Integration
+* **`chatWithAgent` Cloud Function:** An interactive HTTPS Cloud Function that powers the chat page. It initializes Genkit and Gemini 1.5 Flash. It has database access tools (`listAccounts`, `createAccount`, `listTransactions`, `createTransaction`, `deleteTransaction`, `listGoals`, `createGoal`, `updateGoalAmount`, `semanticSearchTransactions`, `indexTransactions`) to safely run user actions.
+* **Country Tax Context Mapping:** Automatically maps the user's `country` to specific tax agencies and guidelines (DIAN/4x1000 in Colombia, SAT/ISR in Mexico, Hacienda/IRPF in Spain, IRS/401k in USA, SII in Chile, AFIP in Argentina, SUNAT in Peru) and injects it as localized context in the chatbot instructions.

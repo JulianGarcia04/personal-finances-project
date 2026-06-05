@@ -52,15 +52,17 @@
             <textarea 
               v-model="statementText"
               rows="8"
+              :readonly="!!pdfBase64"
               placeholder="Pega aquí el texto copiado de tu PDF, extracto bancario digital o correo de notificaciones..."
-              class="w-full px-4 py-3 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-emerald resize-y"
+              class="w-full px-4 py-3 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-emerald resize-y transition-all"
+              :class="{ 'opacity-60 cursor-not-allowed bg-slate-950/20': !!pdfBase64 }"
             ></textarea>
           </div>
 
           <!-- Divider -->
           <div class="flex items-center text-xs text-text-muted">
             <div class="flex-1 border-t border-border/40"></div>
-            <span class="px-3">O sube un archivo de texto</span>
+            <span class="px-3">O sube un archivo (Texto o PDF)</span>
             <div class="flex-1 border-t border-border/40"></div>
           </div>
 
@@ -79,17 +81,27 @@
               type="file" 
               ref="fileInput" 
               class="hidden" 
-              accept=".txt,.csv"
+              accept=".txt,.csv,.pdf"
               @change="handleFileSelect"
             />
             <div class="flex flex-col items-center space-y-2">
-              <span class="text-xs text-text-secondary font-medium">Arrastra tu archivo .txt o .csv aquí, o haz clic para buscar</span>
+              <span class="text-xs text-text-secondary font-medium">Arrastra tu archivo .txt, .csv o .pdf aquí, o haz clic para buscar</span>
               <span class="text-[10px] text-text-muted">Tamaño máximo 5MB</span>
             </div>
           </div>
 
-          <div v-if="fileName" class="text-xs text-accent-emerald font-semibold flex items-center space-x-2">
-            <span>✓ Archivo cargado: {{ fileName }}</span>
+          <div v-if="fileName" class="text-xs text-accent-emerald font-semibold flex items-center justify-between bg-slate-900/40 px-4 py-2.5 rounded-xl border border-white/5">
+            <div class="flex items-center space-x-2">
+              <span class="w-2 h-2 rounded-full bg-accent-emerald animate-pulse"></span>
+              <span>Archivo cargado: {{ fileName }}</span>
+            </div>
+            <button 
+              type="button" 
+              @click.stop="clearFile" 
+              class="text-[10px] uppercase font-bold tracking-wider text-text-muted hover:text-accent-rose transition-colors cursor-pointer"
+            >
+              Quitar
+            </button>
           </div>
 
           <!-- Error Msg -->
@@ -233,6 +245,7 @@ const router = useRouter()
 
 const targetAccountId = ref('')
 const statementText = ref('')
+const pdfBase64 = ref('')
 const dragOver = ref(false)
 const fileName = ref('')
 const errorMessage = ref('')
@@ -296,10 +309,26 @@ const readFile = (file: File) => {
   errorMessage.value = ''
   
   const reader = new FileReader()
-  reader.onload = (e: ProgressEvent<FileReader>) => {
-    statementText.value = (e.target?.result as string) || ''
+  if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
+    reader.onload = (e: ProgressEvent<FileReader>) => {
+      const result = e.target?.result as string
+      pdfBase64.value = result
+      statementText.value = `[Archivo PDF cargado: ${file.name}]`
+    }
+    reader.readAsDataURL(file)
+  } else {
+    pdfBase64.value = ''
+    reader.onload = (e: ProgressEvent<FileReader>) => {
+      statementText.value = (e.target?.result as string) || ''
+    }
+    reader.readAsText(file)
   }
-  reader.readAsText(file)
+}
+
+const clearFile = () => {
+  fileName.value = ''
+  pdfBase64.value = ''
+  statementText.value = ''
 }
 
 // Invocación a Gemini Flow
@@ -308,7 +337,7 @@ const processWithIA = async () => {
     errorMessage.value = 'Debes seleccionar una cuenta de destino.'
     return
   }
-  if (!statementText.value.trim()) {
+  if (!statementText.value.trim() && !pdfBase64.value) {
     errorMessage.value = 'No hay contenido para analizar. Escribe o sube un extracto.'
     return
   }
@@ -317,7 +346,10 @@ const processWithIA = async () => {
   errorMessage.value = ''
   
   try {
-    const rawTxs = await settingsStore.parseStatementText(statementText.value)
+    const rawTxs = await settingsStore.parseStatementText(
+      pdfBase64.value ? undefined : statementText.value,
+      pdfBase64.value || undefined
+    )
     
     // Asignar el flag `checked` y normalizar datos
     parsedTransactions.value = rawTxs.map((t: any) => ({
@@ -326,7 +358,7 @@ const processWithIA = async () => {
     }))
 
     if (parsedTransactions.value.length === 0) {
-      errorMessage.value = 'La IA no pudo detectar ninguna transacción en el texto provisto. Por favor verifica el contenido.'
+      errorMessage.value = 'La IA no pudo detectar ninguna transacción en el extracto provisto. Por favor verifica el contenido.'
     }
   } catch (err: any) {
     console.error(err)
@@ -354,6 +386,7 @@ const resetImport = () => {
   parsedTransactions.value = []
   statementText.value = ''
   fileName.value = ''
+  pdfBase64.value = ''
 }
 </script>
 

@@ -101,7 +101,10 @@ interface GenkitParseResult {
 }
 
 // 2. Genkit-like Flow para procesar el extracto bancario con IA
-const runParseStatementFlow = async (text: string, apiKey: string): Promise<GenkitParseResult> => {
+const runParseStatementFlow = async (
+  input: { text?: string; pdfBase64?: string },
+  apiKey: string
+): Promise<GenkitParseResult> => {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
     model: "gemini-1.5-flash",
@@ -109,7 +112,7 @@ const runParseStatementFlow = async (text: string, apiKey: string): Promise<Genk
   });
 
   const systemInstruction = `
-    Eres un asistente experto en finanzas personales. Tu tarea es extraer y estructurar todas las transacciones individuales contenidas en el extracto bancario o de tarjeta de crédito provisto en forma de texto.
+    Eres un asistente experto en finanzas personales. Tu tarea es extraer y estructurar todas las transacciones individuales contenidas en el extracto bancario o de tarjeta de crédito provisto (que puede ser en formato de texto o un archivo PDF).
     
     Debes retornar estrictamente un objeto JSON con la lista de transacciones bajo la clave "transactions".
     
@@ -131,8 +134,30 @@ const runParseStatementFlow = async (text: string, apiKey: string): Promise<Genk
     - Los abonos o pagos a la tarjeta deben ser representados como valores POSITIVOS.
   `;
 
+  const parts: any[] = [];
+  if (input.pdfBase64) {
+    let base64Data = input.pdfBase64;
+    if (base64Data.startsWith("data:")) {
+      const commaIndex = base64Data.indexOf(",");
+      if (commaIndex !== -1) {
+        base64Data = base64Data.substring(commaIndex + 1);
+      }
+    }
+    parts.push({
+      inlineData: {
+        mimeType: "application/pdf",
+        data: base64Data
+      }
+    });
+    parts.push({ text: "Analiza el siguiente extracto bancario PDF y extrae las transacciones según las instrucciones del sistema." });
+  } else if (input.text) {
+    parts.push({ text: input.text });
+  } else {
+    throw new Error("Se requiere texto o archivo PDF para analizar.");
+  }
+
   const result = await model.generateContent({
-    contents: [{ role: "user", parts: [{ text: text }] }],
+    contents: [{ role: "user", parts: parts }],
     systemInstruction: systemInstruction
   });
 
@@ -159,9 +184,9 @@ export const parseStatement = onRequest(async (req, res) => {
       const decodedToken = await admin.auth().verifyIdToken(token);
       const userId = decodedToken.uid;
 
-      const { text, useDefaultKey } = req.body;
-      if (!text) {
-        res.status(400).json({ error: "El texto del extracto es requerido." });
+      const { text, pdfBase64, useDefaultKey } = req.body;
+      if (!text && !pdfBase64) {
+        res.status(400).json({ error: "El texto del extracto o el PDF en base64 es requerido." });
         return;
       }
 
@@ -188,7 +213,7 @@ export const parseStatement = onRequest(async (req, res) => {
       }
 
       // Ejecutar el Flow
-      const parsedTransactions = await runParseStatementFlow(text, activeApiKey);
+      const parsedTransactions = await runParseStatementFlow({ text, pdfBase64 }, activeApiKey);
       res.status(200).json(parsedTransactions);
 
     } catch (error: any) {

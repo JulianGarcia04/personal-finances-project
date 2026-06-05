@@ -128,7 +128,7 @@ export const useSettingsStore = defineStore('settings', {
     },
 
     // Invoca la Cloud Function para procesar el extracto usando el Genkit Flow
-    async parseStatementText(text: string): Promise<any[]> {
+    async parseStatementText(text?: string, pdfBase64?: string): Promise<any[]> {
       const user = auth.currentUser
       if (!user) throw new Error('Usuario no autenticado')
 
@@ -145,6 +145,7 @@ export const useSettingsStore = defineStore('settings', {
           },
           body: JSON.stringify({
             text,
+            pdfBase64,
             useDefaultKey: !this.useCustomKey
           })
         })

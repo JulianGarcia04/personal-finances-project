@@ -23,7 +23,7 @@ vault-personal-finances (Raíz)
   * **Vue 3 (`<script setup lang="ts">`):** Framework base para la reactividad y modularidad.
   * **Vite + Tailwind CSS v4:** Compilación rápida y sistema de estilos premium de cristal (glassmorphism) con variables de color HSL fluidas.
   * **TypeScript:** Tipado estático estricto en toda la aplicación.
-  * **Pinia:** Manejo del estado global (Stores de Auth, Accounts, Transactions y Settings).
+  * **Pinia:** Manejo del estado global (Stores de Auth, Accounts, Transactions, Goals y Settings).
   * **Zod:** Validación robusta de formularios y esquemas de datos en tiempo de ejecución.
   * **Chart.js:** Gráficos dinámicos e interactivos de flujo mensual y distribución por categorías.
   * **Lucide Vue Next:** Librería de iconos vectoriales consistentes.
@@ -58,12 +58,21 @@ Permite subir archivos de texto (`.txt`, `.csv`) o pegar fragmentos de texto de 
 * **Encriptación de Extremo a Extremo:** Para seguridad del usuario, su clave personal de Gemini no se guarda en LocalStorage. Se encripta simétricamente (AES-256-CBC) en una Cloud Function del servidor utilizando una clave secreta del proyecto y se guarda en un documento seguro de Firestore. Durante el parsing de extractos, la Cloud Function recupera la clave, la desencripta y realiza la consulta a Gemini sin exponerla en los logs ni en la consola del cliente.
 * **Pantalla de Revisión Interactiva:** Antes de guardar, los movimientos parsed se cargan en una tabla interactiva donde el usuario puede modificar montos, descripciones, reclasificar categorías o desmarcar transacciones específicas antes de guardarlas masivamente.
 
+### 5. Presupuestos y Objetivos de Ahorro
+Permite establecer metas financieras personalizadas (ej. ahorrar para un carro o un viaje) y asignar fondos de manera atómica descontándolos de cuentas bancarias reales. Incluye un planificador de presupuestos interactivo basado en la regla 50/30/20, soportado por gráficos de distribución en tiempo real con Chart.js.
+
+### 6. Asesor Financiero IA (Modo Agente Chatbot)
+Un chatbot integrado e interactivo (pestaña "Asesor IA") impulsado por Genkit y Gemini 1.5 Flash.
+* **Acceso a la Base de Datos:** A través de Genkit Tools seguras, el Agente puede consultar, crear y modificar cuentas, transacciones y objetivos de ahorro en tiempo real a nombre del usuario.
+* **Búsqueda Semántica Vectorial:** Integra el modelo `text-embedding-004` para indexar y buscar transacciones mediante lenguaje natural (ej. "¿cuánto gasté en ropa el mes pasado?"), calculando similitud coseno en memoria de la Cloud Function.
+* **Contextualización Tributaria y Regional:** Lee el país y moneda configurados por el usuario para adaptar su vocabulario y aplicar reglas impositivas locales de manera dinámica (ej. impuesto de 4x1000/DIAN en Colombia, SAT/ISR en México, IRPF/Modelo 100 en España, IRS/401(k) en EE.UU., etc.). Permite la configuración regional en la pantalla de Ajustes.
+
 ---
 
 ## 🔒 Reglas de Seguridad y Criptografía
 
 ### Firestore Rules
-Las reglas prohíben accesos no autorizados. Cada usuario solo puede leer y modificar sus propios documentos en `/users/{userId}`, `/accounts`, `/transactions`, y `/categories`. Las categorías globales (`userId == null`) son de solo lectura pública.
+Las reglas prohíben accesos no autorizados. Cada usuario solo puede leer y modificar sus propios documentos en `/users/{userId}`, `/accounts`, `/transactions`, `/goals` y `/categories`. Las categorías globales (`userId == null`) son de solo lectura pública.
 
 ### Storage Rules
 Los usuarios solo pueden leer y escribir archivos en su subcarpeta dedicada: `/users/{userId}/*`.
