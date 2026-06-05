@@ -4,10 +4,10 @@ import { doc, getDoc, updateDoc } from 'firebase/firestore'
 
 // Helper para obtener la URL de las Cloud Functions locales o en producción
 const getFunctionUrl = (name: string): string => {
-  if (import.meta.env.DEV) {
-    return `http://localhost:5001/vault-finances-dev/us-central1/${name}`
-  }
   const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID || "vault-finances-dev"
+  if (import.meta.env.DEV) {
+    return `http://localhost:5001/${projectId}/us-central1/${name}`
+  }
   return `https://us-central1-${projectId}.cloudfunctions.net/${name}`
 }
 

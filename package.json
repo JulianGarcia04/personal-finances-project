@@ -8,7 +8,7 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "emulators": "npx -y firebase-tools@latest emulators:start",
-    "genkit": "npx -y genkit start",
+    "genkit": "pnpm --filter functions genkit",
     "emulators:watch": "pnpm dlx concurrently \"pnpm --filter functions build:watch\" \"pnpm emulators\""
   },
   "dependencies": {
