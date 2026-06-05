@@ -1,0 +1,33 @@
+{
+  "name": "vault-personal-finances",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "emulators": "npx -y firebase-tools@latest emulators:start",
+    "genkit": "npx -y genkit start",
+    "emulators:watch": "pnpm dlx concurrently \"pnpm --filter functions build:watch\" \"pnpm emulators\""
+  },
+  "dependencies": {
+    "chart.js": "^4.5.1",
+    "firebase": "^12.14.0",
+    "lucide-vue-next": "^1.0.0",
+    "pinia": "^3.0.4",
+    "vue": "^3.5.35",
+    "vue-chartjs": "^5.3.3",
+    "vue-router": "^4.6.4",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.0",
+    "@types/node": "^20.12.7",
+    "@vitejs/plugin-vue": "^6.0.6",
+    "concurrently": "^10.0.3",
+    "typescript": "^5.4.5",
+    "vite": "^8.0.12",
+    "vue-tsc": "^2.0.19"
+  }
+}

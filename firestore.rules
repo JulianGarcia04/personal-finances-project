@@ -1,0 +1,58 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Función auxiliar para comprobar si el usuario está autenticado
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Función auxiliar para comprobar si el documento pertenece al usuario autenticado
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Reglas para la colección de Usuarios
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+      
+      // Subcolección segura para API Keys y configs sensibles
+      match /secure/{documentId} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+
+    // Reglas para la colección de Cuentas
+    match /accounts/{accountId} {
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // Reglas para la colección de Transacciones
+    match /transactions/{transactionId} {
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // Reglas para la colección de Categorías
+    match /categories/{categoryId} {
+      // Permitir leer si el usuario está autenticado y la categoría le pertenece,
+      // o si es una categoría global por defecto (userId == null)
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || resource.data.userId == null);
+      
+      // Solo permitir crear/editar categorías personalizadas para el propio usuario
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // Reglas para la colección de Objetivos/Metas de Ahorro
+    match /goals/{goalId} {
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+  }
+}
