@@ -214,7 +214,9 @@ import {
   CreditCard as CreditIcon, 
   Wallet as CashIcon, 
   Building as BankIcon,
-  Utensils, Car, Film, Lightbulb, Heart, GraduationCap, TrendingUp, HelpCircle 
+  Utensils, Car, Film, Lightbulb, Heart, GraduationCap, TrendingUp, HelpCircle,
+  ShoppingBag, Home, Gift, Coffee, Plane, DollarSign, Smartphone,
+  Activity, Scissors, BookOpen, Wrench, Shield
 } from 'lucide-vue-next'
 
 // Importar Chart.js directamente
@@ -440,7 +442,9 @@ const getCategory = (id: string) => {
 
 const getCategoryIcon = (iconName: string) => {
   const icons: Record<string, any> = {
-    Utensils, Car, Film, Lightbulb, Heart, GraduationCap, TrendingUp, HelpCircle
+    Utensils, Car, Film, Lightbulb, Heart, GraduationCap, TrendingUp, HelpCircle,
+    ShoppingBag, Home, Gift, Coffee, Plane, DollarSign, PiggyBank: SavingsIcon, Smartphone,
+    Activity, Scissors, BookOpen, Wrench, Shield
   }
   return icons[iconName] || HelpCircle
 }

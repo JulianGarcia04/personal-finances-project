@@ -78,3 +78,12 @@ export const BudgetSchema = z.object({
   message: 'La suma de los porcentajes debe ser exactamente 100%',
   path: ['budgetNeedsPercent']
 })
+
+export const CategorySchema = z.object({
+  name: z.string()
+    .min(1, 'El nombre es requerido')
+    .max(30, 'El nombre no puede exceder 30 caracteres'),
+  icon: z.string().min(1, 'El icono es requerido'),
+  color: z.string().regex(/^#[0-9A-Fa-f]{6}$/, 'Color hexadecimal inválido'),
+  type: z.enum(['income', 'expense', 'both'])
+})

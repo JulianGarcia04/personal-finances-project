@@ -10,6 +10,7 @@ import {
   getDocs, 
   addDoc, 
   doc, 
+  updateDoc,
   deleteDoc, 
   writeBatch,
   Timestamp
@@ -340,6 +341,138 @@ export const useTransactionsStore = defineStore('transactions', {
         return addedLocalTxs
       } catch (error) {
         console.error('Error al importar lote de transacciones:', error)
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+
+    // 6. Editar / Actualizar Transacción
+    async updateTransaction(transactionId: string, updates: {
+      accountId: string;
+      amount: number;
+      description: string;
+      categoryId: string;
+      date: Date;
+      type: TransactionType;
+      toAccountId?: string | null;
+      receiptUrl?: string | null;
+    }): Promise<Transaction> {
+      const user = auth.currentUser
+      if (!user) throw new Error('Usuario no autenticado')
+
+      const accountsStore = useAccountsStore()
+      const txIndex = this.transactions.findIndex(t => t.id === transactionId)
+      if (txIndex === -1) throw new Error('Transacción no encontrada en el estado local')
+      const oldTx = this.transactions[txIndex]
+
+      this.loading = true
+      try {
+        const transactionDate = updates.date instanceof Date ? updates.date : new Date(updates.date)
+        const account = accountsStore.getAccountById(updates.accountId)
+        if (!account) throw new Error('Cuenta origen no encontrada')
+
+        // 1. Revertir balances de las cuentas antiguas
+        if (oldTx.type === 'transfer' && oldTx.toAccountId) {
+          await accountsStore.updateAccountBalance(oldTx.accountId, oldTx.amount)
+          await accountsStore.updateAccountBalance(oldTx.toAccountId, -oldTx.amount)
+        } else {
+          await accountsStore.updateAccountBalance(oldTx.accountId, -oldTx.amount)
+        }
+
+        // 2. Aplicar balances de las cuentas nuevas
+        const newAmount = Number(updates.amount)
+        if (updates.type === 'transfer' && updates.toAccountId) {
+          await accountsStore.updateAccountBalance(updates.accountId, -newAmount)
+          await accountsStore.updateAccountBalance(updates.toAccountId, newAmount)
+        } else {
+          await accountsStore.updateAccountBalance(updates.accountId, newAmount)
+        }
+
+        // 3. Preparar documento de actualización
+        const updatedFields = {
+          accountId: updates.accountId,
+          amount: newAmount,
+          description: updates.description,
+          categoryId: updates.type === 'transfer' ? '' : updates.categoryId,
+          date: Timestamp.fromDate(transactionDate),
+          type: updates.type,
+          toAccountId: updates.type === 'transfer' ? updates.toAccountId : null,
+          receiptUrl: updates.receiptUrl,
+          currency: account.currency || 'USD',
+        }
+
+        // 4. Actualizar en Firestore
+        const docRef = doc(db, 'transactions', transactionId)
+        await updateDoc(docRef, updatedFields)
+
+        // 5. Actualizar en el estado local
+        const updatedTx: Transaction = {
+          ...oldTx,
+          ...updatedFields,
+          date: transactionDate
+        }
+
+        this.transactions[txIndex] = updatedTx
+        this.transactions.sort((a, b) => b.date.getTime() - a.date.getTime())
+
+        return updatedTx
+      } catch (error) {
+        console.error('Error al actualizar transacción:', error)
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+
+    // 7. Crear una nueva Categoría
+    async addCategory({ name, icon, color, type }: {
+      name: string;
+      icon: string;
+      color: string;
+      type: 'income' | 'expense' | 'both';
+    }): Promise<Category> {
+      const user = auth.currentUser
+      if (!user) throw new Error('Usuario no autenticado')
+
+      this.loading = true
+      try {
+        const newCat = {
+          userId: user.uid,
+          name,
+          icon,
+          color,
+          type,
+          createdAt: new Date()
+        }
+
+        const docRef = await addDoc(collection(db, 'categories'), newCat)
+        const catWithId: Category = {
+          id: docRef.id,
+          ...newCat
+        }
+
+        this.categories.push(catWithId)
+        return catWithId
+      } catch (error) {
+        console.error('Error al crear categoría:', error)
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+
+    // 8. Eliminar Categoría
+    async deleteCategory(categoryId: string): Promise<void> {
+      const user = auth.currentUser
+      if (!user) throw new Error('Usuario no autenticado')
+
+      this.loading = true
+      try {
+        await deleteDoc(doc(db, 'categories', categoryId))
+        this.categories = this.categories.filter(c => c.id !== categoryId)
+      } catch (error) {
+        console.error('Error al borrar categoría:', error)
         throw error
       } finally {
         this.loading = false
