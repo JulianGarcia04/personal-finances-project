@@ -6,7 +6,7 @@ import dotenv from "dotenv";
 import cors from "cors";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { configureGenkit } from "@genkit-ai/core";
-import { googleAI, gemini15Flash } from "@genkit-ai/googleai";
+import { googleAI } from "@genkit-ai/googleai";
 import { defineTool, generate } from "@genkit-ai/ai";
 import { z } from "zod";
 
@@ -783,7 +783,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
 
     // Ejecutar generación con Genkit
     const response = await generate({
-      model: gemini15Flash,
+      model: "gemini-2.5-flash",
       prompt: lastMessage,
       history: genkitHistory,
       tools: [

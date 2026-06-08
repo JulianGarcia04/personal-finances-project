@@ -77,3 +77,19 @@ export interface BudgetSettings {
   budgetSavingsPercent: number;
   budgetAllocations: Record<string, number>;
 }
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+}
+
+export interface Chat {
+  id: string;
+  userId: string;
+  title: string;
+  messages: ChatMessage[];
+  createdAt: any;
+  updatedAt: any;
+}
+
