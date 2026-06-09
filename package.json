@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
-    "emulators": "npx -y firebase-tools@latest emulators:start",
+    "emulators": "pnpm dlx kill-port --port 8080,9099,5001,9199,4000 && firebase emulators:start",
     "genkit": "pnpm --filter functions genkit",
     "emulators:watch": "pnpm dlx concurrently \"pnpm --filter functions build:watch\" \"pnpm emulators\""
   },
