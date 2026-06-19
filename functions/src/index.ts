@@ -5,9 +5,8 @@ import * as crypto from "crypto";
 import dotenv from "dotenv";
 import cors from "cors";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { configureGenkit } from "@genkit-ai/core";
-import { googleAI } from "@genkit-ai/googleai";
-import { defineTool, generate } from "@genkit-ai/ai";
+import { genkit } from "genkit";
+import { googleAI } from "@genkit-ai/google-genai";
 import { z } from "zod";
 
 dotenv.config();
@@ -16,10 +15,11 @@ admin.initializeApp();
 
 const db = admin.firestore();
 
-// Configurar Genkit de forma global para registrar plugins y modelos
-configureGenkit({
-  plugins: [googleAI()]
-});
+const GEMINI_MODEL = "gemini-2.5-flash";
+
+function getDefaultGeminiApiKey(): string | undefined {
+  return process.env.GOOGLE_GENAI_API_KEY || process.env.GEMINI_API_KEY;
+}
 
 // Llave de encriptación de 32 bytes derivada de la variable de entorno
 const SECRET_KEY = crypto.createHash('sha256')
@@ -109,7 +109,7 @@ const runParseStatementFlow = async (
 ): Promise<GenkitParseResult> => {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-flash",
+    model: GEMINI_MODEL,
     generationConfig: { responseMimeType: "application/json" }
   });
 
@@ -195,7 +195,7 @@ export const parseStatement = onRequest(async (req, res) => {
       let activeApiKey: string | undefined = undefined;
 
       if (useDefaultKey) {
-        activeApiKey = process.env.GOOGLE_GENAI_API_KEY;
+        activeApiKey = getDefaultGeminiApiKey();
         if (!activeApiKey) {
           res.status(500).json({ error: "La API Key por defecto del proyecto no está configurada en las funciones." });
           return;
@@ -272,7 +272,7 @@ export const onTransactionCreated = onDocumentCreated("transactions/{transaction
   const textToEmbed = `Descripción: ${description}. Tipo: ${type}. Monto: ${amount} ${currency}. Fecha: ${dateStr}.`;
 
   try {
-    const apiKey = process.env.GOOGLE_GENAI_API_KEY;
+    const apiKey = getDefaultGeminiApiKey();
     if (!apiKey) {
       console.warn("GOOGLE_GENAI_API_KEY no está configurada en las funciones.");
       return;
@@ -347,8 +347,12 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       activeApiKey = decrypt(data.encryptedApiKey, data.iv);
     }
 
+    const ai = genkit({
+      plugins: [googleAI({ apiKey: activeApiKey })],
+    });
+
     // Configurar herramientas de base de datos seguras capturando el userId verificado en el closure
-    const listAccountsTool = defineTool(
+    const listAccountsTool = ai.defineTool(
       {
         name: 'listAccounts',
         description: 'Obtiene la lista de todas las cuentas financieras del usuario.',
@@ -365,7 +369,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       }
     );
 
-    const createAccountTool = defineTool(
+    const createAccountTool = ai.defineTool(
       {
         name: 'createAccount',
         description: 'Crea una nueva cuenta bancaria, de ahorros, tarjeta de crédito o efectivo para el usuario.',
@@ -394,7 +398,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       }
     );
 
-    const listTransactionsTool = defineTool(
+    const listTransactionsTool = ai.defineTool(
       {
         name: 'listTransactions',
         description: 'Obtiene la lista de transacciones del usuario, con posibilidad de filtrar por cuenta o tipo.',
@@ -428,7 +432,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       }
     );
 
-    const createTransactionTool = defineTool(
+    const createTransactionTool = ai.defineTool(
       {
         name: 'createTransaction',
         description: 'Registra un movimiento de dinero (ingreso, gasto o transferencia interna entre cuentas). Actualiza automáticamente el saldo de las cuentas.',
@@ -492,7 +496,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       }
     );
 
-    const deleteTransactionTool = defineTool(
+    const deleteTransactionTool = ai.defineTool(
       {
         name: 'deleteTransaction',
         description: 'Elimina una transacción existente y revierte de forma automática su impacto en los saldos de las cuentas.',
@@ -540,7 +544,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       }
     );
 
-    const listCategoriesTool = defineTool(
+    const listCategoriesTool = ai.defineTool(
       {
         name: 'listCategories',
         description: 'Obtiene las categorías de gastos e ingresos configuradas en el sistema.',
@@ -560,7 +564,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       }
     );
 
-    const listGoalsTool = defineTool(
+    const listGoalsTool = ai.defineTool(
       {
         name: 'listGoals',
         description: 'Obtiene la lista de todos los objetivos o metas de ahorro del usuario.',
@@ -583,7 +587,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       }
     );
 
-    const createGoalTool = defineTool(
+    const createGoalTool = ai.defineTool(
       {
         name: 'createGoal',
         description: 'Crea un nuevo objetivo o meta de ahorro (por ejemplo: "Comprar carro" o "Vacaciones").',
@@ -613,7 +617,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       }
     );
 
-    const updateGoalAmountTool = defineTool(
+    const updateGoalAmountTool = ai.defineTool(
       {
         name: 'updateGoalAmount',
         description: 'Aporta o actualiza el monto de ahorro actual en una de las metas del usuario.',
@@ -637,7 +641,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       }
     );
 
-    const semanticSearchTransactionsTool = defineTool(
+    const semanticSearchTransactionsTool = ai.defineTool(
       {
         name: 'semanticSearchTransactions',
         description: 'Busca transacciones mediante búsqueda semántica (embeddings). Útil para preguntas libres del usuario, como: "¿Cuándo fue la última vez que compré ropa?" o "¿Cuánto gasté en el regalo?".',
@@ -678,7 +682,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       }
     );
 
-    const indexTransactionsTool = defineTool(
+    const indexTransactionsTool = ai.defineTool(
       {
         name: 'indexTransactions',
         description: 'Genera embeddings vectoriales para las transacciones antiguas del usuario que aún no las tienen. Llama a esto si el usuario pregunta por transacciones viejas y la búsqueda semántica no devuelve resultados.',
@@ -762,30 +766,19 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       4. **Indexación:** Si la búsqueda semántica no trae resultados para transacciones de las cuales el usuario está seguro que existen, llámala función "indexTransactions" para generar los embeddings faltantes en segundo plano.
     `;
 
-    // Mapear historial al formato compatible con Genkit, agregando la instrucción del sistema al inicio
-    const genkitHistory: any[] = [
-      {
-        role: 'system',
-        content: [{ text: systemInstruction }]
-      },
-      ...messages.slice(0, -1).map((h: any) => ({
-        role: (h.role === 'assistant' ? 'model' : 'user') as 'model' | 'user',
-        content: [{ text: h.content }]
-      }))
-    ];
+    // Mapear historial al formato compatible con Genkit
+    const conversationHistory = messages.slice(0, -1).map((h: any) => ({
+      role: (h.role === 'assistant' ? 'model' : 'user') as 'model' | 'user',
+      content: [{ text: h.content }]
+    }));
 
     const lastMessage = messages[messages.length - 1].content;
 
-    // Configurar Genkit de forma dinámica con la API key activa para este request
-    configureGenkit({
-      plugins: [googleAI({ apiKey: activeApiKey })]
-    });
-
-    // Ejecutar generación con Genkit
-    const response = await generate({
-      model: "gemini-2.5-flash",
+    const response = await ai.generate({
+      model: googleAI.model(GEMINI_MODEL),
+      system: systemInstruction,
       prompt: lastMessage,
-      history: genkitHistory,
+      messages: conversationHistory,
       tools: [
         listAccountsTool,
         createAccountTool,

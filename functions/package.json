@@ -14,8 +14,6 @@
   },
   "main": "lib/index.js",
   "dependencies": {
-    "@genkit-ai/ai": "^0.5.15",
-    "@genkit-ai/core": "^0.5.15",
     "@genkit-ai/google-genai": "^1.36.0",
     "@google/generative-ai": "^0.24.1",
     "cors": "^2.8.5",

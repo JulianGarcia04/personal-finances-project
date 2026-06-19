@@ -57,12 +57,6 @@ importers:
 
   functions:
     dependencies:
-      '@genkit-ai/ai':
-        specifier: ^0.5.15
-        version: 0.5.17
-      '@genkit-ai/core':
-        specifier: ^0.5.15
-        version: 0.5.17
       '@genkit-ai/google-genai':
         specifier: ^1.36.0
         version: 1.36.0(genkit@1.36.0(@google-cloud/firestore@7.11.6)(firebase-admin@12.7.0)(firebase@12.14.0))
@@ -379,14 +373,8 @@ packages:
   '@firebase/webchannel-wrapper@1.0.6':
     resolution: {integrity: sha512-Vr/Mqu79dMwGRAyGbJ4uN4+BtXB3/mRTdzetD1daWNeG8QaWuzhhbG77GltO5c0yYmYls8i250iX73624GJd7Q==}
 
-  '@genkit-ai/ai@0.5.17':
-    resolution: {integrity: sha512-pzOnD3F6l61ldBF7/ltsCFRapjuuonapP+vxyiG7IZArSgIn4cvLAr9gutNdm0BsaaoCjX13JnvHSNybJMg0OQ==}
-
   '@genkit-ai/ai@1.36.0':
     resolution: {integrity: sha512-xMDfclS4sMLEl4YQP92XlxnPxuehz+90iuysg2gRGfHXXz6iRSGjWVq7QycBWqMmZ7OYHfgTgYz4CgL63Ezl0A==}
-
-  '@genkit-ai/core@0.5.17':
-    resolution: {integrity: sha512-o8aEIFjQ4FugS5w5XK1c6hmiX6bqx7u+UuikARJPMhqOek7aovcXXdYj2zbVmX2/4c94aXerSokB0vD59Pj3GQ==}
 
   '@genkit-ai/core@1.36.0':
     resolution: {integrity: sha512-kkWzROCNPz8Ol2OtBDjsNk2zaS32axIomuR3wm0iHjkR8NdFYPk9Ab4J80EKiUEGdhXiIwvO+4RhqOgy7zYm1A==}
@@ -563,12 +551,6 @@ packages:
 
   '@opentelemetry/context-async-hooks@1.25.1':
     resolution: {integrity: sha512-UW/ge9zjvAEmRWVapOP0qyCvPulWU6cQxGxDbWEFfGOj1VBBZAuOqTo3X6yWmDTD3Xe15ysCZChHncr2xFMIfQ==}
-    engines: {node: '>=14'}
-    peerDependencies:
-      '@opentelemetry/api': '>=1.0.0 <1.10.0'
-
-  '@opentelemetry/context-async-hooks@1.30.1':
-    resolution: {integrity: sha512-s5vvxXPVdjqS3kTLKMeBMvop9hbWkwzBpu+mUO2M7sZtlkyDJGwFe33wRKnbaYDo8ExRVBIIdwIGrqpxHuKttA==}
     engines: {node: '>=14'}
     peerDependencies:
       '@opentelemetry/api': '>=1.0.0 <1.10.0'
@@ -963,12 +945,6 @@ packages:
 
   '@opentelemetry/sdk-trace-base@1.25.1':
     resolution: {integrity: sha512-C8k4hnEbc5FamuZQ92nTOp8X/diCY56XUTnMiv9UTuJitCzaNNHAVsdm5+HLCdI8SLQsLWIrG38tddMxLVoftw==}
-    engines: {node: '>=14'}
-    peerDependencies:
-      '@opentelemetry/api': '>=1.0.0 <1.10.0'
-
-  '@opentelemetry/sdk-trace-base@1.30.1':
-    resolution: {integrity: sha512-jVPgBbH1gCy2Lb7X0AVQ8XAfgg0pJ4nvl8/IiQA6nxOsPvS+0zMJaFSs2ltXe0J6C8dqjcnpyqINDJmU30+uOg==}
     engines: {node: '>=14'}
     peerDependencies:
       '@opentelemetry/api': '>=1.0.0 <1.10.0'
@@ -3291,19 +3267,6 @@ snapshots:
 
   '@firebase/webchannel-wrapper@1.0.6': {}
 
-  '@genkit-ai/ai@0.5.17':
-    dependencies:
-      '@genkit-ai/core': 0.5.17
-      '@opentelemetry/api': 1.9.1
-      '@types/node': 20.19.42
-      colorette: 2.0.20
-      json5: 2.2.3
-      node-fetch: 3.3.2
-      partial-json: 0.1.7
-      zod: 3.25.76
-    transitivePeerDependencies:
-      - supports-color
-
   '@genkit-ai/ai@1.36.0(@google-cloud/firestore@7.11.6)(firebase-admin@12.7.0)(firebase@12.14.0)(genkit@1.36.0(@google-cloud/firestore@7.11.6)(firebase-admin@12.7.0)(firebase@12.14.0))':
     dependencies:
       '@genkit-ai/core': 1.36.0(@google-cloud/firestore@7.11.6)(firebase-admin@12.7.0)(firebase@12.14.0)(genkit@1.36.0(@google-cloud/firestore@7.11.6)(firebase-admin@12.7.0)(firebase@12.14.0))
@@ -3326,24 +3289,6 @@ snapshots:
       - genkit
       - supports-color
       - utf-8-validate
-
-  '@genkit-ai/core@0.5.17':
-    dependencies:
-      '@opentelemetry/api': 1.9.1
-      '@opentelemetry/context-async-hooks': 1.30.1(@opentelemetry/api@1.9.1)
-      '@opentelemetry/core': 1.30.1(@opentelemetry/api@1.9.1)
-      '@opentelemetry/sdk-metrics': 1.30.1(@opentelemetry/api@1.9.1)
-      '@opentelemetry/sdk-node': 0.52.1(@opentelemetry/api@1.9.1)
-      '@opentelemetry/sdk-trace-base': 1.30.1(@opentelemetry/api@1.9.1)
-      ajv: 8.20.0
-      ajv-formats: 3.0.1(ajv@8.20.0)
-      async-mutex: 0.5.0
-      express: 4.22.2
-      json-schema: 0.4.0
-      zod: 3.25.76
-      zod-to-json-schema: 3.25.2(zod@3.25.76)
-    transitivePeerDependencies:
-      - supports-color
 
   '@genkit-ai/core@1.36.0(@google-cloud/firestore@7.11.6)(firebase-admin@12.7.0)(firebase@12.14.0)(genkit@1.36.0(@google-cloud/firestore@7.11.6)(firebase-admin@12.7.0)(firebase@12.14.0))':
     dependencies:
@@ -3718,10 +3663,6 @@ snapshots:
     dependencies:
       '@opentelemetry/api': 1.9.1
 
-  '@opentelemetry/context-async-hooks@1.30.1(@opentelemetry/api@1.9.1)':
-    dependencies:
-      '@opentelemetry/api': 1.9.1
-
   '@opentelemetry/core@1.25.1(@opentelemetry/api@1.9.1)':
     dependencies:
       '@opentelemetry/api': 1.9.1
@@ -3731,6 +3672,7 @@ snapshots:
     dependencies:
       '@opentelemetry/api': 1.9.1
       '@opentelemetry/semantic-conventions': 1.28.0
+    optional: true
 
   '@opentelemetry/exporter-trace-otlp-grpc@0.52.1(@opentelemetry/api@1.9.1)':
     dependencies:
@@ -4259,6 +4201,7 @@ snapshots:
       '@opentelemetry/api': 1.9.1
       '@opentelemetry/core': 1.30.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/semantic-conventions': 1.28.0
+    optional: true
 
   '@opentelemetry/sdk-logs@0.52.1(@opentelemetry/api@1.9.1)':
     dependencies:
@@ -4279,6 +4222,7 @@ snapshots:
       '@opentelemetry/api': 1.9.1
       '@opentelemetry/core': 1.30.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/resources': 1.30.1(@opentelemetry/api@1.9.1)
+    optional: true
 
   '@opentelemetry/sdk-node@0.52.1(@opentelemetry/api@1.9.1)':
     dependencies:
@@ -4306,13 +4250,6 @@ snapshots:
       '@opentelemetry/resources': 1.25.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/semantic-conventions': 1.25.1
 
-  '@opentelemetry/sdk-trace-base@1.30.1(@opentelemetry/api@1.9.1)':
-    dependencies:
-      '@opentelemetry/api': 1.9.1
-      '@opentelemetry/core': 1.30.1(@opentelemetry/api@1.9.1)
-      '@opentelemetry/resources': 1.30.1(@opentelemetry/api@1.9.1)
-      '@opentelemetry/semantic-conventions': 1.28.0
-
   '@opentelemetry/sdk-trace-node@1.25.1(@opentelemetry/api@1.9.1)':
     dependencies:
       '@opentelemetry/api': 1.9.1
@@ -4325,7 +4262,8 @@ snapshots:
 
   '@opentelemetry/semantic-conventions@1.25.1': {}
 
-  '@opentelemetry/semantic-conventions@1.28.0': {}
+  '@opentelemetry/semantic-conventions@1.28.0':
+    optional: true
 
   '@opentelemetry/semantic-conventions@1.41.1':
     optional: true
