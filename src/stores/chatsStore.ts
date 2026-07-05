@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { db, auth } from '@/lib/firebase'
+import { useAuthStore } from './authStore'
 import { Chat, ChatMessage } from '@/types'
 import {
   collection,
@@ -42,13 +43,15 @@ export const useChatsStore = defineStore('chats', {
     // 1. Obtener listado de chats del usuario
     async fetchChats(): Promise<void> {
       const user = auth.currentUser
-      if (!user) return
+      const authStore = useAuthStore()
+      const workspaceId = authStore.activeWorkspaceId
+      if (!user || !workspaceId) return
 
       this.loading = true
       try {
         const q = query(
           collection(db, 'chats'),
-          where('userId', '==', user.uid),
+          where('workspaceId', '==', workspaceId),
           orderBy('updatedAt', 'desc')
         )
         const querySnapshot = await getDocs(q)
@@ -57,6 +60,7 @@ export const useChatsStore = defineStore('chats', {
           const data = docSnap.data()
           chatsList.push({
             id: docSnap.id,
+            workspaceId: data.workspaceId,
             userId: data.userId,
             title: data.title || 'Conversación sin título',
             messages: data.messages || [],
@@ -75,11 +79,14 @@ export const useChatsStore = defineStore('chats', {
     // 2. Crear una nueva conversación
     async createChat(): Promise<string> {
       const user = auth.currentUser
-      if (!user) throw new Error('Usuario no autenticado')
+      const authStore = useAuthStore()
+      const workspaceId = authStore.activeWorkspaceId
+      if (!user || !workspaceId) throw new Error('Usuario o Workspace no autenticado')
 
       this.loading = true
       try {
         const newChatData = {
+          workspaceId,
           userId: user.uid,
           title: 'Nueva conversación',
           messages: [],
@@ -91,6 +98,7 @@ export const useChatsStore = defineStore('chats', {
         
         const newChat: Chat = {
           id: docRef.id,
+          workspaceId,
           userId: user.uid,
           title: 'Nueva conversación',
           messages: [],

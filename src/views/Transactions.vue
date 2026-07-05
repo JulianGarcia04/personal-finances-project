@@ -94,6 +94,9 @@
               <!-- Description -->
               <td class="py-4 px-6 font-medium">
                 <div class="truncate max-w-xs md:max-w-md">{{ tx.description }}</div>
+                <div v-if="workspacesStore.activeWorkspaceProfiles.length > 1" class="text-[10px] text-text-muted mt-0.5">
+                  Registrado por: {{ getUserName(tx.userId) }}
+                </div>
               </td>
               <!-- Account -->
               <td class="py-4 px-6 text-text-secondary">
@@ -288,6 +291,20 @@
             />
           </div>
 
+          <!-- User Assignment -->
+          <div v-if="workspacesStore.activeWorkspaceProfiles.length > 1" class="space-y-1">
+            <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Registrado por</label>
+            <select 
+              v-model="newTx.userId"
+              class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+            >
+              <option value="">Yo</option>
+              <option v-for="profile in workspacesStore.activeWorkspaceProfiles" :key="profile.uid" :value="profile.uid">
+                {{ profile.displayName || profile.email }}
+              </option>
+            </select>
+          </div>
+
           <!-- Receipt upload -->
           <div class="space-y-1">
             <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider block">Comprobante (Opcional)</label>
@@ -472,6 +489,20 @@
             />
           </div>
 
+          <!-- User Assignment -->
+          <div v-if="workspacesStore.activeWorkspaceProfiles.length > 1" class="space-y-1">
+            <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Registrado por</label>
+            <select 
+              v-model="editTx.userId"
+              class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+            >
+              <option value="">Yo</option>
+              <option v-for="profile in workspacesStore.activeWorkspaceProfiles" :key="profile.uid" :value="profile.uid">
+                {{ profile.displayName || profile.email }}
+              </option>
+            </select>
+          </div>
+
           <!-- Receipt upload -->
           <div class="space-y-1">
             <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider block">Comprobante (Opcional)</label>
@@ -533,6 +564,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
+import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { TransactionType } from '@/types'
 import { TransactionSchema } from '@/schemas'
 import { 
@@ -548,6 +580,7 @@ import {
 
 const accountsStore = useAccountsStore()
 const transactionsStore = useTransactionsStore()
+const workspacesStore = useWorkspacesStore()
 
 const showAddModal = ref(false)
 const loading = ref(false)
@@ -574,6 +607,7 @@ const newTx = ref<{
   amount: number | null;
   date: string;
   description: string;
+  userId?: string;
 }>({
   type: 'expense',
   accountId: '',
@@ -581,7 +615,8 @@ const newTx = ref<{
   categoryId: '',
   amount: null,
   date: new Date().toISOString().substring(0, 10),
-  description: ''
+  description: '',
+  userId: ''
 })
 
 // Edit Transaction modal state
@@ -595,6 +630,7 @@ const editTx = ref<{
   amount: number | null;
   date: string;
   description: string;
+  userId?: string;
 }>({
   type: 'expense',
   accountId: '',
@@ -602,7 +638,8 @@ const editTx = ref<{
   categoryId: '',
   amount: null,
   date: new Date().toISOString().substring(0, 10),
-  description: ''
+  description: '',
+  userId: ''
 })
 
 // Edit Receipt refs
@@ -626,6 +663,7 @@ onMounted(async () => {
   await accountsStore.fetchAccounts()
   await transactionsStore.fetchCategories()
   await transactionsStore.fetchTransactions()
+  await workspacesStore.fetchActiveWorkspaceProfiles()
 })
 
 const displayedTransactions = computed(() => {
@@ -643,6 +681,12 @@ const availableCategories = computed(() => {
   return transactionsStore.categories.filter(c => c.type === type || c.type === 'both')
 })
 
+const getUserName = (uid?: string) => {
+  if (!uid) return 'Desconocido'
+  const profile = workspacesStore.activeWorkspaceProfiles.find(p => p.uid === uid)
+  return profile?.displayName || profile?.email || 'Usuario'
+}
+
 const closeAddModal = () => {
   showAddModal.value = false
   newTx.value = {
@@ -652,7 +696,8 @@ const closeAddModal = () => {
     categoryId: '',
     amount: null,
     date: new Date().toISOString().substring(0, 10),
-    description: ''
+    description: '',
+    userId: ''
   }
   clearReceipt()
 }
@@ -675,7 +720,8 @@ const saveTransaction = async () => {
     date: new Date(newTx.value.date + 'T12:00:00'),
     type: newTx.value.type,
     toAccountId: newTx.value.type === 'transfer' ? newTx.value.toAccountId : null,
-    receiptUrl: uploadedReceiptUrl.value || null
+    receiptUrl: uploadedReceiptUrl.value || null,
+    userId: newTx.value.userId || undefined
   })
 
   if (!validation.success) {
@@ -693,7 +739,8 @@ const saveTransaction = async () => {
       date: new Date(newTx.value.date + 'T12:00:00'),
       type: newTx.value.type,
       toAccountId: newTx.value.type === 'transfer' ? newTx.value.toAccountId : null,
-      receiptUrl: uploadedReceiptUrl.value || null
+      receiptUrl: uploadedReceiptUrl.value || null,
+      userId: newTx.value.userId || undefined
     })
     closeAddModal()
   } catch (err: any) {
@@ -714,7 +761,8 @@ const openEditModal = (tx: any) => {
     date: tx.date instanceof Date 
       ? tx.date.toISOString().substring(0, 10) 
       : new Date(tx.date).toISOString().substring(0, 10),
-    description: tx.description
+    description: tx.description,
+    userId: tx.userId || ''
   }
   editUploadedReceiptUrl.value = tx.receiptUrl || ''
   editSelectedFileName.value = tx.receiptUrl ? 'Comprobante adjunto' : ''
@@ -732,7 +780,8 @@ const closeEditModal = () => {
     categoryId: '',
     amount: null,
     date: new Date().toISOString().substring(0, 10),
-    description: ''
+    description: '',
+    userId: ''
   }
   clearEditReceipt()
 }
@@ -755,7 +804,8 @@ const saveEditedTransaction = async () => {
     date: new Date(editTx.value.date + 'T12:00:00'),
     type: editTx.value.type,
     toAccountId: editTx.value.type === 'transfer' ? editTx.value.toAccountId : null,
-    receiptUrl: editUploadedReceiptUrl.value || null
+    receiptUrl: editUploadedReceiptUrl.value || null,
+    userId: editTx.value.userId || undefined
   })
 
   if (!validation.success) {
@@ -773,7 +823,8 @@ const saveEditedTransaction = async () => {
       date: new Date(editTx.value.date + 'T12:00:00'),
       type: editTx.value.type,
       toAccountId: editTx.value.type === 'transfer' ? editTx.value.toAccountId : null,
-      receiptUrl: editUploadedReceiptUrl.value || null
+      receiptUrl: editUploadedReceiptUrl.value || null,
+      userId: editTx.value.userId || undefined
     })
     closeEditModal()
   } catch (err: any) {

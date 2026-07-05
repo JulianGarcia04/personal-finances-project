@@ -1,9 +1,21 @@
+export interface Workspace {
+  id: string;
+  name: string;
+  ownerId: string;
+  members: string[];
+  currency: string;
+  expenseLimit?: number; // ponytail: simple number limit
+  createdAt: string | Date;
+}
+
 export interface UserProfile {
   uid: string;
   email: string | null;
   displayName: string | null;
   currency: string;
   createdAt: Date;
+  activeWorkspaceId?: string;
+  workspaces?: string[];
   budgetIncome?: number;
   budgetNeedsPercent?: number;
   budgetWantsPercent?: number;
@@ -15,7 +27,8 @@ export type AccountType = 'checking' | 'savings' | 'credit' | 'cash';
 
 export interface Account {
   id: string;
-  userId: string;
+  workspaceId: string;
+  userId?: string; // Legacy / creator tracking
   name: string;
   type: AccountType;
   balance: number;
@@ -28,7 +41,8 @@ export type TransactionType = 'income' | 'expense' | 'transfer';
 
 export interface Transaction {
   id: string;
-  userId: string;
+  workspaceId: string;
+  userId?: string; // Legacy / creator tracking
   accountId: string;
   amount: number;
   description: string;
@@ -44,7 +58,8 @@ export interface Transaction {
 
 export interface Category {
   id: string;
-  userId: string | null;
+  workspaceId: string | null;
+  userId?: string | null; // Legacy
   name: string;
   icon: string;
   color: string;
@@ -61,7 +76,8 @@ export interface UserSettings {
 
 export interface Goal {
   id: string;
-  userId: string;
+  workspaceId: string;
+  userId?: string; // Legacy
   name: string;
   targetAmount: number;
   currentAmount: number;
@@ -86,7 +102,8 @@ export interface ChatMessage {
 
 export interface Chat {
   id: string;
-  userId: string;
+  workspaceId: string;
+  userId?: string; // Legacy
   title: string;
   messages: ChatMessage[];
   createdAt: any;

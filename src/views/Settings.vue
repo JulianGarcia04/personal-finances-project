@@ -137,6 +137,91 @@
       </div>
     </div>
 
+    <!-- Módulo de Gestión de Workspace -->
+    <div class="border-t border-white/5 pt-8 grid grid-cols-1 md:grid-cols-3 gap-8">
+      <div class="md:col-span-1">
+        <h3 class="font-display font-semibold text-lg text-text-primary">Gestión de Workspace</h3>
+        <p class="text-text-secondary text-xs mt-2 leading-relaxed">
+          Administra tu espacio de trabajo actual. Crea nuevos espacios o invita a otros usuarios a colaborar (se requiere su correo electrónico registrado).
+        </p>
+      </div>
+
+      <div class="md:col-span-2 space-y-6">
+        <div class="glass-panel rounded-2xl p-6 space-y-6">
+          
+          <div class="space-y-4">
+            <h4 class="font-display font-medium text-sm text-text-primary">Crear nuevo Workspace</h4>
+            <form @submit.prevent="handleCreateWorkspace" class="flex flex-col sm:flex-row gap-3">
+              <input 
+                type="text" 
+                v-model="newWorkspaceName"
+                required
+                placeholder="Nombre del Workspace (ej. Casa)"
+                class="flex-1 px-4 py-2.5 rounded-xl bg-slate-900/80 border border-border text-sm text-text-primary placeholder:text-text-muted focus:border-accent-emerald/40 focus:outline-hidden"
+              />
+              <button 
+                type="submit"
+                :disabled="creatingWorkspace"
+                class="px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2"
+              >
+                <PlusIcon class="w-4 h-4" />
+                <span>Crear</span>
+              </button>
+            </form>
+          </div>
+
+          <div class="pt-6 border-t border-border/50 space-y-4">
+            <h4 class="font-display font-medium text-sm text-text-primary">
+              Invitar Miembro al Workspace actual 
+              <span class="text-accent-emerald">({{ currentWorkspaceName }})</span>
+            </h4>
+            <form @submit.prevent="handleInviteUser" class="flex flex-col sm:flex-row gap-3">
+              <input 
+                type="email" 
+                v-model="inviteEmail"
+                required
+                placeholder="correo@ejemplo.com"
+                class="flex-1 px-4 py-2.5 rounded-xl bg-slate-900/80 border border-border text-sm text-text-primary placeholder:text-text-muted focus:border-accent-emerald/40 focus:outline-hidden"
+              />
+              <button 
+                type="submit"
+                :disabled="invitingUser"
+                class="px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2"
+              >
+                <MailIcon class="w-4 h-4" />
+                <span>Invitar</span>
+              </button>
+            </form>
+            <p v-if="inviteMsg" :class="inviteError ? 'text-accent-rose' : 'text-accent-emerald'" class="text-xs font-medium">{{ inviteMsg }}</p>
+          </div>
+
+          <!-- ponytail: Limit setter -->
+          <div class="pt-6 border-t border-border/50 space-y-4">
+            <h4 class="font-display font-medium text-sm text-text-primary">
+              Límite de Gastos 
+              <span class="text-accent-emerald">({{ currentWorkspaceName }})</span>
+            </h4>
+            <form @submit.prevent="handleUpdateLimit" class="flex flex-col sm:flex-row gap-3">
+              <input 
+                type="number" 
+                v-model="expenseLimitInput"
+                placeholder="Ej. 1500000"
+                class="flex-1 px-4 py-2.5 rounded-xl bg-slate-900/80 border border-border text-sm text-text-primary placeholder:text-text-muted focus:border-accent-emerald/40 focus:outline-hidden"
+              />
+              <button 
+                type="submit"
+                class="px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2"
+              >
+                <PlusIcon class="w-4 h-4" />
+                <span>Actualizar</span>
+              </button>
+            </form>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
     <!-- Módulo de Preferencias Regionales -->
     <div class="border-t border-white/5 pt-8 grid grid-cols-1 md:grid-cols-3 gap-8">
       <!-- Left: Description -->
@@ -339,18 +424,22 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
+import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { ApiKeySchema, CategorySchema } from '@/schemas'
 import { 
   Utensils, Car, Film, Lightbulb, Heart, GraduationCap, TrendingUp, HelpCircle,
   ShoppingBag, Home, Gift, Coffee, Plane, DollarSign, PiggyBank, Smartphone,
   Activity, Scissors, BookOpen, Wrench, Shield,
-  Trash2 as TrashIcon, Plus as PlusIcon
+  Trash2 as TrashIcon, Plus as PlusIcon, Mail as MailIcon
 } from 'lucide-vue-next'
 
+const authStore = useAuthStore()
 const settingsStore = useSettingsStore()
+const workspacesStore = useWorkspacesStore()
 const transactionsStore = useTransactionsStore()
 
 const aiEnabled = ref(true)
@@ -479,7 +568,66 @@ onMounted(async () => {
   country.value = settingsStore.country
   currency.value = settingsStore.currency
   await transactionsStore.fetchCategories()
+  await workspacesStore.fetchMyWorkspaces()
 })
+
+// Workspace Management
+const newWorkspaceName = ref('')
+const creatingWorkspace = ref(false)
+const inviteEmail = ref('')
+const invitingUser = ref(false)
+const inviteMsg = ref('')
+const inviteError = ref(false)
+
+const currentWorkspaceName = computed(() => {
+  if (!authStore.activeWorkspaceId) return ''
+  const ws = workspacesStore.workspaces.find(w => w.id === authStore.activeWorkspaceId)
+  return ws ? ws.name : ''
+})
+
+const handleCreateWorkspace = async () => {
+  if (!newWorkspaceName.value.trim()) return
+  
+  creatingWorkspace.value = true
+  try {
+    await workspacesStore.createWorkspace(newWorkspaceName.value.trim())
+    newWorkspaceName.value = ''
+  } catch (err: any) {
+    console.error('Error al crear workspace', err)
+    alert(err.message || 'Error al crear workspace')
+  } finally {
+    creatingWorkspace.value = false
+  }
+}
+
+const handleInviteUser = async () => {
+  if (!inviteEmail.value.trim() || !authStore.activeWorkspaceId) return
+  
+  invitingUser.value = true
+  inviteMsg.value = ''
+  inviteError.value = false
+  
+  try {
+    await workspacesStore.inviteUser(authStore.activeWorkspaceId, inviteEmail.value.trim())
+    inviteMsg.value = `¡${inviteEmail.value} invitado exitosamente!`
+    inviteEmail.value = ''
+  } catch (err: any) {
+    console.error('Error invitando usuario', err)
+    inviteError.value = true
+    inviteMsg.value = err.message || 'Error al invitar al usuario'
+  } finally {
+    invitingUser.value = false
+  }
+}
+
+// ponytail: simple handler
+const expenseLimitInput = ref<number | ''>('')
+const handleUpdateLimit = async () => {
+  if (authStore.activeWorkspaceId && expenseLimitInput.value !== '') {
+    await workspacesStore.updateWorkspaceLimit(authStore.activeWorkspaceId, Number(expenseLimitInput.value))
+    alert('Límite actualizado')
+  }
+}
 
 const handleGeneralSettingsChange = async () => {
   try {

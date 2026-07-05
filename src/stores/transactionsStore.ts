@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { db, auth, storage } from '@/lib/firebase'
 import { useAccountsStore } from './accountsStore'
+import { useAuthStore } from './authStore'
 import { Transaction, Category, TransactionType } from '@/types'
 import { 
   collection, 
@@ -72,13 +73,15 @@ export const useTransactionsStore = defineStore('transactions', {
     // 1. Cargar Categorías (e inicializar por defecto si están vacías)
     async fetchCategories(): Promise<void> {
       const user = auth.currentUser
-      if (!user) return
+      const authStore = useAuthStore()
+      const workspaceId = authStore.activeWorkspaceId
+      if (!user || !workspaceId) return
 
       this.loading = true
       try {
         const q = query(
           collection(db, 'categories'), 
-          where('userId', '==', user.uid)
+          where('workspaceId', '==', workspaceId)
         )
         const snapshot = await getDocs(q)
         const categoriesList: Category[] = []
@@ -86,9 +89,9 @@ export const useTransactionsStore = defineStore('transactions', {
           categoriesList.push({ id: docSnap.id, ...docSnap.data() } as Category)
         })
 
-        // Si no existen categorías personalizadas ni globales asociadas al usuario, inicializamos las por defecto
-        const userHasCategories = categoriesList.some(cat => cat.userId === user.uid)
-        if (categoriesList.length === 0 || !userHasCategories) {
+        // Si no existen categorías personalizadas ni globales asociadas al workspace, inicializamos las por defecto
+        const workspaceHasCategories = categoriesList.some(cat => cat.workspaceId === workspaceId)
+        if (categoriesList.length === 0 || !workspaceHasCategories) {
           await this.initDefaultCategories()
         } else {
           this.categories = categoriesList
@@ -102,8 +105,9 @@ export const useTransactionsStore = defineStore('transactions', {
 
     // Guardar las categorías iniciales en la base de datos
     async initDefaultCategories(): Promise<void> {
-      const user = auth.currentUser
-      if (!user) return
+      const authStore = useAuthStore()
+      const workspaceId = authStore.activeWorkspaceId
+      if (!workspaceId) return
 
       const batch = writeBatch(db)
       const newCats: Category[] = []
@@ -112,7 +116,7 @@ export const useTransactionsStore = defineStore('transactions', {
         const docRef = doc(collection(db, 'categories'))
         const catData = {
           ...cat,
-          userId: user.uid,
+          workspaceId,
           createdAt: new Date()
         }
         batch.set(docRef, catData)
@@ -126,13 +130,15 @@ export const useTransactionsStore = defineStore('transactions', {
     // 2. Cargar Transacciones
     async fetchTransactions(): Promise<void> {
       const user = auth.currentUser
-      if (!user) return
+      const authStore = useAuthStore()
+      const workspaceId = authStore.activeWorkspaceId
+      if (!user || !workspaceId) return
 
       this.loading = true
       try {
         const q = query(
           collection(db, 'transactions'), 
-          where('userId', '==', user.uid),
+          where('workspaceId', '==', workspaceId),
           orderBy('date', 'desc')
         )
         const snapshot = await getDocs(q)
@@ -158,11 +164,13 @@ export const useTransactionsStore = defineStore('transactions', {
     // uploadReceipt action
     async uploadReceipt(file: File): Promise<string> {
       const user = auth.currentUser
-      if (!user) throw new Error('Usuario no autenticado')
+      const authStore = useAuthStore()
+      const workspaceId = authStore.activeWorkspaceId
+      if (!user || !workspaceId) throw new Error('Usuario o Workspace no inicializado')
 
       const fileExtension = file.name.split('.').pop()
       const uniqueName = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${fileExtension}`
-      const fileRef = storageRef(storage, `users/${user.uid}/receipts/${uniqueName}`)
+      const fileRef = storageRef(storage, `workspaces/${workspaceId}/receipts/${uniqueName}`)
 
       await uploadBytes(fileRef, file)
       const downloadUrl = await getDownloadURL(fileRef)
@@ -170,7 +178,7 @@ export const useTransactionsStore = defineStore('transactions', {
     },
 
     // 3. Crear una nueva Transacción
-    async addTransaction({ accountId, amount, description, categoryId, date, type, toAccountId = null, receiptUrl = null }: {
+    async addTransaction({ accountId, amount, description, categoryId, date, type, toAccountId = null, receiptUrl = null, userId }: {
       accountId: string;
       amount: number;
       description: string;
@@ -179,9 +187,12 @@ export const useTransactionsStore = defineStore('transactions', {
       type: TransactionType;
       toAccountId?: string | null;
       receiptUrl?: string | null;
+      userId?: string;
     }): Promise<Transaction> {
       const user = auth.currentUser
-      if (!user) throw new Error('Usuario no autenticado')
+      const authStore = useAuthStore()
+      const workspaceId = authStore.activeWorkspaceId
+      if (!user || !workspaceId) throw new Error('Usuario o Workspace no inicializado')
 
       const accountsStore = useAccountsStore()
       const account = accountsStore.getAccountById(accountId)
@@ -191,7 +202,8 @@ export const useTransactionsStore = defineStore('transactions', {
       try {
         const transactionDate = date instanceof Date ? date : new Date(date)
         const newTx = {
-          userId: user.uid,
+          workspaceId,
+          userId: userId || user.uid,
           accountId,
           amount: Number(amount),
           description,
@@ -278,7 +290,9 @@ export const useTransactionsStore = defineStore('transactions', {
       categorySuggestion: string;
     }>): Promise<Transaction[]> {
       const user = auth.currentUser
-      if (!user) throw new Error('Usuario no autenticado')
+      const authStore = useAuthStore()
+      const workspaceId = authStore.activeWorkspaceId
+      if (!user || !workspaceId) throw new Error('Usuario o Workspace no inicializado')
 
       const accountsStore = useAccountsStore()
       const account = accountsStore.getAccountById(accountId)
@@ -309,6 +323,7 @@ export const useTransactionsStore = defineStore('transactions', {
           totalAmountChange += txAmount
 
           const txData = {
+            workspaceId,
             userId: user.uid,
             accountId,
             amount: txAmount,
@@ -357,6 +372,7 @@ export const useTransactionsStore = defineStore('transactions', {
       type: TransactionType;
       toAccountId?: string | null;
       receiptUrl?: string | null;
+      userId?: string;
     }): Promise<Transaction> {
       const user = auth.currentUser
       if (!user) throw new Error('Usuario no autenticado')
@@ -399,6 +415,7 @@ export const useTransactionsStore = defineStore('transactions', {
           type: updates.type,
           toAccountId: updates.type === 'transfer' ? updates.toAccountId : null,
           receiptUrl: updates.receiptUrl,
+          userId: updates.userId || oldTx.userId,
           currency: account.currency || 'USD',
         }
 
@@ -433,11 +450,14 @@ export const useTransactionsStore = defineStore('transactions', {
       type: 'income' | 'expense' | 'both';
     }): Promise<Category> {
       const user = auth.currentUser
-      if (!user) throw new Error('Usuario no autenticado')
+      const authStore = useAuthStore()
+      const workspaceId = authStore.activeWorkspaceId
+      if (!user || !workspaceId) throw new Error('Usuario o Workspace no inicializado')
 
       this.loading = true
       try {
         const newCat = {
+          workspaceId,
           userId: user.uid,
           name,
           icon,

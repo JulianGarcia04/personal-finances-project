@@ -7,7 +7,8 @@ import {
   onAuthStateChanged,
   updateProfile
 } from 'firebase/auth'
-import { doc, setDoc } from 'firebase/firestore'
+import { doc, getDoc, setDoc, updateDoc, collection } from 'firebase/firestore'
+import type { UserProfile } from '@/types'
 
 interface AuthUser {
   uid: string;
@@ -17,12 +18,16 @@ interface AuthUser {
 
 interface AuthState {
   user: AuthUser | null;
+  profile: UserProfile | null;
+  activeWorkspaceId: string | null;
   loading: boolean;
 }
 
 export const useAuthStore = defineStore('auth', {
   state: (): AuthState => ({
     user: null,
+    profile: null,
+    activeWorkspaceId: null,
     loading: true,
   }),
   getters: {
@@ -38,8 +43,19 @@ export const useAuthStore = defineStore('auth', {
               email: firebaseUser.email,
               displayName: firebaseUser.displayName || (firebaseUser.email ? firebaseUser.email.split('@')[0] : 'Usuario'),
             }
+            try {
+              const profileDoc = await getDoc(doc(db, 'users', firebaseUser.uid))
+              if (profileDoc.exists()) {
+                this.profile = profileDoc.data() as UserProfile
+                this.activeWorkspaceId = this.profile.activeWorkspaceId || null
+              }
+            } catch (err) {
+              console.error("Error fetching user profile", err)
+            }
           } else {
             this.user = null
+            this.profile = null
+            this.activeWorkspaceId = null
           }
           this.loading = false
           resolve(this.user)
@@ -54,19 +70,37 @@ export const useAuthStore = defineStore('auth', {
         
         await updateProfile(firebaseUser, { displayName })
         
-        await setDoc(doc(db, 'users', firebaseUser.uid), {
+        // Crear Workspace personal
+        const workspaceRef = doc(collection(db, 'workspaces'))
+        const workspaceId = workspaceRef.id
+        await setDoc(workspaceRef, {
+          id: workspaceId,
+          name: 'Personal',
+          ownerId: firebaseUser.uid,
+          members: [firebaseUser.uid],
+          currency: 'USD',
+          createdAt: new Date().toISOString()
+        })
+
+        const profileData = {
           uid: firebaseUser.uid,
           email,
           displayName,
           currency: 'USD',
-          createdAt: new Date()
-        })
+          createdAt: new Date(),
+          activeWorkspaceId: workspaceId,
+          workspaces: [workspaceId]
+        }
+        await setDoc(doc(db, 'users', firebaseUser.uid), profileData)
 
         this.user = {
           uid: firebaseUser.uid,
           email,
           displayName,
         }
+        this.profile = profileData as unknown as UserProfile
+        this.activeWorkspaceId = workspaceId
+        
         return this.user
       } catch (error) {
         console.error('Error al registrarse:', error)
@@ -85,6 +119,11 @@ export const useAuthStore = defineStore('auth', {
           email: firebaseUser.email,
           displayName: firebaseUser.displayName || (firebaseUser.email ? firebaseUser.email.split('@')[0] : 'Usuario'),
         }
+        const profileDoc = await getDoc(doc(db, 'users', firebaseUser.uid))
+        if (profileDoc.exists()) {
+          this.profile = profileDoc.data() as UserProfile
+          this.activeWorkspaceId = this.profile.activeWorkspaceId || null
+        }
         return this.user
       } catch (error) {
         console.error('Error al iniciar sesión:', error)
@@ -98,11 +137,27 @@ export const useAuthStore = defineStore('auth', {
       try {
         await signOut(auth)
         this.user = null
+        this.profile = null
+        this.activeWorkspaceId = null
       } catch (error) {
         console.error('Error al cerrar sesión:', error)
         throw error
       } finally {
         this.loading = false
+      }
+    },
+    async switchWorkspace(workspaceId: string): Promise<void> {
+      if (!this.user) return;
+      this.activeWorkspaceId = workspaceId;
+      if (this.profile) {
+        this.profile.activeWorkspaceId = workspaceId;
+      }
+      try {
+        await updateDoc(doc(db, 'users', this.user.uid), {
+          activeWorkspaceId: workspaceId
+        });
+      } catch (err) {
+        console.error("Error updating active workspace", err);
       }
     }
   }

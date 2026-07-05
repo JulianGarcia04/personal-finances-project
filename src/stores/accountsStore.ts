@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { db, auth } from '@/lib/firebase'
 import { Account, AccountType } from '@/types'
+import { useAuthStore } from '@/stores/authStore'
 import { 
   collection, 
   query, 
@@ -38,12 +39,13 @@ export const useAccountsStore = defineStore('accounts', {
   actions: {
     // Obtener todas las cuentas del usuario
     async fetchAccounts(): Promise<void> {
-      const user = auth.currentUser
-      if (!user) return
+      const authStore = useAuthStore()
+      const workspaceId = authStore.activeWorkspaceId
+      if (!workspaceId) return
 
       this.loading = true
       try {
-        const q = query(collection(db, 'accounts'), where('userId', '==', user.uid))
+        const q = query(collection(db, 'accounts'), where('workspaceId', '==', workspaceId))
         const querySnapshot = await getDocs(q)
         const accountsList: Account[] = []
         querySnapshot.forEach((docSnap) => {
@@ -71,11 +73,14 @@ export const useAccountsStore = defineStore('accounts', {
       currency?: string; 
     }): Promise<Account> {
       const user = auth.currentUser
-      if (!user) throw new Error('Usuario no autenticado')
+      const authStore = useAuthStore()
+      const workspaceId = authStore.activeWorkspaceId
+      if (!user || !workspaceId) throw new Error('Usuario o Workspace no inicializado')
 
       this.loading = true
       try {
         const newAccount = {
+          workspaceId,
           userId: user.uid,
           name,
           type,

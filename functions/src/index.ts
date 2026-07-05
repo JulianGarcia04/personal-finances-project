@@ -49,7 +49,7 @@ function decrypt(encryptedData: string, ivHex: string): string {
 }
 
 // 1. Guardar API Key Encriptada en Firestore
-export const saveUserApiKey = onRequest(async (req, res) => {
+export const saveUserApiKey = onRequest({cors: true}, async (req, res) => {
   return corsHandler(req, res, async () => {
     try {
       if (req.method !== "POST") {
@@ -168,7 +168,7 @@ const runParseStatementFlow = async (
 };
 
 // Cloud Function que expone el parser de extractos
-export const parseStatement = onRequest(async (req, res) => {
+export const parseStatement = onRequest({cors: true}, async (req, res) => {
   return corsHandler(req, res, async () => {
     try {
       if (req.method !== "POST") {
@@ -800,4 +800,80 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
     console.error("Error en chatWithAgent Flow:", error);
     res.status(500).json({ error: error.message });
   }
+});
+
+// 5. Cloud Function para invitar usuario al Workspace
+export const inviteToWorkspace = onRequest({cors: true}, async (req, res) => {
+  return corsHandler(req, res, async () => {
+    try {
+      if (req.method !== "POST") {
+        res.status(405).json({ error: "Método no permitido" });
+        return;
+      }
+
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        res.status(401).json({ error: "No autorizado." });
+        return;
+      }
+      const token = authHeader.split("Bearer ")[1];
+      const decodedToken = await admin.auth().verifyIdToken(token);
+      const requesterId = decodedToken.uid;
+
+      const { workspaceId, email } = req.body;
+      if (!workspaceId || !email) {
+        res.status(400).json({ error: "workspaceId y email son requeridos." });
+        return;
+      }
+
+      // Verificar que el requester es miembro del workspace
+      const wsRef = db.collection("workspaces").doc(workspaceId);
+      const wsDoc = await wsRef.get();
+      if (!wsDoc.exists) {
+        res.status(404).json({ error: "Workspace no encontrado." });
+        return;
+      }
+      const wsData = wsDoc.data();
+      if (!wsData?.members?.includes(requesterId)) {
+        res.status(403).json({ error: "No tienes permiso para invitar a este workspace." });
+        return;
+      }
+
+      // Buscar al usuario por correo
+      let userRecord;
+      try {
+        userRecord = await admin.auth().getUserByEmail(email);
+      } catch (err: any) {
+        if (err.code === "auth/user-not-found") {
+          res.status(404).json({ error: "El usuario con ese correo no está registrado en Vault." });
+          return;
+        }
+        throw err;
+      }
+
+      const inviteeId = userRecord.uid;
+
+      if (wsData?.members?.includes(inviteeId)) {
+        res.status(400).json({ error: "El usuario ya es miembro de este workspace." });
+        return;
+      }
+
+      // Agregar al workspace
+      await wsRef.update({
+        members: admin.firestore.FieldValue.arrayUnion(inviteeId)
+      });
+
+      // Agregar el workspace al perfil del usuario invitado
+      const userDocRef = db.collection("users").doc(inviteeId);
+      await userDocRef.update({
+        workspaces: admin.firestore.FieldValue.arrayUnion(workspaceId)
+      });
+
+      res.status(200).json({ success: true, message: "Usuario invitado correctamente." });
+
+    } catch (error: any) {
+      console.error("Error en inviteToWorkspace:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
 });

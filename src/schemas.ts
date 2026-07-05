@@ -31,7 +31,8 @@ export const TransactionSchema = z.object({
   }),
   type: z.enum(['income', 'expense', 'transfer']),
   toAccountId: z.string().nullable().optional(),
-  receiptUrl: z.string().nullable().optional()
+  receiptUrl: z.string().nullable().optional(),
+  userId: z.string().optional()
 }).refine(data => {
   if (data.type === 'transfer') {
     return !!data.toAccountId && data.toAccountId !== data.accountId

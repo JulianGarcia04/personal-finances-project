@@ -80,6 +80,16 @@
             {{ formatPrimaryCurrency(monthlyExpenses) }}
           </h4>
           <span class="text-[10px] text-text-muted mt-1 block">Consumos realizados este mes</span>
+          <!-- ponytail: limit indicator -->
+          <div v-if="currentExpenseLimit > 0" class="mt-3">
+            <div class="flex justify-between text-[10px] mb-1">
+              <span class="text-text-secondary">Límite: {{ formatPrimaryCurrency(currentExpenseLimit) }}</span>
+              <span :class="monthlyExpenses > currentExpenseLimit ? 'text-accent-rose' : 'text-accent-emerald'">{{ Math.round((monthlyExpenses / currentExpenseLimit) * 100) }}%</span>
+            </div>
+            <div class="w-full h-1 bg-white/10 rounded-full overflow-hidden">
+              <div class="h-full rounded-full" :class="monthlyExpenses > currentExpenseLimit ? 'bg-accent-rose' : 'bg-accent-emerald'" :style="{ width: Math.min((monthlyExpenses / currentExpenseLimit) * 100, 100) + '%' }"></div>
+            </div>
+          </div>
         </div>
 
         <!-- Tasa de Ahorro -->
@@ -205,6 +215,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { AccountType } from '@/types'
 import { 
   Plus as PlusIcon, 
@@ -227,6 +238,7 @@ const authStore = useAuthStore()
 const accountsStore = useAccountsStore()
 const transactionsStore = useTransactionsStore()
 const settingsStore = useSettingsStore()
+const workspacesStore = useWorkspacesStore()
 
 const donutCanvas = ref<HTMLCanvasElement | null>(null)
 const barCanvas = ref<HTMLCanvasElement | null>(null)
@@ -280,6 +292,13 @@ const monthlyExpenses = computed(() => {
   return transactionsStore.transactions
     .filter(t => t.type === 'expense' && t.date.getMonth() === now.getMonth() && t.date.getFullYear() === now.getFullYear())
     .reduce((sum, t) => sum + Math.abs(t.amount), 0)
+})
+
+// ponytail: current limit
+const currentExpenseLimit = computed(() => {
+  if (!authStore.activeWorkspaceId) return 0
+  const ws = workspacesStore.workspaces.find(w => w.id === authStore.activeWorkspaceId)
+  return ws?.expenseLimit || 0
 })
 
 const savingsRate = computed(() => {

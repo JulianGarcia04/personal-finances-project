@@ -8,14 +8,25 @@ service firebase.storage {
       return request.auth != null;
     }
     
-    // Función auxiliar para comprobar si pertenece al usuario
+    // Función auxiliar para comprobar si pertenece al usuario (perfiles, etc)
     function isOwner(userId) {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    // Permitir lectura y escritura solo en el subdirectorio del propio usuario
+    // Función auxiliar para comprobar si pertenece al workspace (lee desde Firestore)
+    function isWorkspaceMember(workspaceId) {
+      return isAuthenticated() && 
+             request.auth.uid in firestore.get(/databases/(default)/documents/workspaces/$(workspaceId)).data.members;
+    }
+
+    // Permitir lectura y escritura solo en el subdirectorio del propio usuario (legado o data personal)
     match /users/{userId}/{allPaths=**} {
       allow read, write: if isOwner(userId);
+    }
+
+    // Permitir lectura y escritura en el directorio del workspace (ej. comprobantes)
+    match /workspaces/{workspaceId}/{allPaths=**} {
+      allow read, write: if isWorkspaceMember(workspaceId);
     }
   }
 }

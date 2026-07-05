@@ -25,13 +25,49 @@
     >
       <!-- Top Section: Brand Logo -->
       <div>
-        <div class="flex items-center space-x-3 mb-8 px-2 py-4">
+        <div class="flex items-center space-x-3 mb-6 px-2 py-4">
           <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-accent-emerald to-accent-violet flex items-center justify-center shadow-glow-emerald">
             <span class="font-display font-extrabold text-background text-lg">V</span>
           </div>
           <div>
             <h1 class="font-display font-bold text-xl tracking-wider text-text-primary">VAULT</h1>
             <p class="text-[10px] tracking-widest text-accent-emerald font-semibold uppercase">Finanzas IA</p>
+          </div>
+        </div>
+
+        <!-- Workspace Switcher -->
+        <div class="mb-6 px-2 relative" v-if="workspacesStore.workspaces.length > 0">
+          <button 
+            @click="isWorkspaceMenuOpen = !isWorkspaceMenuOpen"
+            class="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-slate-800/50 border border-border hover:bg-slate-700/50 transition-colors group"
+          >
+            <div class="flex items-center space-x-2 truncate">
+              <BuildingIcon class="w-4 h-4 text-accent-emerald" />
+              <span class="text-sm font-medium text-text-primary truncate">
+                {{ activeWorkspaceName }}
+              </span>
+            </div>
+            <ChevronDownIcon 
+              class="w-4 h-4 text-text-muted transition-transform" 
+              :class="{ 'rotate-180': isWorkspaceMenuOpen }"
+            />
+          </button>
+          
+          <!-- Dropdown -->
+          <div 
+            v-if="isWorkspaceMenuOpen"
+            class="absolute top-full left-2 right-2 mt-1 py-1 rounded-xl glass-panel border border-border z-50 overflow-hidden shadow-xl"
+          >
+            <button
+              v-for="ws in workspacesStore.workspaces"
+              :key="ws.id"
+              @click="switchWorkspace(ws.id)"
+              class="w-full text-left px-4 py-2 text-sm hover:bg-white/5 transition-colors flex items-center justify-between"
+              :class="{ 'text-accent-emerald font-medium bg-accent-emerald/5': ws.id === authStore.activeWorkspaceId, 'text-text-secondary': ws.id !== authStore.activeWorkspaceId }"
+            >
+              <span class="truncate">{{ ws.name }}</span>
+              <div v-if="ws.id === authStore.activeWorkspaceId" class="w-1.5 h-1.5 rounded-full bg-accent-emerald"></div>
+            </button>
           </div>
         </div>
 
@@ -76,10 +112,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { useWorkspacesStore } from '@/stores/workspacesStore'
+import { useAccountsStore } from '@/stores/accountsStore'
+import { useTransactionsStore } from '@/stores/transactionsStore'
+import { useGoalsStore } from '@/stores/goalsStore'
 import { 
   LayoutDashboard as DashboardIcon, 
   Landmark as AccountsIcon, 
@@ -90,14 +130,57 @@ import {
   Menu as MenuIcon,
   X as XIcon,
   Bot as AgentIcon,
-  Target as GoalsIcon
+  Target as GoalsIcon,
+  Building as BuildingIcon,
+  ChevronDown as ChevronDownIcon
 } from 'lucide-vue-next'
 
 const authStore = useAuthStore()
 const settingsStore = useSettingsStore()
+const workspacesStore = useWorkspacesStore()
+const accountsStore = useAccountsStore()
+const transactionsStore = useTransactionsStore()
+const goalsStore = useGoalsStore()
 const router = useRouter()
 
 const isOpen = ref(false)
+const isWorkspaceMenuOpen = ref(false)
+
+onMounted(async () => {
+  if (authStore.user) {
+    await workspacesStore.fetchMyWorkspaces()
+  }
+})
+
+const activeWorkspaceName = computed(() => {
+  if (!authStore.activeWorkspaceId) return 'Cargando...'
+  const ws = workspacesStore.workspaces.find(w => w.id === authStore.activeWorkspaceId)
+  return ws ? ws.name : 'Workspace'
+})
+
+const switchWorkspace = async (workspaceId: string) => {
+  if (workspaceId === authStore.activeWorkspaceId) {
+    isWorkspaceMenuOpen.value = false
+    return
+  }
+  
+  await authStore.switchWorkspace(workspaceId)
+  isWorkspaceMenuOpen.value = false
+  isOpen.value = false // Cierra sidebar en móvil
+  
+  // Recargar datos reactivos de stores operativas para el nuevo workspace
+  await Promise.all([
+    accountsStore.fetchAccounts(),
+    transactionsStore.fetchTransactions(),
+    goalsStore.fetchGoals(),
+    transactionsStore.fetchCategories()
+  ])
+  
+  // Opcional: Redirigir al dashboard para limpiar vistas profundas
+  if (router.currentRoute.value.name !== 'Dashboard') {
+    router.push({ name: 'Dashboard' })
+  }
+}
 
 const userInitials = computed(() => {
   const name = authStore.user?.displayName || ''

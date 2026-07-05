@@ -8,14 +8,21 @@ service cloud.firestore {
       return request.auth != null;
     }
     
-    // Función auxiliar para comprobar si el documento pertenece al usuario autenticado
+    // Función auxiliar para comprobar si el documento pertenece al usuario autenticado (legado/personal)
     function isOwner(userId) {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    // Función auxiliar para comprobar si el usuario pertenece al workspace
+    function isWorkspaceMember(workspaceId) {
+      return isAuthenticated() && 
+             request.auth.uid in get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.members;
+    }
+
     // Reglas para la colección de Usuarios
     match /users/{userId} {
-      allow read, write: if isOwner(userId);
+      allow read: if isAuthenticated();
+      allow write: if isOwner(userId);
       
       // Subcolección segura para API Keys y configs sensibles
       match /secure/{documentId} {
@@ -23,43 +30,53 @@ service cloud.firestore {
       }
     }
 
+    // Reglas para la nueva colección de Workspaces
+    match /workspaces/{workspaceId} {
+      // Cualquier usuario puede crear un workspace, siempre y cuando se agregue a sí mismo como miembro
+      allow create: if isAuthenticated() && request.auth.uid in request.resource.data.members;
+      // Los miembros pueden leer y actualizar el workspace (ej. invitar otros)
+      allow read, update: if isAuthenticated() && request.auth.uid in resource.data.members;
+      // Solo el dueño puede eliminar el workspace
+      allow delete: if isAuthenticated() && resource.data.ownerId == request.auth.uid;
+    }
+
     // Reglas para la colección de Cuentas
     match /accounts/{accountId} {
-      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
-      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow read: if isWorkspaceMember(resource.data.workspaceId);
+      allow create: if isWorkspaceMember(request.resource.data.workspaceId);
+      allow update, delete: if isWorkspaceMember(resource.data.workspaceId);
     }
 
     // Reglas para la colección de Transacciones
     match /transactions/{transactionId} {
-      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
-      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow read: if isWorkspaceMember(resource.data.workspaceId);
+      allow create: if isWorkspaceMember(request.resource.data.workspaceId);
+      allow update, delete: if isWorkspaceMember(resource.data.workspaceId);
     }
 
     // Reglas para la colección de Categorías
     match /categories/{categoryId} {
-      // Permitir leer si el usuario está autenticado y la categoría le pertenece,
-      // o si es una categoría global por defecto (userId == null)
-      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || resource.data.userId == null);
+      // Permitir leer si el usuario pertenece al workspace,
+      // o si es una categoría global por defecto (workspaceId == null)
+      allow read: if isAuthenticated() && (resource.data.workspaceId == null || isWorkspaceMember(resource.data.workspaceId));
       
-      // Solo permitir crear/editar categorías personalizadas para el propio usuario
-      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      // Solo permitir crear/editar categorías personalizadas para el workspace
+      allow create: if isWorkspaceMember(request.resource.data.workspaceId);
+      allow update, delete: if isWorkspaceMember(resource.data.workspaceId);
     }
 
     // Reglas para la colección de Objetivos/Metas de Ahorro
     match /goals/{goalId} {
-      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
-      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow read: if isWorkspaceMember(resource.data.workspaceId);
+      allow create: if isWorkspaceMember(request.resource.data.workspaceId);
+      allow update, delete: if isWorkspaceMember(resource.data.workspaceId);
     }
 
     // Reglas para la colección de Chats de IA
     match /chats/{chatId} {
-      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
-      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow read: if isWorkspaceMember(resource.data.workspaceId);
+      allow create: if isWorkspaceMember(request.resource.data.workspaceId);
+      allow update, delete: if isWorkspaceMember(resource.data.workspaceId);
     }
   }
 }

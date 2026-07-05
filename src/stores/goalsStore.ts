@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { db, auth } from '@/lib/firebase'
+import { useAuthStore } from './authStore'
 import { Goal, BudgetSettings } from '@/types'
 import {
   collection,
@@ -40,12 +41,13 @@ export const useGoalsStore = defineStore('goals', {
   actions: {
     // 1. Cargar Objetivos de Ahorro
     async fetchGoals(): Promise<void> {
-      const user = auth.currentUser
-      if (!user) return
+      const authStore = useAuthStore()
+      const workspaceId = authStore.activeWorkspaceId
+      if (!workspaceId) return
 
       this.loading = true
       try {
-        const q = query(collection(db, 'goals'), where('userId', '==', user.uid))
+        const q = query(collection(db, 'goals'), where('workspaceId', '==', workspaceId))
         const querySnapshot = await getDocs(q)
         const goalsList: Goal[] = []
         querySnapshot.forEach((docSnap) => {
@@ -78,11 +80,14 @@ export const useGoalsStore = defineStore('goals', {
       targetDate: Date;
     }): Promise<Goal> {
       const user = auth.currentUser
-      if (!user) throw new Error('Usuario no autenticado')
+      const authStore = useAuthStore()
+      const workspaceId = authStore.activeWorkspaceId
+      if (!user || !workspaceId) throw new Error('Usuario o Workspace no autenticado')
 
       this.loading = true
       try {
         const newGoal = {
+          workspaceId,
           userId: user.uid,
           name,
           targetAmount: Number(targetAmount),
@@ -95,6 +100,7 @@ export const useGoalsStore = defineStore('goals', {
         const docRef = await addDoc(collection(db, 'goals'), newGoal)
         const goalWithId: Goal = {
           id: docRef.id,
+          workspaceId,
           userId: user.uid,
           name,
           targetAmount: Number(targetAmount),
@@ -163,14 +169,15 @@ export const useGoalsStore = defineStore('goals', {
 
     // 5. Cargar configuraciones del presupuesto
     async loadBudgetSettings(): Promise<void> {
-      const user = auth.currentUser
-      if (!user) return
+      const authStore = useAuthStore()
+      const workspaceId = authStore.activeWorkspaceId
+      if (!workspaceId) return
 
       this.loading = true
       try {
-        const userDoc = await getDoc(doc(db, 'users', user.uid))
-        if (userDoc.exists()) {
-          const data = userDoc.data()
+        const wsDoc = await getDoc(doc(db, 'workspaces', workspaceId))
+        if (wsDoc.exists()) {
+          const data = wsDoc.data()
           this.budgetIncome = data.budgetIncome !== undefined ? Number(data.budgetIncome) : 0
           this.budgetNeedsPercent = data.budgetNeedsPercent !== undefined ? Number(data.budgetNeedsPercent) : 50
           this.budgetWantsPercent = data.budgetWantsPercent !== undefined ? Number(data.budgetWantsPercent) : 30
@@ -186,13 +193,14 @@ export const useGoalsStore = defineStore('goals', {
 
     // 6. Guardar configuraciones del presupuesto
     async saveBudgetSettings(settings: BudgetSettings): Promise<void> {
-      const user = auth.currentUser
-      if (!user) throw new Error('Usuario no autenticado')
+      const authStore = useAuthStore()
+      const workspaceId = authStore.activeWorkspaceId
+      if (!workspaceId) throw new Error('Workspace no inicializado')
 
       this.loading = true
       try {
-        const userRef = doc(db, 'users', user.uid)
-        await updateDoc(userRef, {
+        const wsRef = doc(db, 'workspaces', workspaceId)
+        await updateDoc(wsRef, {
           budgetIncome: Number(settings.budgetIncome),
           budgetNeedsPercent: Number(settings.budgetNeedsPercent),
           budgetWantsPercent: Number(settings.budgetWantsPercent),
