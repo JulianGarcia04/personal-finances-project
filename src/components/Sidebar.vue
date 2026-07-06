@@ -1,13 +1,21 @@
 <template>
   <div>
-    <!-- Mobile Hamburger Menu Toggle -->
-    <button 
-      @click="isOpen = !isOpen"
-      class="lg:hidden fixed top-4 left-4 z-50 p-2 rounded-lg bg-surface border border-border text-text-primary hover:bg-slate-800 transition-colors"
-      aria-label="Toggle Menu"
-    >
-      <component :is="isOpen ? XIcon : MenuIcon" class="w-6 h-6" />
-    </button>
+    <!-- Mobile Top Header -->
+    <header v-if="authStore.isAuthenticated" class="lg:hidden fixed top-0 left-0 right-0 h-16 glass-panel border-b border-white/5 z-30 flex items-center justify-between px-4 backdrop-blur-md bg-background/80">
+      <div class="flex items-center space-x-3">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-accent-emerald to-accent-violet flex items-center justify-center shadow-glow-emerald">
+          <span class="font-display font-extrabold text-background text-sm">V</span>
+        </div>
+        <span class="font-display font-bold text-lg tracking-wider text-text-primary">VAULT</span>
+      </div>
+      <button 
+        @click="isOpen = !isOpen"
+        class="p-2 rounded-lg text-text-primary hover:bg-white/5 active:bg-white/10 transition-colors"
+        aria-label="Toggle Menu"
+      >
+        <component :is="isOpen ? XIcon : MenuIcon" class="w-6 h-6" />
+      </button>
+    </header>
 
     <!-- Overlay when mobile menu open -->
     <div 

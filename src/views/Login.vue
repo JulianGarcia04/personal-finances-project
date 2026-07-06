@@ -5,7 +5,7 @@
     <div class="absolute bottom-1/4 right-1/4 w-96 h-96 bg-accent-violet/5 rounded-full blur-[100px] pointer-events-none"></div>
 
     <!-- Login/Register Card -->
-    <div class="w-full max-w-md glass-panel rounded-3xl p-8 md:p-10 relative z-10 shadow-2xl border border-white/5">
+    <div class="w-full max-w-md glass-panel rounded-3xl p-6 sm:p-8 md:p-10 relative z-10 shadow-2xl border border-white/5">
       <!-- Title & Branding -->
       <div class="flex flex-col items-center mb-8 text-center">
         <div class="w-12 h-12 rounded-2xl bg-gradient-to-tr from-accent-emerald to-accent-violet flex items-center justify-center shadow-glow-emerald mb-4">

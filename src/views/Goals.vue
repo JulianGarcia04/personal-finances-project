@@ -127,7 +127,7 @@
           <span>Plan de Presupuesto</span>
         </h3>
 
-        <div class="glass-panel rounded-2xl p-6 border border-white/5 space-y-6">
+        <div class="glass-panel rounded-2xl p-4 sm:p-6 border border-white/5 space-y-6">
           
           <!-- Income Input -->
           <div class="space-y-2">
@@ -235,7 +235,7 @@
       v-if="showCreateModal"
       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs"
     >
-      <div class="glass-panel w-full max-w-md rounded-2xl border border-white/10 p-6 space-y-6">
+      <div class="glass-panel w-full max-w-md rounded-2xl border border-white/10 p-4 sm:p-6 space-y-6 max-h-[90vh] overflow-y-auto">
         <div class="flex justify-between items-center">
           <h3 class="font-display font-bold text-xl text-text-primary">Nuevo Objetivo de Ahorro</h3>
           <button @click="showCreateModal = false" class="text-text-muted hover:text-text-primary cursor-pointer">
@@ -334,7 +334,7 @@
       v-if="showContributeModal"
       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs"
     >
-      <div class="glass-panel w-full max-w-md rounded-2xl border border-white/10 p-6 space-y-6">
+      <div class="glass-panel w-full max-w-md rounded-2xl border border-white/10 p-4 sm:p-6 space-y-6 max-h-[90vh] overflow-y-auto">
         <div class="flex justify-between items-center">
           <h3 class="font-display font-bold text-xl text-text-primary">Aportar a: {{ selectedGoal?.name }}</h3>
           <button @click="showContributeModal = false" class="text-text-muted hover:text-text-primary cursor-pointer">

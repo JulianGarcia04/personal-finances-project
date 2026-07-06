@@ -14,7 +14,7 @@
       <Sidebar v-if="authStore.isAuthenticated" />
 
       <!-- Área de Contenido Principal -->
-      <main :class="['flex-1 p-6 md:p-8 transition-all duration-300 w-full', authStore.isAuthenticated ? 'lg:pl-72 pt-20 lg:pt-8' : '']">
+      <main :class="['flex-1 p-4 sm:p-6 lg:p-8 transition-all duration-300 w-full', authStore.isAuthenticated ? 'lg:pl-72 pt-20 lg:pt-8' : '']">
         <router-view v-slot="{ Component }">
           <transition name="page" mode="out-in">
             <component :is="Component" />

@@ -30,7 +30,7 @@
     </div>
 
     <!-- Onboarding State if no accounts exist -->
-    <div v-if="accountsStore.accounts.length === 0" class="glass-panel rounded-3xl p-12 text-center max-w-2xl mx-auto space-y-6">
+    <div v-if="accountsStore.accounts.length === 0" class="glass-panel rounded-3xl p-6 sm:p-12 text-center max-w-2xl mx-auto space-y-6">
       <div class="w-16 h-16 rounded-2xl bg-accent-emerald/10 flex items-center justify-center mx-auto text-accent-emerald border border-accent-emerald/20 shadow-glow-emerald">
         <LandmarkIcon class="w-8 h-8" />
       </div>
@@ -53,7 +53,7 @@
       <!-- 1. Stats Cards Grid -->
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         <!-- Patrimonio Neto (USD/COP default) -->
-        <div class="glass-panel rounded-2xl p-6 relative overflow-hidden group border border-white/5 glow-card-emerald flex flex-col justify-between">
+        <div class="glass-panel rounded-2xl p-4 sm:p-6 relative overflow-hidden group border border-white/5 glow-card-emerald flex flex-col justify-between">
           <div>
             <div class="absolute top-0 right-0 w-24 h-24 bg-accent-emerald/5 rounded-full blur-xl pointer-events-none"></div>
             <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Patrimonio Neto</span>
@@ -68,7 +68,7 @@
         </div>
 
         <!-- Ingresos del Mes -->
-        <div class="glass-panel rounded-2xl p-6 relative overflow-hidden group border border-white/5 flex flex-col justify-between">
+        <div class="glass-panel rounded-2xl p-4 sm:p-6 relative overflow-hidden group border border-white/5 flex flex-col justify-between">
           <div>
             <div class="absolute top-0 right-0 w-24 h-24 bg-accent-emerald/5 rounded-full blur-xl pointer-events-none"></div>
             <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Ingresos del Mes</span>
@@ -85,7 +85,7 @@
         </div>
 
         <!-- Gastos del Mes -->
-        <div class="glass-panel rounded-2xl p-6 relative overflow-hidden group border border-white/5 flex flex-col justify-between">
+        <div class="glass-panel rounded-2xl p-4 sm:p-6 relative overflow-hidden group border border-white/5 flex flex-col justify-between">
           <div>
             <div class="absolute top-0 right-0 w-24 h-24 bg-accent-rose/5 rounded-full blur-xl pointer-events-none"></div>
             <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Gastos del Mes</span>
@@ -127,7 +127,7 @@
         </div>
 
         <!-- Tasa de Ahorro -->
-        <div class="glass-panel rounded-2xl p-6 relative overflow-hidden group border border-white/5">
+        <div class="glass-panel rounded-2xl p-4 sm:p-6 relative overflow-hidden group border border-white/5">
           <div class="absolute top-0 right-0 w-24 h-24 bg-accent-amber/5 rounded-full blur-xl pointer-events-none"></div>
           <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Tasa de Ahorro</span>
           <h4 class="font-display font-bold text-2xl mt-2 text-accent-amber truncate">
@@ -142,7 +142,7 @@
       <!-- 2. Charts Section -->
       <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
         <!-- Gastos por categoría (Donut) -->
-        <div class="glass-panel rounded-2xl p-6 md:col-span-1 flex flex-col justify-between h-96">
+        <div class="glass-panel rounded-2xl p-4 sm:p-6 md:col-span-1 flex flex-col justify-between h-96">
           <div>
             <h4 class="font-display font-bold text-base text-text-primary">Distribución de Gastos</h4>
             <p class="text-text-muted text-xs mt-0.5">Gastos acumulados por categoría en el mes.</p>
@@ -157,7 +157,7 @@
         </div>
 
         <!-- Flujo mensual (Bar Chart) -->
-        <div class="glass-panel rounded-2xl p-6 md:col-span-2 flex flex-col justify-between h-96">
+        <div class="glass-panel rounded-2xl p-4 sm:p-6 md:col-span-2 flex flex-col justify-between h-96">
           <div>
             <h4 class="font-display font-bold text-base text-text-primary">Flujo de Caja Mensual</h4>
             <p class="text-text-muted text-xs mt-0.5">Comparativo mensual de ingresos y gastos.</p>
@@ -175,7 +175,7 @@
       <!-- 3. Recent Transactions & Quick Summary -->
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- Recent Transactions (List) -->
-        <div class="glass-panel rounded-2xl p-6 lg:col-span-2 space-y-4">
+        <div class="glass-panel rounded-2xl p-4 sm:p-6 lg:col-span-2 space-y-4">
           <div class="flex items-center justify-between">
             <h4 class="font-display font-bold text-base text-text-primary">Transacciones Recientes</h4>
             <router-link to="/transactions" class="text-xs text-accent-emerald font-semibold hover:underline">
@@ -214,7 +214,7 @@
         </div>
 
         <!-- Cuentas Bancarias Summary -->
-        <div class="glass-panel rounded-2xl p-6 lg:col-span-1 space-y-4">
+        <div class="glass-panel rounded-2xl p-4 sm:p-6 lg:col-span-1 space-y-4">
           <div class="flex items-center justify-between">
             <h4 class="font-display font-bold text-base text-text-primary">Saldos de Cuentas</h4>
             <router-link to="/accounts" class="text-xs text-accent-emerald font-semibold hover:underline">

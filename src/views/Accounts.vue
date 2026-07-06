@@ -20,7 +20,7 @@
       <div 
         v-for="(total, cur) in accountsStore.netWorthByCurrency" 
         :key="cur"
-        class="glass-panel rounded-2xl p-6 relative overflow-hidden group hover:border-white/10 transition-all"
+        class="glass-panel rounded-2xl p-4 sm:p-6 relative overflow-hidden group hover:border-white/10 transition-all"
       >
         <div class="absolute top-0 right-0 w-32 h-32 bg-accent-emerald/5 rounded-full blur-2xl pointer-events-none"></div>
         <span class="text-xs font-semibold text-text-secondary uppercase tracking-widest">Patrimonio Neto ({{ cur }})</span>
@@ -38,7 +38,7 @@
       <div 
         v-for="account in accountsStore.accounts" 
         :key="account.id"
-        :class="['glass-panel rounded-2xl p-6 flex flex-col justify-between h-52 transition-all relative overflow-hidden group border border-white/5', getGlowClass(account.type)]"
+        :class="['glass-panel rounded-2xl p-4 sm:p-6 flex flex-col justify-between h-52 transition-all relative overflow-hidden group border border-white/5', getGlowClass(account.type)]"
       >
         <!-- Background light blur -->
         <div :class="['absolute top-0 right-0 w-24 h-24 rounded-full blur-xl opacity-20 pointer-events-none', getOrbBgClass(account.type)]"></div>
@@ -87,7 +87,7 @@
       v-if="showAddModal" 
       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs"
     >
-      <div class="w-full max-w-md glass-panel rounded-3xl p-6 md:p-8 shadow-2xl relative border border-white/10 animate-scale-up">
+      <div class="w-full max-w-md glass-panel rounded-3xl p-4 sm:p-6 md:p-8 shadow-2xl relative border border-white/10 animate-scale-up max-h-[90vh] overflow-y-auto">
         <!-- Close Button -->
         <button 
           @click="closeAddModal"

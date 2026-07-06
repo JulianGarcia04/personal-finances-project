@@ -19,7 +19,7 @@
       <!-- Right: Settings Panel -->
       <div class="md:col-span-2 space-y-6">
         <!-- Main Toggle Card -->
-        <div class="glass-panel rounded-2xl p-6 space-y-6">
+        <div class="glass-panel rounded-2xl p-4 sm:p-6 space-y-6">
           <div class="flex items-start justify-between">
             <div class="space-y-1">
               <h4 class="font-display font-medium text-text-primary">Importador de Extractos Bancarios</h4>
@@ -147,7 +147,7 @@
       </div>
 
       <div class="md:col-span-2 space-y-6">
-        <div class="glass-panel rounded-2xl p-6 space-y-6">
+        <div class="glass-panel rounded-2xl p-4 sm:p-6 space-y-6">
           
           <div class="space-y-4">
             <h4 class="font-display font-medium text-sm text-text-primary">Crear nuevo Workspace</h4>
@@ -234,7 +234,7 @@
 
       <!-- Right: Selectors Panel -->
       <div class="md:col-span-2 space-y-6">
-        <div class="glass-panel rounded-2xl p-6 space-y-6">
+        <div class="glass-panel rounded-2xl p-4 sm:p-6 space-y-6">
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <!-- Country Selector -->
             <div class="space-y-1.5">
@@ -288,7 +288,7 @@
 
       <!-- Right: Content Panel -->
       <div class="md:col-span-2 space-y-6">
-        <div class="glass-panel rounded-2xl p-6 space-y-6">
+        <div class="glass-panel rounded-2xl p-4 sm:p-6 space-y-6">
           
           <!-- Nueva Categoría Form -->
           <form @submit.prevent="createCategory" class="space-y-4">

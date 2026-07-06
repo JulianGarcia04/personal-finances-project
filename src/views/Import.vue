@@ -10,7 +10,7 @@
     <div v-if="!parsedTransactions.length" class="grid grid-cols-1 md:grid-cols-3 gap-8">
       <!-- Configuration Panel -->
       <div class="md:col-span-1 space-y-6">
-        <div class="glass-panel rounded-2xl p-6 space-y-4">
+        <div class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
           <h3 class="font-display font-semibold text-lg text-text-primary">1. Destino de los datos</h3>
           <p class="text-text-muted text-xs leading-relaxed">Selecciona a qué cuenta deseas registrar los movimientos extraídos por la IA.</p>
           
@@ -43,7 +43,7 @@
 
       <!-- File / Text Input Panel -->
       <div class="md:col-span-2 space-y-6">
-        <div class="glass-panel rounded-2xl p-6 space-y-6">
+        <div class="glass-panel rounded-2xl p-4 sm:p-6 space-y-6">
           <h3 class="font-display font-semibold text-lg text-text-primary">2. Contenido del Extracto</h3>
           
           <!-- Paste Text area -->

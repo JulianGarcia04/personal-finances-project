@@ -72,38 +72,55 @@
     </div>
 
     <!-- Transactions List Table -->
-    <div class="glass-panel rounded-3xl overflow-hidden shadow-xl border border-white/5">
-      <div class="overflow-x-auto">
+    <div class="glass-panel rounded-3xl overflow-hidden shadow-xl border border-white/5 relative">
+      <div class="overflow-x-auto pb-16">
         <table class="w-full text-left border-collapse">
           <thead>
             <tr class="border-b border-border/50 text-[10px] font-semibold text-text-secondary uppercase tracking-wider bg-slate-900/30">
-              <th class="py-4 px-6">Detalles / Comercio</th>
-              <th class="py-4 px-6">Cuenta</th>
-              <th class="py-4 px-6">Categoría</th>
-              <th class="py-4 px-6">Fecha</th>
-              <th class="py-4 px-6 text-right">Monto</th>
-              <th class="py-4 px-6 text-center w-24">Acciones</th>
+              <th class="py-4 pl-6 pr-2 w-10">
+                <input 
+                  type="checkbox" 
+                  :checked="isAllSelected"
+                  @change="toggleSelectAll"
+                  class="rounded border-border bg-slate-900/50 text-accent-emerald focus:ring-accent-emerald cursor-pointer"
+                />
+              </th>
+              <th class="py-4 px-4">Detalles / Comercio</th>
+              <th class="py-4 px-4">Cuenta</th>
+              <th class="py-4 px-4">Categoría</th>
+              <th class="py-4 px-4">Fecha</th>
+              <th class="py-4 px-4 text-right">Monto</th>
+              <th class="py-4 px-4 text-center w-24">Acciones</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-border/30">
             <tr 
               v-for="tx in displayedTransactions" 
               :key="tx.id"
-              class="hover:bg-white/[0.02] transition-colors text-sm text-text-primary group"
+              :class="['transition-colors text-sm text-text-primary group', selectedTxIds.includes(tx.id) ? 'bg-accent-emerald/5' : 'hover:bg-white/[0.02]']"
             >
+              <!-- Checkbox -->
+              <td class="py-4 pl-6 pr-2 w-10">
+                <input 
+                  type="checkbox" 
+                  v-model="selectedTxIds"
+                  :value="tx.id"
+                  class="rounded border-border bg-slate-900/50 text-accent-emerald focus:ring-accent-emerald cursor-pointer"
+                />
+              </td>
               <!-- Description -->
-              <td class="py-4 px-6 font-medium">
+              <td class="py-4 px-4 font-medium">
                 <div class="truncate max-w-xs md:max-w-md">{{ tx.description }}</div>
                 <div v-if="workspacesStore.activeWorkspaceProfiles.length > 1" class="text-[10px] text-text-muted mt-0.5">
                   Registrado por: {{ getUserName(tx.userId) }}
                 </div>
               </td>
               <!-- Account -->
-              <td class="py-4 px-6 text-text-secondary">
+              <td class="py-4 px-4 text-text-secondary">
                 {{ getAccountName(tx.accountId) }}
               </td>
               <!-- Category -->
-              <td class="py-4 px-6">
+              <td class="py-4 px-4">
                 <span 
                   v-if="getCategory(tx.categoryId)"
                   class="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-semibold"
@@ -115,15 +132,15 @@
                 <span v-else class="text-text-muted text-xs">-</span>
               </td>
               <!-- Date -->
-              <td class="py-4 px-6 text-text-secondary">
+              <td class="py-4 px-4 text-text-secondary">
                 {{ formatDate(tx.date) }}
               </td>
               <!-- Amount -->
-              <td :class="['py-4 px-6 text-right font-display font-semibold', tx.amount >= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
-                {{ tx.amount >= 0 ? '+' : '' }}{{ formatCurrency(tx.amount, tx.currency) }}
+              <td :class="['py-4 px-4 text-right font-display font-semibold', tx.amount >= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
+                {{ tx.amount >= 0 ? '+' : '' }}{{ formatCurrency(tx.amount, tx.currency || getAccountCurrency(tx.accountId)) }}
               </td>
               <!-- Actions -->
-              <td class="py-4 px-6 text-center">
+              <td class="py-4 px-4 text-center">
                 <div class="flex items-center justify-center space-x-2">
                   <a 
                     v-if="tx.receiptUrl"
@@ -153,12 +170,38 @@
               </td>
             </tr>
             <tr v-if="displayedTransactions.length === 0">
-              <td colspan="6" class="text-center py-12 text-text-muted text-sm">
+              <td colspan="7" class="text-center py-12 text-text-muted text-sm">
                 No hay transacciones registradas que coincidan con los filtros.
               </td>
             </tr>
           </tbody>
         </table>
+      </div>
+      
+      <!-- Batch Actions Bar -->
+      <div 
+        v-if="selectedTxIds.length > 0" 
+        class="fixed bottom-8 left-1/2 -translate-x-1/2 z-40 glass-panel rounded-full px-5 py-2.5 shadow-2xl flex items-center space-x-5 border border-white/20 animate-fade-in bg-slate-900/95 backdrop-blur-xl"
+      >
+        <div class="flex items-center space-x-2">
+          <span class="bg-accent-emerald text-background text-xs font-bold px-2 py-0.5 rounded-full">{{ selectedTxIds.length }}</span>
+          <span class="text-xs font-semibold text-text-primary hidden sm:inline">Seleccionados</span>
+        </div>
+        
+        <div class="h-5 w-px bg-border/50"></div>
+        
+        <div class="flex flex-col text-[10px] sm:text-xs space-y-0.5 whitespace-nowrap">
+          <div v-for="(totals, curr) in selectionSummary" :key="curr" class="flex space-x-3">
+            <span v-if="totals.income > 0" class="text-accent-emerald">Ingresos: +{{ formatCurrency(totals.income, curr) }}</span>
+            <span v-if="totals.expense > 0" class="text-accent-rose">Gastos: -{{ formatCurrency(totals.expense, curr) }}</span>
+          </div>
+        </div>
+
+        <div class="h-5 w-px bg-border/50"></div>
+
+        <button @click="handleBatchDelete" class="p-1.5 text-text-muted hover:text-accent-rose hover:bg-white/5 rounded-lg transition-colors" title="Eliminar Seleccionados">
+          <TrashIcon class="w-4 h-4" />
+        </button>
       </div>
     </div>
 
@@ -167,7 +210,7 @@
       v-if="showAddModal" 
       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs"
     >
-      <div class="w-full max-w-md glass-panel rounded-3xl p-6 md:p-8 shadow-2xl relative border border-white/10 animate-scale-up">
+      <div class="w-full max-w-md glass-panel rounded-3xl p-4 sm:p-6 md:p-8 shadow-2xl relative border border-white/10 animate-scale-up max-h-[90vh] overflow-y-auto custom-scrollbar">
         <!-- Close Button -->
         <button 
           @click="closeAddModal"
@@ -365,7 +408,7 @@
       v-if="showEditModal" 
       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs"
     >
-      <div class="w-full max-w-md glass-panel rounded-3xl p-6 md:p-8 shadow-2xl relative border border-white/10 animate-scale-up">
+      <div class="w-full max-w-md glass-panel rounded-3xl p-4 sm:p-6 md:p-8 shadow-2xl relative border border-white/10 animate-scale-up max-h-[90vh] overflow-y-auto custom-scrollbar">
         <!-- Close Button -->
         <button 
           @click="closeEditModal"
@@ -584,6 +627,45 @@ const workspacesStore = useWorkspacesStore()
 
 const showAddModal = ref(false)
 const loading = ref(false)
+
+// Ponytail: Batch selection state and computed
+const selectedTxIds = ref<string[]>([])
+const isAllSelected = computed(() => {
+  return displayedTransactions.value.length > 0 && 
+         selectedTxIds.value.length === displayedTransactions.value.length
+})
+const toggleSelectAll = (e: Event) => {
+  if ((e.target as HTMLInputElement).checked) {
+    selectedTxIds.value = displayedTransactions.value.map(t => t.id)
+  } else {
+    selectedTxIds.value = []
+  }
+}
+const selectionSummary = computed(() => {
+  const totals: Record<string, { income: number, expense: number }> = {}
+  for (const id of selectedTxIds.value) {
+    const tx = displayedTransactions.value.find(t => t.id === id)
+    if (!tx) continue
+    const curr = tx.currency || getAccountCurrency(tx.accountId)
+    if (!totals[curr]) totals[curr] = { income: 0, expense: 0 }
+    
+    if (tx.amount >= 0) totals[curr].income += tx.amount
+    else totals[curr].expense += Math.abs(tx.amount)
+  }
+  return totals
+})
+const handleBatchDelete = async () => {
+  if (confirm(`¿Eliminar ${selectedTxIds.value.length} transacciones? Esto actualizará los saldos de las cuentas.`)) {
+    try {
+      // Ponytail: promise all loop instead of batch endpoint
+      await Promise.all(selectedTxIds.value.map(id => transactionsStore.deleteTransaction(id)))
+      selectedTxIds.value = []
+    } catch (err) {
+      console.error('Error en batch delete', err)
+    }
+  }
+}
+// -----------------
 
 const filters = reactive({
   search: '',
@@ -883,6 +965,11 @@ const handleDelete = async (id: string) => {
 const getAccountName = (id: string) => {
   const acc = accountsStore.getAccountById(id)
   return acc ? acc.name : 'Desconocida'
+}
+
+const getAccountCurrency = (id: string) => {
+  const acc = accountsStore.getAccountById(id)
+  return acc ? acc.currency : 'COP'
 }
 
 const getCategory = (id: string) => {
