@@ -53,33 +53,67 @@
       <!-- 1. Stats Cards Grid -->
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         <!-- Patrimonio Neto (USD/COP default) -->
-        <div class="glass-panel rounded-2xl p-6 relative overflow-hidden group border border-white/5 glow-card-emerald">
-          <div class="absolute top-0 right-0 w-24 h-24 bg-accent-emerald/5 rounded-full blur-xl pointer-events-none"></div>
-          <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Patrimonio Neto</span>
-          <h4 class="font-display font-bold text-2xl mt-2 truncate text-text-primary">
-            {{ formatPrimaryCurrency(netWorthValue) }}
-          </h4>
-          <span class="text-[10px] text-text-muted mt-1 block">Suma de saldos de tus cuentas</span>
+        <div class="glass-panel rounded-2xl p-6 relative overflow-hidden group border border-white/5 glow-card-emerald flex flex-col justify-between">
+          <div>
+            <div class="absolute top-0 right-0 w-24 h-24 bg-accent-emerald/5 rounded-full blur-xl pointer-events-none"></div>
+            <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Patrimonio Neto</span>
+            <h4 class="font-display font-bold text-2xl mt-2 truncate text-text-primary">
+              {{ formatPrimaryCurrency(netWorthValue) }}
+            </h4>
+            <span class="text-[10px] text-text-muted mt-1 block">Suma de saldos de tus cuentas</span>
+          </div>
+          <div class="mt-4 pt-4 border-t border-white/5 text-[10px] text-text-secondary">
+            Runway: <span class="font-bold text-text-primary">{{ liquidityDays }} días</span>
+          </div>
         </div>
 
         <!-- Ingresos del Mes -->
-        <div class="glass-panel rounded-2xl p-6 relative overflow-hidden group border border-white/5">
-          <div class="absolute top-0 right-0 w-24 h-24 bg-accent-emerald/5 rounded-full blur-xl pointer-events-none"></div>
-          <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Ingresos del Mes</span>
-          <h4 class="font-display font-bold text-2xl mt-2 text-accent-emerald truncate">
-            +{{ formatPrimaryCurrency(monthlyIncome) }}
-          </h4>
-          <span class="text-[10px] text-text-muted mt-1 block">Abonos recibidos este mes</span>
+        <div class="glass-panel rounded-2xl p-6 relative overflow-hidden group border border-white/5 flex flex-col justify-between">
+          <div>
+            <div class="absolute top-0 right-0 w-24 h-24 bg-accent-emerald/5 rounded-full blur-xl pointer-events-none"></div>
+            <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Ingresos del Mes</span>
+            <div class="flex items-end gap-2 mt-2">
+              <h4 class="font-display font-bold text-2xl text-accent-emerald truncate">
+                +{{ formatPrimaryCurrency(monthlyIncome) }}
+              </h4>
+              <span :class="['text-xs mb-1 font-semibold', incomeData.percent >= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
+                {{ incomeData.percent > 0 ? '+' : '' }}{{ incomeData.percent }}%
+              </span>
+            </div>
+            <span class="text-[10px] text-text-muted mt-1 block">vs mes anterior ({{ formatPrimaryCurrency(incomeData.previous) }})</span>
+          </div>
         </div>
 
         <!-- Gastos del Mes -->
-        <div class="glass-panel rounded-2xl p-6 relative overflow-hidden group border border-white/5">
-          <div class="absolute top-0 right-0 w-24 h-24 bg-accent-rose/5 rounded-full blur-xl pointer-events-none"></div>
-          <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Gastos del Mes</span>
-          <h4 class="font-display font-bold text-2xl mt-2 text-accent-rose truncate">
-            {{ formatPrimaryCurrency(monthlyExpenses) }}
-          </h4>
-          <span class="text-[10px] text-text-muted mt-1 block">Consumos realizados este mes</span>
+        <div class="glass-panel rounded-2xl p-6 relative overflow-hidden group border border-white/5 flex flex-col justify-between">
+          <div>
+            <div class="absolute top-0 right-0 w-24 h-24 bg-accent-rose/5 rounded-full blur-xl pointer-events-none"></div>
+            <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Gastos del Mes</span>
+            <div class="flex items-end gap-2 mt-2">
+              <h4 class="font-display font-bold text-2xl text-accent-rose truncate">
+                {{ formatPrimaryCurrency(monthlyExpenses) }}
+              </h4>
+              <span :class="['text-xs mb-1 font-semibold', expensesData.percent <= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
+                {{ expensesData.percent > 0 ? '+' : '' }}{{ expensesData.percent }}%
+              </span>
+            </div>
+            <span class="text-[10px] text-text-muted mt-1 block">vs mes anterior ({{ formatPrimaryCurrency(expensesData.previous) }})</span>
+          </div>
+          
+          <div v-if="topBleeder" class="mt-4 pt-3 border-t border-white/5">
+            <span class="text-[10px] font-semibold text-accent-amber block truncate">
+              ⚠️ Mayor fuga: {{ topBleeder[0] }}
+            </span>
+          </div>
+
+          <!-- ponytail: member breakdown -->
+          <div v-if="memberExpenses.length > 0" class="mt-2 pt-2 border-t border-white/5 space-y-1">
+            <div v-for="m in memberExpenses" :key="m.name" class="flex justify-between text-[10px]">
+              <span class="text-text-secondary truncate pr-2">{{ m.name }}</span>
+              <span class="font-semibold text-text-primary">{{ formatPrimaryCurrency(m.amount) }}</span>
+            </div>
+          </div>
+
           <!-- ponytail: limit indicator -->
           <div v-if="currentExpenseLimit > 0" class="mt-3">
             <div class="flex justify-between text-[10px] mb-1">
@@ -279,19 +313,69 @@ const primaryCurrency = computed(() => {
 })
 
 // Ingresos del mes actual
-const monthlyIncome = computed(() => {
+// ponytail: MoM (Month-over-Month) comparativas
+const getMoMData = (type: 'income' | 'expense') => {
   const now = new Date()
-  return transactionsStore.transactions
-    .filter(t => t.type === 'income' && t.date.getMonth() === now.getMonth() && t.date.getFullYear() === now.getFullYear())
-    .reduce((sum, t) => sum + Math.abs(t.amount), 0)
+  const thisMonth = now.getMonth(), thisYear = now.getFullYear()
+  const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+  const lastMonth = lastMonthDate.getMonth(), lastMonthYear = lastMonthDate.getFullYear()
+
+  let current = 0, previous = 0
+  transactionsStore.transactions.forEach(t => {
+    if (t.type === type) {
+      const m = t.date.getMonth(), y = t.date.getFullYear()
+      if (m === thisMonth && y === thisYear) current += Math.abs(t.amount)
+      else if (m === lastMonth && y === lastMonthYear) previous += Math.abs(t.amount)
+    }
+  })
+  
+  const diff = current - previous
+  const percent = previous === 0 ? (current > 0 ? 100 : 0) : Math.round((diff / previous) * 100)
+  return { current, previous, percent, diff }
+}
+
+const incomeData = computed(() => getMoMData('income'))
+const monthlyIncome = computed(() => incomeData.value.current)
+
+// Gastos del mes actual y comparativa
+const expensesData = computed(() => getMoMData('expense'))
+const monthlyExpenses = computed(() => expensesData.value.current)
+
+// ponytail: Runway y Liquidez
+const liquidityDays = computed(() => {
+  if (monthlyExpenses.value === 0 || netWorthValue.value <= 0) return '∞'
+  const dailyBurn = monthlyExpenses.value / new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()
+  return Math.round(netWorthValue.value / dailyBurn)
 })
 
-// Gastos del mes actual
-const monthlyExpenses = computed(() => {
+// ponytail: Top Bleeder
+const topBleeder = computed(() => {
+  const entries = Object.entries(expensesByCategory.value)
+  return entries.length ? entries.sort((a, b) => b[1] - a[1])[0] : null
+})
+
+// ponytail: Gastos por miembro (solo para workspaces compartidos)
+const memberExpenses = computed(() => {
+  const profiles = workspacesStore.activeWorkspaceProfiles
+  if (!profiles || profiles.length <= 1) return []
+  
   const now = new Date()
-  return transactionsStore.transactions
-    .filter(t => t.type === 'expense' && t.date.getMonth() === now.getMonth() && t.date.getFullYear() === now.getFullYear())
-    .reduce((sum, t) => sum + Math.abs(t.amount), 0)
+  const thisMonth = now.getMonth(), thisYear = now.getFullYear()
+  const totals: Record<string, number> = {}
+  
+  transactionsStore.transactions.forEach(t => {
+    if (t.type === 'expense' && t.date.getMonth() === thisMonth && t.date.getFullYear() === thisYear) {
+      const uid = t.userId || authStore.user?.uid || 'unknown'
+      if (!totals[uid]) totals[uid] = 0
+      totals[uid] += Math.abs(t.amount)
+    }
+  })
+  
+  return Object.entries(totals).map(([uid, amount]) => {
+    const profile = profiles.find(p => p.uid === uid)
+    const name = profile?.displayName || profile?.email?.split('@')[0] || 'Miembro'
+    return { name, amount }
+  }).sort((a, b) => b.amount - a.amount)
 })
 
 // ponytail: current limit
