@@ -43,6 +43,12 @@ vault-personal-finances (Root)
 ### Storage Rules
 * File uploads (like receipts) are stored under `/workspaces/{workspaceId}/receipts/*`. Only workspace members can read or write these files.
 
+### Firestore Composite Indexes (`firestore.indexes.json`)
+* The **frontend** queries by `workspaceId`; the **agent backend** queries by `userId`. Both paths must stay indexed.
+* `transactions`: `workspaceId ASC + date DESC` and `chats`: `workspaceId ASC + updatedAt DESC` (frontend lists).
+* `transactions` by `userId` (agent tools): `userId+date`, `userId+accountId+date`, `userId+type+date`, `userId+accountId+type+date` (all `date DESC`). Required by `listTransactions`/`getExpensesByCategory` in production (emulator ignores missing indexes).
+* Deploy indexes with `firebase deploy --only firestore:indexes`.
+
 ### Firestore Database Schemas
 
 #### 1. `/users/{userId}`
@@ -61,7 +67,15 @@ vault-personal-finances (Root)
 * `ownerId`: string
 * `members`: string[] (Array of user UIDs)
 * `currency`: string
+* `expenseLimit`: number | undefined (optional global monthly expense limit)
+* `budgetIncome`: number | undefined (50/30/20 planner: declared monthly income)
+* `budgetNeedsPercent` / `budgetWantsPercent` / `budgetSavingsPercent`: number | undefined (50/30/20 split, must sum 100)
+* `budgetAllocations`: Record<goalId, number> | undefined (funds assigned per goal)
+* `categoryBudgets`: Record<categoryId, number> | undefined (recurring monthly budget limit per category)
+* `exchangeRates`: Record<currencyCode, number> | undefined (manual FX rates → primary currency, for multi-currency KPI consolidation)
 * `createdAt`: timestamp
+
+> Note: Budget/FX config lives **inline on the workspace doc** (no separate collection). It is read/written by `goalsStore` via `loadBudgetSettings` / `saveBudgetSettings`. Workspace members already have `update` permission, so no rules change is required.
 
 #### 3. `/accounts/{accountId}`
 * `id`: string
@@ -87,6 +101,7 @@ vault-personal-finances (Root)
 * `toAccountId`: string | null (FK to destination account, for transfers)
 * `statementImportId`: string | null (optional, tracks statement parser origin)
 * `receiptUrl`: string | null (optional, download URL for receipt uploaded to Storage)
+* `notes`: string | null (optional free-text notes/observations, max 500 chars, included in client-side search)
 * `currency`: string (copied from account)
 * `embedding`: number[] | null (optional, 768-dimension semantic vector from text-embedding-004)
 * `createdAt`: timestamp
@@ -129,9 +144,9 @@ vault-personal-finances (Root)
 * `authStore.ts`: Manages Firebase user session and active workspace ID context.
 * `workspacesStore.ts`: Manages fetching user workspaces, creating new workspaces, and inviting members.
 * `accountsStore.ts`: Manages bank/credit account state within a workspace.
-* `transactionsStore.ts`: Handles transaction history, batch inserts, receipt uploads, and Firestore sync within a workspace.
-* `settingsStore.ts`: Manages Gemini API integration, user API key encryption, and AI country/currency preferences.
-* `goalsStore.ts`: Manages savings goals, budget preferences (50/30/20 rule), and Firestore updates within a workspace.
+* `transactionsStore.ts`: Handles transaction history (with `notes`), batch inserts, receipt uploads, Firestore sync, and the `spendingByCategoryThisMonth(convert?)` getter used by category budgets.
+* `settingsStore.ts`: Manages Gemini API integration, user API key encryption, and AI country/currency preferences. The primary currency for KPI consolidation comes from here (`settingsStore.currency`).
+* `goalsStore.ts`: Manages savings goals **and** all workspace budget/FX config (50/30/20 planner, `categoryBudgets`, `exchangeRates`). Exposes the `convertToPrimary(amount, currency, primaryCurrency)` getter (uses manual `exchangeRates`; falls back to 1:1 when a rate is missing).
 * `chatsStore.ts`: Manages the AI Chat history within a workspace.
 
 ---
@@ -155,5 +170,12 @@ Backend secrets must be set in `functions/.env`:
 * `ENCRYPTION_SECRET`: A secure 32-character string used to encrypt/decrypt user-provided Gemini API keys.
 
 ### AI Chatbot & Tax Context Integration
-* **`chatWithAgent` Cloud Function:** An interactive HTTPS Cloud Function that powers the chat page. It initializes Genkit and Gemini 1.5 Flash. It has database access tools (`listAccounts`, `createAccount`, `listTransactions`, `createTransaction`, `deleteTransaction`, `listGoals`, `createGoal`, `updateGoalAmount`, `semanticSearchTransactions`, `indexTransactions`) to safely run user actions scoped to their workspace.
+* **`chatWithAgent` Cloud Function:** An interactive HTTPS Cloud Function that powers the chat page. It initializes Genkit + Gemini (`GEMINI_MODEL = "gemini-2.5-flash"`; embeddings use `text-embedding-004`). Tools are defined **inline** and capture the verified `userId` in a closure (the model never receives the uid as a parameter). Database tools: `listAccounts`, `createAccount`, `listTransactions`, `createTransaction`, `deleteTransaction`, `listCategories`, `listGoals`, `createGoal`, `updateGoalAmount`, `semanticSearchTransactions`, `indexTransactions`, `getExpensesByCategory`, `saveCategoryBudgets`.
+* **Budget tools:** `getExpensesByCategory(months)` aggregates expenses by category server-side (total, count, monthly average) so the model reasons over a summary instead of hundreds of docs. `saveCategoryBudgets(budgets[])` resolves the user's `activeWorkspaceId` and writes `categoryBudgets` on the workspace doc. The system prompt enforces analyze → propose → confirm → save.
 * **Country Tax Context Mapping:** Automatically maps the user's `country` to specific tax agencies and guidelines (DIAN/4x1000 in Colombia, SAT/ISR in Mexico, Hacienda/IRPF in Spain, IRS/401k in USA, SII in Chile, AFIP in Argentina, SUNAT in Peru) and injects it as localized context in the chatbot instructions.
+
+### Budgeting, Multi-Currency & Key Feature Notes
+* **Category budgets:** Recurring monthly limit per category stored in `workspace.categoryBudgets`. Real-vs-budget progress is computed client-side from `transactionsStore.spendingByCategoryThisMonth(...)`; alerts are visual (green <70% / amber <100% / red ≥100%), no push notifications. Editable in `Goals.vue` or via the AI agent.
+* **Multi-currency KPIs:** No exchange-rate API. Users set manual `exchangeRates` in `Settings.vue` (one per non-primary account currency). Dashboard consolidates net worth / income / expenses / savings rate into `settingsStore.currency` via `goalsStore.convertToPrimary`. Uses the current rate for all history (no historical FX).
+* **Accounts:** support create/edit/delete. Balance is **never** edited directly (only mutated by transactions via `runTransaction`). Credit cards show available credit (`limit + balance`) and utilization %.
+* **Transactions view:** client-side filters (search incl. notes, account, category, type, date range), "load more" pagination (50/page), and mobile card layouts (tables collapse below `md`).
