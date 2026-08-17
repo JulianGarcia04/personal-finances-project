@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { db, auth } from '@/lib/firebase'
-import { Account, AccountType } from '@/types'
+import { Account, AccountType, AccountMirror } from '@/types'
 import { useAuthStore } from '@/stores/authStore'
 import {
   collection,
@@ -131,8 +131,45 @@ export const useAccountsStore = defineStore('accounts', {
       }
     },
 
+    // Cuentas de otro workspace del usuario (para configurar/leer el espejo).
+    // No toca el estado: el store solo mantiene el workspace activo.
+    async fetchAccountsByWorkspace(workspaceId: string): Promise<Account[]> {
+      const q = query(collection(db, 'accounts'), where('workspaceId', '==', workspaceId))
+      const snap = await getDocs(q)
+      return snap.docs.map(docSnap => {
+        const data = docSnap.data()
+        return {
+          id: docSnap.id,
+          ...data,
+          createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(data.createdAt)
+        } as Account
+      })
+    },
+
+    // Configurar (o quitar con null) el espejo de una cuenta puente
+    async setAccountMirror(accountId: string, mirror: AccountMirror | null): Promise<void> {
+      this.loading = true
+      try {
+        await updateDoc(doc(db, 'accounts', accountId), { mirror })
+        const index = this.accounts.findIndex(acc => acc.id === accountId)
+        if (index !== -1) this.accounts[index] = { ...this.accounts[index], mirror }
+      } catch (error) {
+        console.error('Error updating account mirror:', error)
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+
     // Eliminar cuenta
     async deleteAccount(accountId: string): Promise<void> {
+      const account = this.accounts.find(acc => acc.id === accountId)
+      // El espejo vive en otro workspace: borrar el puente dejaría allá un saldo
+      // por cobrar sin contrapartida y sin forma de liquidarlo desde la UI.
+      if (account?.mirror) {
+        throw new Error('Esta cuenta tiene un espejo activo. Liquida el saldo pendiente y quita el espejo antes de borrarla.')
+      }
+
       this.loading = true
       try {
         await deleteDoc(doc(db, 'accounts', accountId))

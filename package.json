@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "node --test src/**/*.test.ts",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "emulators": "pnpm dlx kill-port --port 8080,9099,5001,9199,4000 && firebase emulators:start",

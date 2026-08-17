@@ -282,13 +282,13 @@
               <span class="text-text-secondary">
                 Gastado: {{ formatCurrency(spendingByCategory[cat.id] || 0, userCurrency) }}
               </span>
-              <span v-if="categoryBudgetInputs[cat.id]" :class="budgetPercent(cat.id) >= 100 ? 'text-accent-rose' : budgetPercent(cat.id) >= 70 ? 'text-accent-amber' : 'text-accent-emerald'">
-                {{ budgetPercent(cat.id) }}%{{ budgetPercent(cat.id) >= 100 ? ' · ¡Excedido!' : '' }}
+              <span v-if="categoryBudgetInputs[cat.id]" :class="budgetPercent(cat.id) > 100 ? 'text-accent-rose' : budgetPercent(cat.id) >= 70 ? 'text-accent-amber' : 'text-accent-emerald'">
+                {{ budgetPercent(cat.id) }}%{{ budgetStatusLabel(cat.id) }}
               </span>
             </div>
             <div class="w-full h-2 rounded-full bg-slate-950/60 overflow-hidden border border-white/5">
               <div
-                :class="['h-full rounded-full transition-all duration-500', budgetPercent(cat.id) >= 100 ? 'bg-accent-rose' : budgetPercent(cat.id) >= 70 ? 'bg-accent-amber' : 'bg-accent-emerald']"
+                :class="['h-full rounded-full transition-all duration-500', budgetPercent(cat.id) > 100 ? 'bg-accent-rose' : budgetPercent(cat.id) >= 70 ? 'bg-accent-amber' : 'bg-accent-emerald']"
                 :style="{ width: Math.min(budgetPercent(cat.id), 100) + '%' }"
               ></div>
             </div>
@@ -872,6 +872,13 @@ const budgetPercent = (categoryId: string) => {
   const limit = categoryBudgetInputs[categoryId]
   if (!limit || limit <= 0) return 0
   return Math.round(((spendingByCategory.value[categoryId] || 0) / limit) * 100)
+}
+
+const budgetStatusLabel = (categoryId: string) => {
+  const pct = budgetPercent(categoryId)
+  if (pct > 100) return ' · ¡Excedido!'
+  if (pct === 100) return ' · ¡A tope!'
+  return ''
 }
 
 const getCategoryIcon = (iconName: string) => {

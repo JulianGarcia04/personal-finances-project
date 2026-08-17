@@ -964,6 +964,7 @@ const saveTransaction = async () => {
     closeAddModal()
   } catch (err: any) {
     console.error('Error guardando transacción:', err)
+    alert(err?.message || 'No se pudo guardar el movimiento')
   } finally {
     loading.value = false
   }
@@ -1052,6 +1053,7 @@ const saveEditedTransaction = async () => {
     closeEditModal()
   } catch (err: any) {
     console.error('Error actualizando transacción:', err)
+    alert(err?.message || 'No se pudo actualizar el movimiento')
   } finally {
     loading.value = false
   }

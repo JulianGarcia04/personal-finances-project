@@ -25,6 +25,7 @@
   --shadow-glow-emerald: 0 0 20px rgba(16, 185, 129, 0.12);
   --shadow-glow-rose: 0 0 20px rgba(244, 63, 94, 0.12);
   --shadow-glow-amber: 0 0 20px rgba(251, 191, 36, 0.12);
+  --shadow-glow-violet: 0 0 20px rgba(139, 92, 246, 0.14);
   --shadow-glass: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
 }
 
@@ -82,6 +83,43 @@ body {
   border-color: rgba(251, 191, 36, 0.3);
   box-shadow: var(--shadow-glow-amber), var(--shadow-glass);
   transform: translateY(-2px);
+}
+.glow-card-violet:hover {
+  border-color: rgba(139, 92, 246, 0.45);
+  box-shadow: var(--shadow-glow-violet), var(--shadow-glass);
+  transform: translateY(-2px);
+}
+
+/* Cuenta puente: no es plata real, es un pagaré entre workspaces.
+   Trama diagonal tipo papel de seguridad + perforación de comprobante desprendible,
+   para que nunca se lea como una cuenta de banco. */
+.mirror-ledger {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(139, 92, 246, 0.055) 0px,
+    rgba(139, 92, 246, 0.055) 1px,
+    transparent 1px,
+    transparent 9px
+  );
+  border-color: rgba(139, 92, 246, 0.22);
+}
+.mirror-perforation {
+  border-top: 1px dashed rgba(139, 92, 246, 0.3);
+}
+
+/* animate-fade-in ya se usaba en las vistas pero no existía en ninguna parte */
+.animate-fade-in {
+  animation: fadeIn 0.2s ease forwards;
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* Custom transitions and animations */

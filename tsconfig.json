@@ -28,5 +28,8 @@
     "types": ["vite/client"]
   },
   "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.tsx", "src/**/*.vue"],
+  // Los *.test.ts corren con `node --test` (usan node:test); fuera del typecheck del
+  // bundle para no meter los tipos globales de Node en una app de navegador.
+  "exclude": ["src/**/*.test.ts"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

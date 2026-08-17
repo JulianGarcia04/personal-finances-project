@@ -184,13 +184,13 @@
           </div>
           <div class="flex items-end justify-between">
             <span class="text-[10px] text-text-muted uppercase tracking-widest">Usado</span>
-            <span :class="['font-display font-bold text-lg', budgetSummary.percent >= 100 ? 'text-accent-rose' : budgetSummary.percent >= 70 ? 'text-accent-amber' : 'text-accent-emerald']">
+            <span :class="['font-display font-bold text-lg', budgetSummary.percent > 100 ? 'text-accent-rose' : budgetSummary.percent >= 70 ? 'text-accent-amber' : 'text-accent-emerald']">
               {{ budgetSummary.percent }}%
             </span>
           </div>
           <div class="w-full h-2 rounded-full bg-white/10 overflow-hidden">
             <div
-              :class="['h-full rounded-full transition-all', budgetSummary.percent >= 100 ? 'bg-accent-rose' : budgetSummary.percent >= 70 ? 'bg-accent-amber' : 'bg-accent-emerald']"
+              :class="['h-full rounded-full transition-all', budgetSummary.percent > 100 ? 'bg-accent-rose' : budgetSummary.percent >= 70 ? 'bg-accent-amber' : 'bg-accent-emerald']"
               :style="{ width: Math.min(budgetSummary.percent, 100) + '%' }"
             ></div>
           </div>
@@ -204,11 +204,11 @@
                   <span class="w-2 h-2 rounded-full" :style="{ backgroundColor: row.color }"></span>
                   {{ row.name }}
                 </span>
-                <span :class="row.percent >= 100 ? 'text-accent-rose font-semibold' : 'text-text-muted'">{{ row.percent }}%</span>
+                <span :class="row.percent > 100 ? 'text-accent-rose font-semibold' : row.percent === 100 ? 'text-accent-amber font-semibold' : 'text-text-muted'">{{ row.percent }}%</span>
               </div>
               <div class="w-full h-1 rounded-full bg-white/10 overflow-hidden">
                 <div
-                  :class="['h-full rounded-full', row.percent >= 100 ? 'bg-accent-rose' : row.percent >= 70 ? 'bg-accent-amber' : 'bg-accent-emerald']"
+                  :class="['h-full rounded-full', row.percent > 100 ? 'bg-accent-rose' : row.percent >= 70 ? 'bg-accent-amber' : 'bg-accent-emerald']"
                   :style="{ width: Math.min(row.percent, 100) + '%' }"
                 ></div>
               </div>
