@@ -221,15 +221,15 @@
       </div>
 
       <!-- Input Bar -->
-      <div class="glass-panel rounded-2xl p-3 border border-white/5 flex items-center gap-3 shrink-0">
-        <input 
+      <div class="glass-panel rounded-2xl p-3 border border-white/5 flex items-end gap-3 shrink-0">
+        <textarea
           v-model="inputMessage"
-          type="text"
           :disabled="loading"
-          class="flex-1 px-4 py-3 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary focus:border-accent-amber/40 focus:outline-hidden transition-all"
+          rows="1"
+          class="flex-1 px-4 py-3 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary focus:border-accent-amber/40 focus:outline-hidden transition-all resize-none max-h-40"
           placeholder="Pregúntame sobre tus gastos, metas o pídeme crear una cuenta..."
-          @keyup.enter="sendMessage"
-        />
+          @keydown.enter.exact.prevent="sendMessage"
+        ></textarea>
         <button 
           @click="sendMessage"
           :disabled="loading || !inputMessage.trim()"
