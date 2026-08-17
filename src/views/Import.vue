@@ -148,8 +148,8 @@
         </div>
       </div>
 
-      <!-- Table of items parsed -->
-      <div class="glass-panel rounded-3xl overflow-hidden shadow-xl border border-white/5">
+      <!-- Table of items parsed (desktop) -->
+      <div class="glass-panel rounded-3xl overflow-hidden shadow-xl border border-white/5 hidden md:block">
         <div class="overflow-x-auto">
           <table class="w-full text-left border-collapse">
             <thead>
@@ -225,6 +225,53 @@
               </tr>
             </tbody>
           </table>
+        </div>
+      </div>
+
+      <!-- Parsed items cards (mobile) -->
+      <div class="md:hidden space-y-3">
+        <div
+          v-for="(tx, index) in parsedTransactions"
+          :key="index"
+          class="glass-panel rounded-2xl p-4 border border-white/5 space-y-3"
+        >
+          <div class="flex items-center justify-between">
+            <label class="flex items-center space-x-2 text-xs font-semibold text-text-secondary">
+              <input
+                type="checkbox"
+                v-model="tx.checked"
+                class="rounded bg-slate-800 border-border text-accent-emerald focus:ring-accent-emerald/20"
+              />
+              <span>Incluir</span>
+            </label>
+            <input
+              type="number"
+              step="any"
+              v-model.number="tx.amount"
+              class="w-32 px-2 py-1.5 rounded-lg bg-slate-900/50 border border-border/70 text-sm text-right text-text-primary font-display font-semibold focus:outline-none focus:border-accent-emerald"
+            />
+          </div>
+          <input
+            type="text"
+            v-model="tx.description"
+            placeholder="Descripción"
+            class="w-full px-3 py-2 rounded-lg bg-slate-900/50 border border-border/70 text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+          />
+          <div class="grid grid-cols-2 gap-2">
+            <input
+              type="date"
+              v-model="tx.date"
+              class="w-full px-2 py-2 rounded-lg bg-slate-900/50 border border-border/70 text-xs text-text-primary focus:outline-none focus:border-accent-emerald"
+            />
+            <select
+              v-model="tx.categorySuggestion"
+              class="w-full px-2 py-2 rounded-lg bg-slate-900/50 border border-border/70 text-xs text-text-primary focus:outline-none focus:border-accent-emerald"
+            >
+              <option v-for="cat in transactionsStore.categories" :key="cat.id" :value="cat.name">
+                {{ cat.name }}
+              </option>
+            </select>
+          </div>
         </div>
       </div>
     </div>

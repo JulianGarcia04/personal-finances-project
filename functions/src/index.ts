@@ -16,9 +16,22 @@ admin.initializeApp();
 const db = admin.firestore();
 
 const GEMINI_MODEL = "gemini-2.5-flash";
+const EMBEDDING_MODEL = "gemini-embedding-2";
+const LEGACY_EMBEDDING_DIM = 768; // text-embedding-004, apagado en enero 2026
 
 function getDefaultGeminiApiKey(): string | undefined {
   return process.env.GOOGLE_GENAI_API_KEY || process.env.GEMINI_API_KEY;
+}
+
+async function embedText(apiKey: string, text: string): Promise<number[]> {
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: EMBEDDING_MODEL });
+  const result = await model.embedContent(text);
+  const values = result.embedding?.values;
+  if (!values?.length) {
+    throw new Error("La respuesta de embeddings no contiene valores válidos.");
+  }
+  return values;
 }
 
 // Llave de encriptación de 32 bytes derivada de la variable de entorno
@@ -227,6 +240,7 @@ export const parseStatement = onRequest({cors: true}, async (req, res) => {
 
 // Helper: Similitud Coseno para búsqueda semántica vectorial
 function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length) return 0;
   let dotProduct = 0;
   let mA = 0;
   let mB = 0;
@@ -278,18 +292,9 @@ export const onTransactionCreated = onDocumentCreated("transactions/{transaction
       return;
     }
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
-    const result = await embeddingModel.embedContent(textToEmbed);
-
-    if (result && result.embedding && result.embedding.values) {
-      await snapshot.ref.update({
-        embedding: result.embedding.values
-      });
-      console.log(`Embedding generado y guardado exitosamente para la transacción ${event.params.transactionId}.`);
-    } else {
-      console.error("La respuesta de embeddings no contiene valores válidos.");
-    }
+    const values = await embedText(apiKey, textToEmbed);
+    await snapshot.ref.update({ embedding: values });
+    console.log(`Embedding generado y guardado exitosamente para la transacción ${event.params.transactionId}.`);
   } catch (err) {
     console.error("Error al generar o guardar el embedding:", err);
   }
@@ -652,81 +657,163 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
         outputSchema: z.any(),
       },
       async ({ query: queryText, limit }) => {
-        if (!activeApiKey) throw new Error("API Key no disponible para embeddings.");
-        const genAI = new GoogleGenerativeAI(activeApiKey);
-        const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
-        const result = await embeddingModel.embedContent(queryText);
-        const queryVector = result.embedding.values;
+        if (!activeApiKey) return { matches: [], error: "API Key no disponible para embeddings." };
+        try {
+          const queryVector = await embedText(activeApiKey, queryText);
 
-        const snapshot = await db.collection('transactions').where('userId', '==', userId).get();
-        const matches: any[] = [];
-        snapshot.forEach(docSnap => {
-          const data = docSnap.data();
-          if (data.embedding && Array.isArray(data.embedding)) {
-            const similarity = cosineSimilarity(queryVector, data.embedding);
-            matches.push({
-              id: docSnap.id,
-              description: data.description,
-              amount: data.amount,
-              currency: data.currency,
-              type: data.type,
-              date: data.date ? data.date.toDate().toISOString() : null,
-              similarity
-            });
-          }
-        });
+          const snapshot = await db.collection('transactions').where('userId', '==', userId).get();
+          const matches: any[] = [];
+          snapshot.forEach(docSnap => {
+            const data = docSnap.data();
+            if (data.embedding && Array.isArray(data.embedding) && data.embedding.length === queryVector.length) {
+              const similarity = cosineSimilarity(queryVector, data.embedding);
+              matches.push({
+                id: docSnap.id,
+                description: data.description,
+                amount: data.amount,
+                currency: data.currency,
+                type: data.type,
+                date: data.date ? data.date.toDate().toISOString() : null,
+                similarity
+              });
+            }
+          });
 
-        // Ordenar por relevancia semántica
-        matches.sort((a, b) => b.similarity - a.similarity);
-        return matches.slice(0, limit || 5);
+          matches.sort((a, b) => b.similarity - a.similarity);
+          return matches.slice(0, limit || 5);
+        } catch (err: any) {
+          console.error("Error en búsqueda semántica:", err);
+          return { matches: [], error: err.message };
+        }
       }
     );
 
     const indexTransactionsTool = ai.defineTool(
       {
         name: 'indexTransactions',
-        description: 'Genera embeddings vectoriales para las transacciones antiguas del usuario que aún no las tienen. Llama a esto si el usuario pregunta por transacciones viejas y la búsqueda semántica no devuelve resultados.',
+        description: 'Genera o actualiza embeddings vectoriales de transacciones. Llama a esto si la búsqueda semántica no devuelve resultados o si hay embeddings antiguos (text-embedding-004).',
         inputSchema: z.object({}),
         outputSchema: z.any(),
       },
       async () => {
-        if (!activeApiKey) throw new Error("API Key no disponible.");
+        if (!activeApiKey) return { indexedCount: 0, error: "API Key no disponible." };
         const snapshot = await db.collection('transactions').where('userId', '==', userId).get();
         let count = 0;
-        const genAI = new GoogleGenerativeAI(activeApiKey);
-        const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
 
         for (const docSnap of snapshot.docs) {
           const data = docSnap.data();
-          if (!data.embedding) {
-            const description = data.description || "";
-            const type = data.type || "";
-            const amount = data.amount || 0;
-            const currency = data.currency || "USD";
-            
-            let dateStr = "";
-            if (data.date) {
-              try {
-                dateStr = data.date.toDate ? data.date.toDate().toISOString().split('T')[0] : new Date(data.date).toISOString().split('T')[0];
-              } catch (e) {
-                dateStr = String(data.date);
-              }
-            }
+          const needsReindex = !data.embedding || data.embedding.length === LEGACY_EMBEDDING_DIM;
+          if (!needsReindex) continue;
 
-            const textToEmbed = `Descripción: ${description}. Tipo: ${type}. Monto: ${amount} ${currency}. Fecha: ${dateStr}.`;
+          const description = data.description || "";
+          const type = data.type || "";
+          const amount = data.amount || 0;
+          const currency = data.currency || "USD";
+
+          let dateStr = "";
+          if (data.date) {
             try {
-              const result = await embeddingModel.embedContent(textToEmbed);
-              if (result && result.embedding && result.embedding.values) {
-                await docSnap.ref.update({ embedding: result.embedding.values });
-                count++;
-                if (count >= 20) break; // Límite por ejecución
-              }
-            } catch (err) {
-              console.error("Error indexando transacción:", docSnap.id, err);
+              dateStr = data.date.toDate ? data.date.toDate().toISOString().split('T')[0] : new Date(data.date).toISOString().split('T')[0];
+            } catch (e) {
+              dateStr = String(data.date);
             }
+          }
+
+          const textToEmbed = `Descripción: ${description}. Tipo: ${type}. Monto: ${amount} ${currency}. Fecha: ${dateStr}.`;
+          try {
+            const values = await embedText(activeApiKey, textToEmbed);
+            await docSnap.ref.update({ embedding: values });
+            count++;
+            if (count >= 20) break;
+          } catch (err) {
+            console.error("Error indexando transacción:", docSnap.id, err);
           }
         }
         return { indexedCount: count };
+      }
+    );
+
+    // Helper: resolver el workspace activo del usuario (los presupuestos viven en el doc del workspace)
+    const getActiveWorkspaceId = async (): Promise<string | null> => {
+      const userDoc = await db.collection('users').doc(userId).get();
+      return userDoc.data()?.activeWorkspaceId || null;
+    };
+
+    const getExpensesByCategoryTool = ai.defineTool(
+      {
+        name: 'getExpensesByCategory',
+        description: 'Analiza los gastos del usuario de los últimos N meses, agrupados por categoría: total gastado, cantidad de movimientos y promedio mensual. Úsalo SIEMPRE antes de proponer presupuestos mensuales por categoría para basarte en datos reales.',
+        inputSchema: z.object({
+          months: z.number().optional().describe('Cantidad de meses hacia atrás a analizar (por defecto 3, máximo 12)'),
+        }),
+        outputSchema: z.any(),
+      },
+      async ({ months }) => {
+        const monthsBack = Math.min(Math.max(months || 3, 1), 12);
+        const startDate = new Date();
+        startDate.setMonth(startDate.getMonth() - monthsBack);
+
+        const snapshot = await db.collection('transactions')
+          .where('userId', '==', userId)
+          .where('type', '==', 'expense')
+          .where('date', '>=', admin.firestore.Timestamp.fromDate(startDate))
+          .orderBy('date', 'desc')
+          .get();
+
+        // Nombres de categorías para que el modelo no trabaje con IDs crudos
+        const catsSnapshot = await db.collection('categories').get();
+        const catNames: Record<string, string> = {};
+        catsSnapshot.forEach(docSnap => { catNames[docSnap.id] = docSnap.data().name || 'Sin nombre'; });
+
+        const totals: Record<string, { total: number; count: number }> = {};
+        snapshot.forEach(docSnap => {
+          const data = docSnap.data();
+          const key = data.categoryId || 'sin-categoria';
+          if (!totals[key]) totals[key] = { total: 0, count: 0 };
+          totals[key].total += Math.abs(Number(data.amount) || 0);
+          totals[key].count += 1;
+        });
+
+        return Object.entries(totals).map(([categoryId, agg]) => ({
+          categoryId,
+          categoryName: catNames[categoryId] || (categoryId === 'sin-categoria' ? 'Sin categoría' : 'Desconocida'),
+          totalSpent: Math.round(agg.total),
+          transactionCount: agg.count,
+          monthlyAverage: Math.round(agg.total / monthsBack),
+          periodMonths: monthsBack
+        })).sort((a, b) => b.totalSpent - a.totalSpent);
+      }
+    );
+
+    const saveCategoryBudgetsTool = ai.defineTool(
+      {
+        name: 'saveCategoryBudgets',
+        description: 'Guarda el presupuesto mensual recurrente por categoría del usuario (límite de gasto mensual por categoría). Los montos van en la moneda principal del usuario. Confirma con el usuario los montos ANTES de llamar a esta herramienta.',
+        inputSchema: z.object({
+          budgets: z.array(z.object({
+            categoryId: z.string().describe('El ID de la categoría (obtenido de listCategories o getExpensesByCategory)'),
+            monthlyLimit: z.number().describe('Límite mensual de gasto para esta categoría (0 para eliminar el presupuesto)'),
+          })).describe('Lista de presupuestos por categoría a guardar'),
+        }),
+        outputSchema: z.any(),
+      },
+      async ({ budgets }) => {
+        const workspaceId = await getActiveWorkspaceId();
+        if (!workspaceId) throw new Error("No se encontró un workspace activo para el usuario.");
+
+        const wsRef = db.collection('workspaces').doc(workspaceId);
+        const wsDoc = await wsRef.get();
+        if (!wsDoc.exists) throw new Error("El workspace no existe.");
+
+        const current = wsDoc.data()?.categoryBudgets || {};
+        const updated = { ...current };
+        budgets.forEach(b => {
+          if (b.monthlyLimit > 0) updated[b.categoryId] = Number(b.monthlyLimit);
+          else delete updated[b.categoryId];
+        });
+
+        await wsRef.update({ categoryBudgets: updated });
+        return { success: true, savedBudgets: budgets.length, message: "Presupuestos guardados en el workspace activo." };
       }
     );
 
@@ -758,6 +845,12 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       - Listar, crear y eliminar transacciones de ingresos, egresos y transferencias entre cuentas.
       - Listar, crear y aportar a objetivos de ahorro (goals).
       - Buscar transacciones viejas semánticamente a través de embeddings (semanticSearchTransactions).
+      - Analizar gastos por categoría de los últimos meses (getExpensesByCategory) y guardar presupuestos mensuales por categoría (saveCategoryBudgets).
+
+      FLUJO PARA PRESUPUESTOS POR CATEGORÍA:
+      - Cuando el usuario pida crear o ajustar presupuestos, PRIMERO llama a getExpensesByCategory (3-6 meses) para identificar sus categorías más recurrentes y cuánto gasta en promedio en cada una.
+      - Propón límites mensuales realistas basados en los promedios reales (redondeados, con un pequeño margen o recorte según el objetivo del usuario).
+      - Presenta la propuesta al usuario y pide confirmación. SOLO después de que el usuario confirme, llama a saveCategoryBudgets.
       
       Lineamientos clave:
       1. **Presupuesto:** Promueve buenas prácticas como la regla 50/30/20 (50% Necesidades, 30% Deseos, 20% Ahorro) y aconseja cómo repartir el dinero a sus metas de ahorro activas con base a sus ingresos mensuales declarados.
@@ -790,7 +883,9 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
         createGoalTool,
         updateGoalAmountTool,
         semanticSearchTransactionsTool,
-        indexTransactionsTool
+        indexTransactionsTool,
+        getExpensesByCategoryTool,
+        saveCategoryBudgetsTool
       ]
     });
 

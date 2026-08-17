@@ -272,6 +272,45 @@
               </select>
             </div>
           </div>
+
+          <!-- Exchange Rates (para consolidar KPIs multimoneda) -->
+          <div class="pt-6 border-t border-border/50 space-y-4">
+            <div>
+              <h4 class="font-display font-medium text-sm text-text-primary">Tasas de Cambio</h4>
+              <p class="text-text-muted text-xs mt-1">
+                Define cuántos <span class="font-semibold text-text-secondary">{{ currency }}</span> vale 1 unidad de cada otra moneda de tus cuentas.
+                Se usan para consolidar tu patrimonio y KPIs en tu moneda principal.
+              </p>
+            </div>
+
+            <div v-if="foreignCurrencies.length === 0" class="text-xs text-text-muted py-2">
+              Todas tus cuentas usan {{ currency }}. No se necesitan tasas de cambio.
+            </div>
+
+            <div v-else class="space-y-3">
+              <div
+                v-for="cur in foreignCurrencies"
+                :key="cur"
+                class="flex items-center gap-3"
+              >
+                <span class="text-sm font-semibold text-text-primary w-16 shrink-0">1 {{ cur }}</span>
+                <span class="text-text-muted text-sm shrink-0">=</span>
+                <div class="relative flex-1">
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    :value="rateInputs[cur] ?? ''"
+                    :placeholder="`Ej. tasa a ${currency}`"
+                    class="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary placeholder:text-text-muted focus:border-accent-emerald/40 focus:outline-hidden"
+                    @change="(e) => saveExchangeRate(cur, (e.target as HTMLInputElement).value)"
+                  />
+                </div>
+                <span class="text-sm font-semibold text-text-secondary w-16 shrink-0">{{ currency }}</span>
+              </div>
+              <p v-if="ratesMsg" class="text-xs text-accent-emerald font-medium">{{ ratesMsg }}</p>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -424,11 +463,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
+import { useAccountsStore } from '@/stores/accountsStore'
+import { useGoalsStore } from '@/stores/goalsStore'
 import { ApiKeySchema, CategorySchema } from '@/schemas'
 import { 
   Utensils, Car, Film, Lightbulb, Heart, GraduationCap, TrendingUp, HelpCircle,
@@ -441,6 +482,8 @@ const authStore = useAuthStore()
 const settingsStore = useSettingsStore()
 const workspacesStore = useWorkspacesStore()
 const transactionsStore = useTransactionsStore()
+const accountsStore = useAccountsStore()
+const goalsStore = useGoalsStore()
 
 const aiEnabled = ref(true)
 const useCustomKey = ref(false)
@@ -561,6 +604,43 @@ const deleteCategory = async (id: string) => {
   }
 }
 
+// Exchange rates
+const rateInputs = reactive<Record<string, number | null>>({})
+const ratesMsg = ref('')
+
+const foreignCurrencies = computed(() => {
+  const set = new Set<string>()
+  accountsStore.accounts.forEach(a => {
+    if (a.currency && a.currency !== currency.value) set.add(a.currency)
+  })
+  return Array.from(set).sort()
+})
+
+const saveExchangeRate = async (cur: string, rawValue: string) => {
+  const value = rawValue === '' ? null : Math.max(0, Number(rawValue))
+  rateInputs[cur] = value
+
+  const newRates = { ...goalsStore.exchangeRates }
+  if (value === null || value === 0) delete newRates[cur]
+  else newRates[cur] = value
+
+  try {
+    await goalsStore.saveBudgetSettings({
+      budgetIncome: goalsStore.budgetIncome,
+      budgetNeedsPercent: goalsStore.budgetNeedsPercent,
+      budgetWantsPercent: goalsStore.budgetWantsPercent,
+      budgetSavingsPercent: goalsStore.budgetSavingsPercent,
+      budgetAllocations: goalsStore.budgetAllocations,
+      categoryBudgets: goalsStore.categoryBudgets,
+      exchangeRates: newRates
+    })
+    ratesMsg.value = 'Tasas de cambio actualizadas.'
+    setTimeout(() => { ratesMsg.value = '' }, 2500)
+  } catch (err) {
+    console.error('Error al guardar tasa de cambio:', err)
+  }
+}
+
 onMounted(async () => {
   await settingsStore.loadSettings()
   aiEnabled.value = settingsStore.aiEnabled
@@ -569,6 +649,9 @@ onMounted(async () => {
   currency.value = settingsStore.currency
   await transactionsStore.fetchCategories()
   await workspacesStore.fetchMyWorkspaces()
+  await accountsStore.fetchAccounts()
+  await goalsStore.loadBudgetSettings()
+  Object.assign(rateInputs, goalsStore.exchangeRates)
 })
 
 // Workspace Management

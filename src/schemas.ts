@@ -32,6 +32,7 @@ export const TransactionSchema = z.object({
   type: z.enum(['income', 'expense', 'transfer']),
   toAccountId: z.string().nullable().optional(),
   receiptUrl: z.string().nullable().optional(),
+  notes: z.string().max(500, 'Las notas no pueden exceder 500 caracteres').nullable().optional(),
   userId: z.string().optional()
 }).refine(data => {
   if (data.type === 'transfer') {

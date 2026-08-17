@@ -13,7 +13,9 @@
         "firebase-debug.log",
         "firestore-debug.log"
       ],
-      "predeploy": []
+      "predeploy": [
+        "npm run build"
+      ]
     }
   ],
   "storage": {

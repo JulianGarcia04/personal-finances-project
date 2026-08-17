@@ -230,6 +230,105 @@
       </div>
     </div>
 
+    <!-- Category Budgets (presupuesto mensual recurrente) -->
+    <div class="space-y-6">
+      <h3 class="font-display font-bold text-xl text-text-primary flex items-center space-x-2">
+        <WalletIcon class="w-5 h-5 text-accent-emerald" />
+        <span>Presupuesto Mensual por Categoría</span>
+      </h3>
+
+      <div class="glass-panel rounded-2xl p-4 sm:p-6 border border-white/5 space-y-4">
+        <p class="text-xs text-text-muted">
+          Define un límite mensual por categoría. Las barras muestran el gasto real del mes en curso.
+          Tip: también puedes pedirle al <span class="text-accent-emerald font-semibold">Asesor IA</span> que analice tus gastos y te proponga presupuestos.
+        </p>
+
+        <div v-if="expenseCategories.length === 0" class="text-center py-8 text-text-muted text-sm">
+          No hay categorías de gasto creadas.
+        </div>
+
+        <div
+          v-for="cat in expenseCategories"
+          :key="cat.id"
+          class="flex flex-col sm:flex-row sm:items-center gap-3 py-3 border-b border-white/5 last:border-0"
+        >
+          <!-- Category identity -->
+          <div class="flex items-center space-x-2.5 sm:w-48 shrink-0">
+            <span
+              class="p-2 rounded-lg"
+              :style="{ backgroundColor: cat.color + '15', color: cat.color }"
+            >
+              <component :is="getCategoryIcon(cat.icon)" class="w-4 h-4" />
+            </span>
+            <span class="text-sm font-semibold text-text-primary truncate">{{ cat.name }}</span>
+          </div>
+
+          <!-- Limit input -->
+          <div class="relative sm:w-40 shrink-0">
+            <span class="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted text-xs font-semibold">$</span>
+            <input
+              :value="categoryBudgetInputs[cat.id] ?? ''"
+              type="number"
+              min="0"
+              placeholder="Sin límite"
+              class="w-full pl-7 pr-3 py-2 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary focus:border-accent-emerald/40 focus:outline-hidden transition-all"
+              @change="(e) => saveCategoryBudget(cat.id, (e.target as HTMLInputElement).value)"
+            />
+          </div>
+
+          <!-- Progress vs real spending -->
+          <div class="flex-1 space-y-1">
+            <div class="flex justify-between text-[11px] font-semibold">
+              <span class="text-text-secondary">
+                Gastado: {{ formatCurrency(spendingByCategory[cat.id] || 0, userCurrency) }}
+              </span>
+              <span v-if="categoryBudgetInputs[cat.id]" :class="budgetPercent(cat.id) >= 100 ? 'text-accent-rose' : budgetPercent(cat.id) >= 70 ? 'text-accent-amber' : 'text-accent-emerald'">
+                {{ budgetPercent(cat.id) }}%{{ budgetPercent(cat.id) >= 100 ? ' · ¡Excedido!' : '' }}
+              </span>
+            </div>
+            <div class="w-full h-2 rounded-full bg-slate-950/60 overflow-hidden border border-white/5">
+              <div
+                :class="['h-full rounded-full transition-all duration-500', budgetPercent(cat.id) >= 100 ? 'bg-accent-rose' : budgetPercent(cat.id) >= 70 ? 'bg-accent-amber' : 'bg-accent-emerald']"
+                :style="{ width: Math.min(budgetPercent(cat.id), 100) + '%' }"
+              ></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 50/30/20 vs realidad del mes -->
+      <div class="glass-panel rounded-2xl p-4 sm:p-6 border border-white/5 space-y-4">
+        <h4 class="font-display font-semibold text-sm text-text-primary">Tu plan 50/30/20 vs este mes (real)</h4>
+        <!-- ponytail: no sabemos qué categorías son "necesidad" vs "deseo"; comparamos gasto total y ahorro reales contra el plan -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+          <div class="space-y-1.5">
+            <div class="flex justify-between font-semibold">
+              <span class="text-text-secondary">Gasto (plan necesidades+deseos)</span>
+              <span class="text-text-primary">{{ formatCurrency(monthlyNeedsAmount + monthlyWantsAmount, userCurrency) }}</span>
+            </div>
+            <div class="flex justify-between font-semibold">
+              <span class="text-text-secondary">Gasto real del mes</span>
+              <span :class="realMonthExpense > (monthlyNeedsAmount + monthlyWantsAmount) ? 'text-accent-rose' : 'text-accent-emerald'">
+                {{ formatCurrency(realMonthExpense, userCurrency) }}
+              </span>
+            </div>
+          </div>
+          <div class="space-y-1.5">
+            <div class="flex justify-between font-semibold">
+              <span class="text-text-secondary">Ahorro (plan)</span>
+              <span class="text-text-primary">{{ formatCurrency(monthlySavingsAmount, userCurrency) }}</span>
+            </div>
+            <div class="flex justify-between font-semibold">
+              <span class="text-text-secondary">Ahorro real del mes</span>
+              <span :class="realMonthSavings >= monthlySavingsAmount ? 'text-accent-emerald' : 'text-accent-amber'">
+                {{ formatCurrency(realMonthSavings, userCurrency) }}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Modal: Create Savings Goal -->
     <div 
       v-if="showCreateModal"
@@ -404,17 +503,22 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { useGoalsStore } from '@/stores/goalsStore'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
+import { useSettingsStore } from '@/stores/settingsStore'
 import { Goal } from '@/types'
-import { 
-  Target as TargetIcon, 
-  PiggyBank as PiggyBankIcon, 
-  Trash2 as TrashIcon, 
-  Plus as PlusIcon, 
-  X as XIcon 
+import {
+  Target as TargetIcon,
+  PiggyBank as PiggyBankIcon,
+  Trash2 as TrashIcon,
+  Plus as PlusIcon,
+  X as XIcon,
+  Wallet as WalletIcon,
+  Utensils, Car, Film, Lightbulb, Heart, GraduationCap, TrendingUp, HelpCircle,
+  ShoppingBag, Home, Gift, Coffee, Plane, DollarSign, PiggyBank, Smartphone,
+  Activity, Scissors, BookOpen, Wrench, Shield
 } from 'lucide-vue-next'
 import { Chart, registerables } from 'chart.js'
 
@@ -423,6 +527,7 @@ Chart.register(...registerables)
 const goalsStore = useGoalsStore()
 const accountsStore = useAccountsStore()
 const transactionsStore = useTransactionsStore()
+const settingsStore = useSettingsStore()
 
 // State
 const showCreateModal = ref(false)
@@ -446,17 +551,41 @@ const needsPercent = ref(50)
 const wantsPercent = ref(30)
 const savingsPercent = ref(20)
 
+// Category budgets: copia local editable de goalsStore.categoryBudgets
+const categoryBudgetInputs = reactive<Record<string, number | null>>({})
+
 // Chart reference
 const budgetChartRef = ref<HTMLCanvasElement | null>(null)
 let budgetChart: Chart | null = null
 
 // Computed
-const userCurrency = computed(() => {
-  if (accountsStore.accounts.length > 0) {
-    return accountsStore.accounts[0].currency
-  }
-  return 'USD'
+const userCurrency = computed(() => settingsStore.currency || 'COP')
+
+// Categorías de gasto para presupuestos
+const expenseCategories = computed(() =>
+  transactionsStore.categories.filter(c => c.type === 'expense' || c.type === 'both')
+)
+
+const spendingByCategory = computed(() =>
+  transactionsStore.spendingByCategoryThisMonth(
+    (amount, currency) => goalsStore.convertToPrimary(amount, currency, userCurrency.value)
+  )
+)
+
+// Gasto/ingreso/ahorro real del mes (monedas convertidas a la principal)
+const realMonthTotals = computed(() => {
+  const now = new Date()
+  let income = 0, expense = 0
+  transactionsStore.transactions.forEach(t => {
+    if (t.date.getMonth() !== now.getMonth() || t.date.getFullYear() !== now.getFullYear()) return
+    const converted = goalsStore.convertToPrimary(Math.abs(t.amount), t.currency, userCurrency.value)
+    if (t.type === 'income') income += converted
+    else if (t.type === 'expense') expense += converted
+  })
+  return { income, expense }
 })
+const realMonthExpense = computed(() => realMonthTotals.value.expense)
+const realMonthSavings = computed(() => Math.max(realMonthTotals.value.income - realMonthTotals.value.expense, 0))
 
 const monthlyNeedsAmount = computed(() => (incomeInput.value * needsPercent.value) / 100)
 const monthlyWantsAmount = computed(() => (incomeInput.value * wantsPercent.value) / 100)
@@ -471,12 +600,14 @@ onMounted(async () => {
   await goalsStore.loadBudgetSettings()
   await accountsStore.fetchAccounts()
   await transactionsStore.fetchCategories()
+  await transactionsStore.fetchTransactions()
 
   // Sincronizar inputs locales con store
   incomeInput.value = goalsStore.budgetIncome
   needsPercent.value = goalsStore.budgetNeedsPercent
   wantsPercent.value = goalsStore.budgetWantsPercent
   savingsPercent.value = goalsStore.budgetSavingsPercent
+  Object.assign(categoryBudgetInputs, goalsStore.categoryBudgets)
 
   renderBudgetChart()
 })
@@ -666,13 +797,17 @@ const handleContribute = async () => {
   }
 
   try {
+    // Categoría para el aporte: 'Ahorro' si existe, si no 'Otros', si no vacío
+    const savingsCat = transactionsStore.categories.find(c => c.name.toLowerCase() === 'ahorro')
+      || transactionsStore.categories.find(c => c.name === 'Otros')
+
     // 1. Agregar transacción como Gasto (Aporte a meta)
     // El store de transacciones actualizará el saldo de la cuenta origen automáticamente
     await transactionsStore.addTransaction({
       accountId: contributeAccountId.value,
       amount: -amount, // Negativo para indicar salida de dinero de la cuenta
       description: `Aporte a meta: ${goal.name}`,
-      categoryId: '', // Sin categoría
+      categoryId: savingsCat?.id || '',
       date: new Date(),
       type: 'expense'
     })
@@ -700,11 +835,52 @@ const saveBudget = async () => {
       budgetNeedsPercent: needsPercent.value,
       budgetWantsPercent: wantsPercent.value,
       budgetSavingsPercent: savingsPercent.value,
-      budgetAllocations: goalsStore.budgetAllocations
+      budgetAllocations: goalsStore.budgetAllocations,
+      categoryBudgets: goalsStore.categoryBudgets,
+      exchangeRates: goalsStore.exchangeRates
     })
   } catch (err) {
     console.error('Error al guardar presupuesto:', err)
   }
+}
+
+// Presupuesto por categoría
+const saveCategoryBudget = async (categoryId: string, rawValue: string) => {
+  const value = rawValue === '' ? null : Math.max(0, Number(rawValue))
+  categoryBudgetInputs[categoryId] = value
+
+  const newBudgets = { ...goalsStore.categoryBudgets }
+  if (value === null || value === 0) delete newBudgets[categoryId]
+  else newBudgets[categoryId] = value
+
+  try {
+    await goalsStore.saveBudgetSettings({
+      budgetIncome: goalsStore.budgetIncome,
+      budgetNeedsPercent: goalsStore.budgetNeedsPercent,
+      budgetWantsPercent: goalsStore.budgetWantsPercent,
+      budgetSavingsPercent: goalsStore.budgetSavingsPercent,
+      budgetAllocations: goalsStore.budgetAllocations,
+      categoryBudgets: newBudgets,
+      exchangeRates: goalsStore.exchangeRates
+    })
+  } catch (err) {
+    console.error('Error al guardar presupuesto de categoría:', err)
+  }
+}
+
+const budgetPercent = (categoryId: string) => {
+  const limit = categoryBudgetInputs[categoryId]
+  if (!limit || limit <= 0) return 0
+  return Math.round(((spendingByCategory.value[categoryId] || 0) / limit) * 100)
+}
+
+const getCategoryIcon = (iconName: string) => {
+  const icons: Record<string, any> = {
+    Utensils, Car, Film, Lightbulb, Heart, GraduationCap, TrendingUp, HelpCircle,
+    ShoppingBag, Home, Gift, Coffee, Plane, DollarSign, PiggyBank, Smartphone,
+    Activity, Scissors, BookOpen, Wrench, Shield
+  }
+  return icons[iconName] || HelpCircle
 }
 </script>
 

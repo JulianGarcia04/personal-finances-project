@@ -16,14 +16,14 @@
     </div>
 
     <!-- Filters Pane -->
-    <div class="glass-panel rounded-2xl p-5 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+    <div class="glass-panel rounded-2xl p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
       <!-- Search Input -->
       <div class="space-y-1">
-        <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Buscar por descripción</label>
-        <input 
-          v-model="filters.search" 
-          type="text" 
-          placeholder="Ej. Supermercado, Nomina..."
+        <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Buscar</label>
+        <input
+          v-model="filters.search"
+          type="text"
+          placeholder="Descripción o notas..."
           class="w-full px-4 py-2 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-emerald"
         />
       </div>
@@ -59,7 +59,7 @@
       <!-- Type Filter -->
       <div class="space-y-1">
         <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Tipo</label>
-        <select 
+        <select
           v-model="filters.type"
           class="w-full px-3 py-2 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
         >
@@ -69,10 +69,30 @@
           <option value="transfer">Transferencia</option>
         </select>
       </div>
+
+      <!-- Date From Filter -->
+      <div class="space-y-1">
+        <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Desde</label>
+        <input
+          v-model="filters.dateFrom"
+          type="date"
+          class="w-full px-3 py-2 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+        />
+      </div>
+
+      <!-- Date To Filter -->
+      <div class="space-y-1">
+        <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Hasta</label>
+        <input
+          v-model="filters.dateTo"
+          type="date"
+          class="w-full px-3 py-2 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+        />
+      </div>
     </div>
 
-    <!-- Transactions List Table -->
-    <div class="glass-panel rounded-3xl overflow-hidden shadow-xl border border-white/5 relative">
+    <!-- Transactions List Table (desktop) -->
+    <div class="glass-panel rounded-3xl overflow-hidden shadow-xl border border-white/5 relative hidden md:block">
       <div class="overflow-x-auto pb-16">
         <table class="w-full text-left border-collapse">
           <thead>
@@ -111,6 +131,7 @@
               <!-- Description -->
               <td class="py-4 px-4 font-medium">
                 <div class="truncate max-w-xs md:max-w-md">{{ tx.description }}</div>
+                <div v-if="tx.notes" class="text-[11px] text-text-muted mt-0.5 max-w-xs md:max-w-md whitespace-pre-wrap break-words">{{ tx.notes }}</div>
                 <div v-if="workspacesStore.activeWorkspaceProfiles.length > 1" class="text-[10px] text-text-muted mt-0.5">
                   Registrado por: {{ getUserName(tx.userId) }}
                 </div>
@@ -203,6 +224,84 @@
           <TrashIcon class="w-4 h-4" />
         </button>
       </div>
+    </div>
+
+    <!-- Transactions Cards (mobile) -->
+    <div class="md:hidden space-y-3 pb-16">
+      <div
+        v-for="tx in displayedTransactions"
+        :key="tx.id"
+        :class="['glass-panel rounded-2xl p-4 border border-white/5 space-y-2', selectedTxIds.includes(tx.id) ? 'ring-1 ring-accent-emerald/50' : '']"
+      >
+        <div class="flex items-start justify-between gap-3">
+          <div class="flex items-start gap-3 min-w-0">
+            <input
+              type="checkbox"
+              v-model="selectedTxIds"
+              :value="tx.id"
+              class="mt-1 rounded border-border bg-slate-900/50 text-accent-emerald focus:ring-accent-emerald cursor-pointer shrink-0"
+            />
+            <div class="min-w-0">
+              <p class="text-sm font-medium text-text-primary break-words">{{ tx.description }}</p>
+              <p v-if="tx.notes" class="text-[11px] text-text-muted mt-0.5 whitespace-pre-wrap break-words">{{ tx.notes }}</p>
+              <p class="text-[10px] text-text-muted mt-1">{{ getAccountName(tx.accountId) }} · {{ formatDate(tx.date) }}</p>
+            </div>
+          </div>
+          <p :class="['font-display font-semibold text-sm shrink-0', tx.amount >= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
+            {{ tx.amount >= 0 ? '+' : '' }}{{ formatCurrency(tx.amount, tx.currency || getAccountCurrency(tx.accountId)) }}
+          </p>
+        </div>
+        <div class="flex items-center justify-between pl-8">
+          <span
+            v-if="getCategory(tx.categoryId)"
+            class="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-semibold"
+            :style="{ backgroundColor: (getCategory(tx.categoryId)?.color || '#94a3b8') + '15', color: getCategory(tx.categoryId)?.color || '#94a3b8' }"
+          >
+            <component :is="getCategoryIcon(getCategory(tx.categoryId)?.icon || 'HelpCircle')" class="w-3.5 h-3.5" />
+            <span>{{ getCategory(tx.categoryId)?.name }}</span>
+          </span>
+          <span v-else class="text-text-muted text-xs">-</span>
+          <div class="flex items-center space-x-1">
+            <a
+              v-if="tx.receiptUrl"
+              :href="tx.receiptUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="p-2 rounded-lg text-text-muted hover:text-accent-emerald hover:bg-white/5 transition-all inline-block"
+              title="Ver Comprobante"
+            >
+              <PaperclipIcon class="w-4 h-4" />
+            </a>
+            <button
+              @click="openEditModal(tx)"
+              class="p-2 rounded-lg text-text-muted hover:text-accent-emerald hover:bg-white/5 transition-all"
+              title="Editar Transacción"
+            >
+              <PencilIcon class="w-4 h-4" />
+            </button>
+            <button
+              @click="handleDelete(tx.id)"
+              class="p-2 rounded-lg text-text-muted hover:text-accent-rose hover:bg-white/5 transition-all"
+              title="Eliminar Transacción"
+            >
+              <TrashIcon class="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+      <p v-if="displayedTransactions.length === 0" class="text-center py-12 text-text-muted text-sm">
+        No hay transacciones registradas que coincidan con los filtros.
+      </p>
+    </div>
+
+    <!-- Load More (client-side pagination) -->
+    <div v-if="filteredCount > visibleCount" class="flex justify-center">
+      <button
+        @click="visibleCount += PAGE_SIZE"
+        class="px-5 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all"
+      >
+        Cargar más ({{ filteredCount - visibleCount }} restantes)
+      </button>
     </div>
 
     <!-- Add Transaction Modal -->
@@ -325,19 +424,30 @@
 
           <div class="space-y-1">
             <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Descripción / Comercio</label>
-            <input 
-              v-model="newTx.description" 
-              type="text" 
+            <input
+              v-model="newTx.description"
+              type="text"
               required
               placeholder="Ej. Compra de mercado, Pago de salario"
               class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
             />
           </div>
 
+          <div class="space-y-1">
+            <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Notas / Observaciones (Opcional)</label>
+            <textarea
+              v-model="newTx.notes"
+              rows="2"
+              maxlength="500"
+              placeholder="Ej. Factura #123, pagado con puntos, reembolsable..."
+              class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-emerald resize-none"
+            ></textarea>
+          </div>
+
           <!-- User Assignment -->
           <div v-if="workspacesStore.activeWorkspaceProfiles.length > 1" class="space-y-1">
             <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Registrado por</label>
-            <select 
+            <select
               v-model="newTx.userId"
               class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
             >
@@ -523,19 +633,30 @@
 
           <div class="space-y-1">
             <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Descripción / Comercio</label>
-            <input 
-              v-model="editTx.description" 
-              type="text" 
+            <input
+              v-model="editTx.description"
+              type="text"
               required
               placeholder="Ej. Compra de mercado, Pago de salario"
               class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
             />
           </div>
 
+          <div class="space-y-1">
+            <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Notas / Observaciones (Opcional)</label>
+            <textarea
+              v-model="editTx.notes"
+              rows="2"
+              maxlength="500"
+              placeholder="Ej. Factura #123, pagado con puntos, reembolsable..."
+              class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-emerald resize-none"
+            ></textarea>
+          </div>
+
           <!-- User Assignment -->
           <div v-if="workspacesStore.activeWorkspaceProfiles.length > 1" class="space-y-1">
             <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Registrado por</label>
-            <select 
+            <select
               v-model="editTx.userId"
               class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
             >
@@ -604,7 +725,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
@@ -671,8 +792,15 @@ const filters = reactive({
   search: '',
   accountId: '',
   categoryId: '',
-  type: ''
+  type: '',
+  dateFrom: '',
+  dateTo: ''
 })
+
+// ponytail: paginación client-side, los datos ya están todos cargados
+const PAGE_SIZE = 50
+const visibleCount = ref(PAGE_SIZE)
+watch(filters, () => { visibleCount.value = PAGE_SIZE })
 
 // Receipt refs
 const receiptInput = ref<HTMLInputElement | null>(null)
@@ -689,6 +817,7 @@ const newTx = ref<{
   amount: number | null;
   date: string;
   description: string;
+  notes: string;
   userId?: string;
 }>({
   type: 'expense',
@@ -698,6 +827,7 @@ const newTx = ref<{
   amount: null,
   date: new Date().toISOString().substring(0, 10),
   description: '',
+  notes: '',
   userId: ''
 })
 
@@ -712,6 +842,7 @@ const editTx = ref<{
   amount: number | null;
   date: string;
   description: string;
+  notes: string;
   userId?: string;
 }>({
   type: 'expense',
@@ -721,6 +852,7 @@ const editTx = ref<{
   amount: null,
   date: new Date().toISOString().substring(0, 10),
   description: '',
+  notes: '',
   userId: ''
 })
 
@@ -748,8 +880,10 @@ onMounted(async () => {
   await workspacesStore.fetchActiveWorkspaceProfiles()
 })
 
+const filteredCount = computed(() => transactionsStore.filteredTransactions(filters).length)
+
 const displayedTransactions = computed(() => {
-  return transactionsStore.filteredTransactions(filters)
+  return transactionsStore.filteredTransactions(filters).slice(0, visibleCount.value)
 })
 
 // Filtrar cuentas destino (transferencias) excluyendo la origen
@@ -779,6 +913,7 @@ const closeAddModal = () => {
     amount: null,
     date: new Date().toISOString().substring(0, 10),
     description: '',
+    notes: '',
     userId: ''
   }
   clearReceipt()
@@ -803,6 +938,7 @@ const saveTransaction = async () => {
     type: newTx.value.type,
     toAccountId: newTx.value.type === 'transfer' ? newTx.value.toAccountId : null,
     receiptUrl: uploadedReceiptUrl.value || null,
+    notes: newTx.value.notes || null,
     userId: newTx.value.userId || undefined
   })
 
@@ -822,6 +958,7 @@ const saveTransaction = async () => {
       type: newTx.value.type,
       toAccountId: newTx.value.type === 'transfer' ? newTx.value.toAccountId : null,
       receiptUrl: uploadedReceiptUrl.value || null,
+      notes: newTx.value.notes || null,
       userId: newTx.value.userId || undefined
     })
     closeAddModal()
@@ -844,6 +981,7 @@ const openEditModal = (tx: any) => {
       ? tx.date.toISOString().substring(0, 10) 
       : new Date(tx.date).toISOString().substring(0, 10),
     description: tx.description,
+    notes: tx.notes || '',
     userId: tx.userId || ''
   }
   editUploadedReceiptUrl.value = tx.receiptUrl || ''
@@ -863,6 +1001,7 @@ const closeEditModal = () => {
     amount: null,
     date: new Date().toISOString().substring(0, 10),
     description: '',
+    notes: '',
     userId: ''
   }
   clearEditReceipt()
@@ -887,6 +1026,7 @@ const saveEditedTransaction = async () => {
     type: editTx.value.type,
     toAccountId: editTx.value.type === 'transfer' ? editTx.value.toAccountId : null,
     receiptUrl: editUploadedReceiptUrl.value || null,
+    notes: editTx.value.notes || null,
     userId: editTx.value.userId || undefined
   })
 
@@ -906,6 +1046,7 @@ const saveEditedTransaction = async () => {
       type: editTx.value.type,
       toAccountId: editTx.value.type === 'transfer' ? editTx.value.toAccountId : null,
       receiptUrl: editUploadedReceiptUrl.value || null,
+      notes: editTx.value.notes || null,
       userId: editTx.value.userId || undefined
     })
     closeEditModal()

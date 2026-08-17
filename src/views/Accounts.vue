@@ -50,13 +50,22 @@
               <component :is="getAccountIcon(account.type)" class="w-6 h-6 text-text-secondary" />
             </div>
             
-            <button 
-              @click="handleDelete(account.id, account.name)"
-              class="opacity-0 group-hover:opacity-100 p-2 rounded-lg text-text-muted hover:text-accent-rose hover:bg-white/5 transition-all"
-              title="Eliminar Cuenta"
-            >
-              <TrashIcon class="w-4 h-4" />
-            </button>
+            <div class="flex items-center space-x-1">
+              <button
+                @click="openEditModal(account)"
+                class="opacity-0 group-hover:opacity-100 p-2 rounded-lg text-text-muted hover:text-accent-emerald hover:bg-white/5 transition-all"
+                title="Editar Cuenta"
+              >
+                <PencilIcon class="w-4 h-4" />
+              </button>
+              <button
+                @click="handleDelete(account.id, account.name)"
+                class="opacity-0 group-hover:opacity-100 p-2 rounded-lg text-text-muted hover:text-accent-rose hover:bg-white/5 transition-all"
+                title="Eliminar Cuenta"
+              >
+                <TrashIcon class="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           <h4 class="font-display font-bold text-lg text-text-primary mt-4 truncate">{{ account.name }}</h4>
@@ -73,10 +82,17 @@
           </div>
           
           <div v-if="account.type === 'credit' && account.limit > 0" class="text-right">
-            <span class="text-[10px] text-text-muted font-medium block">LÍMITE</span>
+            <span class="text-[10px] text-text-muted font-medium block">CUPO DISPONIBLE</span>
             <span class="text-xs text-text-secondary font-semibold mt-1 block">
-              {{ formatCurrency(account.limit, account.currency) }}
+              {{ formatCurrency(Math.max(0, account.limit + account.balance), account.currency) }}
             </span>
+            <div class="w-24 ml-auto mt-1.5 h-1.5 rounded-full bg-slate-800 overflow-hidden" :title="`Utilización: ${creditUtilization(account)}%`">
+              <div
+                :class="['h-full rounded-full transition-all', creditUtilization(account) >= 80 ? 'bg-accent-rose' : creditUtilization(account) >= 50 ? 'bg-accent-amber' : 'bg-accent-emerald']"
+                :style="{ width: Math.min(100, creditUtilization(account)) + '%' }"
+              ></div>
+            </div>
+            <span class="text-[9px] text-text-muted block mt-0.5">{{ creditUtilization(account) }}% usado</span>
           </div>
         </div>
       </div>
@@ -180,27 +196,112 @@
         </form>
       </div>
     </div>
+
+    <!-- Edit Account Modal -->
+    <div
+      v-if="showEditModal"
+      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs"
+    >
+      <div class="w-full max-w-md glass-panel rounded-3xl p-4 sm:p-6 md:p-8 shadow-2xl relative border border-white/10 animate-scale-up max-h-[90vh] overflow-y-auto">
+        <button
+          @click="showEditModal = false"
+          class="absolute top-4 right-4 p-2 rounded-lg text-text-secondary hover:text-text-primary hover:bg-white/5 transition-all"
+        >
+          <XIcon class="w-5 h-5" />
+        </button>
+
+        <h3 class="font-display font-bold text-2xl text-text-primary mb-2">Editar Cuenta</h3>
+        <p class="text-text-secondary text-xs mb-6">El saldo solo cambia con transacciones; aquí editas la configuración.</p>
+
+        <form @submit.prevent="saveEditedAccount" class="space-y-4">
+          <div class="space-y-1">
+            <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Nombre de la Cuenta</label>
+            <input
+              v-model="editAcc.name"
+              type="text"
+              required
+              class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-emerald"
+            />
+          </div>
+
+          <div class="grid grid-cols-2 gap-4">
+            <div class="space-y-1">
+              <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Tipo de Cuenta</label>
+              <select
+                v-model="editAcc.type"
+                class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+              >
+                <option value="checking">Corriente</option>
+                <option value="savings">Ahorros</option>
+                <option value="credit">Tarjeta Crédito</option>
+                <option value="cash">Efectivo</option>
+              </select>
+            </div>
+
+            <div class="space-y-1">
+              <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Moneda Base</label>
+              <input
+                v-model="editAcc.currency"
+                type="text"
+                required
+                placeholder="COP, USD, EUR"
+                class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary uppercase focus:outline-none focus:border-accent-emerald"
+              />
+            </div>
+          </div>
+
+          <div v-if="editAcc.type === 'credit'" class="space-y-1 animate-fade-in">
+            <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Cupo/Límite de Crédito</label>
+            <input
+              v-model.number="editAcc.limit"
+              type="number"
+              step="any"
+              class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+            />
+          </div>
+
+          <div class="flex space-x-3 pt-4">
+            <button
+              type="button"
+              @click="showEditModal = false"
+              class="w-1/2 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              :disabled="loading"
+              class="w-1/2 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50"
+            >
+              <span>Guardar</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useAccountsStore } from '@/stores/accountsStore'
-import { AccountType } from '@/types'
+import { Account, AccountType } from '@/types'
 import { AccountSchema } from '@/schemas'
-import { 
-  Plus as PlusIcon, 
-  Trash2 as TrashIcon, 
+import {
+  Plus as PlusIcon,
+  Trash2 as TrashIcon,
   X as XIcon,
-  PiggyBank as SavingsIcon, 
-  CreditCard as CreditIcon, 
-  Wallet as CashIcon, 
-  Building as BankIcon 
+  Pencil as PencilIcon,
+  PiggyBank as SavingsIcon,
+  CreditCard as CreditIcon,
+  Wallet as CashIcon,
+  Building as BankIcon
 } from 'lucide-vue-next'
 
 const accountsStore = useAccountsStore()
 
 const showAddModal = ref(false)
+const showEditModal = ref(false)
 const loading = ref(false)
 const newAcc = ref<{
   name: string;
@@ -261,6 +362,55 @@ const saveAccount = async () => {
   } finally {
     loading.value = false
   }
+}
+
+const editAcc = ref<{
+  name: string;
+  type: AccountType;
+  limit: number;
+  currency: string;
+}>({ name: '', type: 'savings', limit: 0, currency: 'COP' })
+const editingAccountId = ref('')
+
+const openEditModal = (account: Account) => {
+  editingAccountId.value = account.id
+  editAcc.value = {
+    name: account.name,
+    type: account.type,
+    limit: account.limit,
+    currency: account.currency
+  }
+  showEditModal.value = true
+}
+
+const saveEditedAccount = async () => {
+  const currency = editAcc.value.currency.toUpperCase()
+  // Validar con el mismo schema (balance queda por fuera, no se edita)
+  const validation = AccountSchema.pick({ name: true, type: true, limit: true, currency: true }).safeParse({
+    ...editAcc.value,
+    currency
+  })
+  if (!validation.success) {
+    alert(validation.error.errors[0].message)
+    return
+  }
+
+  loading.value = true
+  try {
+    await accountsStore.updateAccount(editingAccountId.value, { ...editAcc.value, currency })
+    showEditModal.value = false
+  } catch (err) {
+    console.error('Error al actualizar cuenta:', err)
+  } finally {
+    loading.value = false
+  }
+}
+
+// % de cupo usado de una tarjeta de crédito (balance negativo = deuda)
+const creditUtilization = (account: Account) => {
+  if (account.type !== 'credit' || !account.limit || account.limit <= 0) return 0
+  const used = account.balance < 0 ? -account.balance : 0
+  return Math.round((used / account.limit) * 100)
 }
 
 const handleDelete = async (id: string, name: string) => {

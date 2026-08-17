@@ -27,6 +27,7 @@ const DEFAULT_CATEGORIES = [
   { name: 'Salud', icon: 'Heart', color: '#ec4899', type: 'expense' },
   { name: 'Educación', icon: 'GraduationCap', color: '#8b5cf6', type: 'expense' },
   { name: 'Ingresos', icon: 'TrendingUp', color: '#059669', type: 'income' },
+  { name: 'Ahorro', icon: 'PiggyBank', color: '#14b8a6', type: 'expense' },
   { name: 'Otros', icon: 'HelpCircle', color: '#6b7280', type: 'both' }
 ]
 
@@ -44,14 +45,16 @@ export const useTransactionsStore = defineStore('transactions', {
   }),
   getters: {
     // Filtrar transacciones locales
-    filteredTransactions: (state) => (filters: { 
-      accountId?: string; 
-      categoryId?: string; 
-      type?: string; 
-      search?: string; 
+    filteredTransactions: (state) => (filters: {
+      accountId?: string;
+      categoryId?: string;
+      type?: string;
+      search?: string;
+      dateFrom?: string;
+      dateTo?: string;
     } = {}) => {
       let list = [...state.transactions]
-      
+
       if (filters.accountId) {
         list = list.filter(t => t.accountId === filters.accountId)
       }
@@ -63,10 +66,34 @@ export const useTransactionsStore = defineStore('transactions', {
       }
       if (filters.search) {
         const term = filters.search.toLowerCase()
-        list = list.filter(t => t.description.toLowerCase().includes(term))
+        list = list.filter(t =>
+          t.description.toLowerCase().includes(term) ||
+          (t.notes && t.notes.toLowerCase().includes(term))
+        )
       }
-      
+      if (filters.dateFrom) {
+        const from = new Date(filters.dateFrom + 'T00:00:00')
+        list = list.filter(t => t.date >= from)
+      }
+      if (filters.dateTo) {
+        const to = new Date(filters.dateTo + 'T23:59:59.999')
+        list = list.filter(t => t.date <= to)
+      }
+
       return list
+    },
+    // Gastos del mes actual agrupados por categoría (para presupuestos).
+    // Acepta un convertidor opcional (amount, currency) => amount en moneda principal.
+    spendingByCategoryThisMonth: (state) => (convert?: (amount: number, currency: string) => number) => {
+      const now = new Date()
+      const result: Record<string, number> = {}
+      state.transactions.forEach(t => {
+        if (t.type !== 'expense' || !t.categoryId) return
+        if (t.date.getMonth() !== now.getMonth() || t.date.getFullYear() !== now.getFullYear()) return
+        const amount = convert ? convert(Math.abs(t.amount), t.currency) : Math.abs(t.amount)
+        result[t.categoryId] = (result[t.categoryId] || 0) + amount
+      })
+      return result
     }
   },
   actions: {
@@ -178,7 +205,7 @@ export const useTransactionsStore = defineStore('transactions', {
     },
 
     // 3. Crear una nueva Transacción
-    async addTransaction({ accountId, amount, description, categoryId, date, type, toAccountId = null, receiptUrl = null, userId }: {
+    async addTransaction({ accountId, amount, description, categoryId, date, type, toAccountId = null, receiptUrl = null, notes = null, userId }: {
       accountId: string;
       amount: number;
       description: string;
@@ -187,6 +214,7 @@ export const useTransactionsStore = defineStore('transactions', {
       type: TransactionType;
       toAccountId?: string | null;
       receiptUrl?: string | null;
+      notes?: string | null;
       userId?: string;
     }): Promise<Transaction> {
       const user = auth.currentUser
@@ -212,6 +240,7 @@ export const useTransactionsStore = defineStore('transactions', {
           type,
           toAccountId,
           receiptUrl,
+          notes,
           currency: account.currency || 'USD',
           createdAt: new Date()
         }
@@ -372,6 +401,7 @@ export const useTransactionsStore = defineStore('transactions', {
       type: TransactionType;
       toAccountId?: string | null;
       receiptUrl?: string | null;
+      notes?: string | null;
       userId?: string;
     }): Promise<Transaction> {
       const user = auth.currentUser
@@ -415,6 +445,7 @@ export const useTransactionsStore = defineStore('transactions', {
           type: updates.type,
           toAccountId: updates.type === 'transfer' ? updates.toAccountId : null,
           receiptUrl: updates.receiptUrl,
+          notes: updates.notes ?? null,
           userId: updates.userId || oldTx.userId,
           currency: account.currency || 'USD',
         }

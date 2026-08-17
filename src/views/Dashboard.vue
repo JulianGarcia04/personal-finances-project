@@ -172,6 +172,78 @@
         </div>
       </div>
 
+      <!-- 2.5 Budget & Goals widgets -->
+      <div v-if="budgetSummary || goalProgress.length > 0" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Budget of the month -->
+        <div v-if="budgetSummary" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
+          <div class="flex items-center justify-between">
+            <h4 class="font-display font-bold text-base text-text-primary">Presupuesto del Mes</h4>
+            <router-link to="/goals" class="text-xs text-accent-emerald font-semibold hover:underline">
+              Ajustar
+            </router-link>
+          </div>
+          <div class="flex items-end justify-between">
+            <span class="text-[10px] text-text-muted uppercase tracking-widest">Usado</span>
+            <span :class="['font-display font-bold text-lg', budgetSummary.percent >= 100 ? 'text-accent-rose' : budgetSummary.percent >= 70 ? 'text-accent-amber' : 'text-accent-emerald']">
+              {{ budgetSummary.percent }}%
+            </span>
+          </div>
+          <div class="w-full h-2 rounded-full bg-white/10 overflow-hidden">
+            <div
+              :class="['h-full rounded-full transition-all', budgetSummary.percent >= 100 ? 'bg-accent-rose' : budgetSummary.percent >= 70 ? 'bg-accent-amber' : 'bg-accent-emerald']"
+              :style="{ width: Math.min(budgetSummary.percent, 100) + '%' }"
+            ></div>
+          </div>
+          <p class="text-[10px] text-text-muted">
+            {{ formatPrimaryCurrency(budgetSummary.totalSpentReal) }} de {{ formatPrimaryCurrency(budgetSummary.totalBudget) }}
+          </p>
+          <div class="space-y-2 pt-2 border-t border-white/5">
+            <div v-for="row in budgetSummary.rows" :key="row.name" class="space-y-1">
+              <div class="flex justify-between text-[11px]">
+                <span class="text-text-secondary flex items-center gap-1.5">
+                  <span class="w-2 h-2 rounded-full" :style="{ backgroundColor: row.color }"></span>
+                  {{ row.name }}
+                </span>
+                <span :class="row.percent >= 100 ? 'text-accent-rose font-semibold' : 'text-text-muted'">{{ row.percent }}%</span>
+              </div>
+              <div class="w-full h-1 rounded-full bg-white/10 overflow-hidden">
+                <div
+                  :class="['h-full rounded-full', row.percent >= 100 ? 'bg-accent-rose' : row.percent >= 70 ? 'bg-accent-amber' : 'bg-accent-emerald']"
+                  :style="{ width: Math.min(row.percent, 100) + '%' }"
+                ></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Goals progress -->
+        <div v-if="goalProgress.length > 0" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
+          <div class="flex items-center justify-between">
+            <h4 class="font-display font-bold text-base text-text-primary">Tus Metas de Ahorro</h4>
+            <router-link to="/goals" class="text-xs text-accent-emerald font-semibold hover:underline">
+              Ver metas
+            </router-link>
+          </div>
+          <div class="space-y-3">
+            <div v-for="goal in goalProgress" :key="goal.id" class="space-y-1.5">
+              <div class="flex justify-between text-xs">
+                <span class="text-text-primary font-semibold truncate max-w-[160px]">{{ goal.name }}</span>
+                <span class="text-accent-emerald font-semibold">{{ goal.percent }}%</span>
+              </div>
+              <div class="w-full h-2 rounded-full bg-slate-950/60 overflow-hidden border border-white/5">
+                <div
+                  class="h-full rounded-full bg-gradient-to-r from-accent-emerald to-accent-violet transition-all"
+                  :style="{ width: Math.min(goal.percent, 100) + '%' }"
+                ></div>
+              </div>
+              <p class="text-[10px] text-text-muted">
+                {{ formatCurrency(goal.current, goal.currency) }} / {{ formatCurrency(goal.target, goal.currency) }}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- 3. Recent Transactions & Quick Summary -->
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- Recent Transactions (List) -->
@@ -250,6 +322,7 @@ import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
+import { useGoalsStore } from '@/stores/goalsStore'
 import { AccountType } from '@/types'
 import { 
   Plus as PlusIcon, 
@@ -273,6 +346,7 @@ const accountsStore = useAccountsStore()
 const transactionsStore = useTransactionsStore()
 const settingsStore = useSettingsStore()
 const workspacesStore = useWorkspacesStore()
+const goalsStore = useGoalsStore()
 
 const donutCanvas = ref<HTMLCanvasElement | null>(null)
 const barCanvas = ref<HTMLCanvasElement | null>(null)
@@ -284,6 +358,8 @@ onMounted(async () => {
   await transactionsStore.fetchCategories()
   await transactionsStore.fetchTransactions()
   await settingsStore.loadSettings()
+  await goalsStore.fetchGoals()
+  await goalsStore.loadBudgetSettings()
 
   renderCharts()
 })
@@ -297,19 +373,17 @@ watch(
   { deep: true }
 )
 
-// Calcular Patrimonio Neto consolidado en la moneda de la primera cuenta o COP por defecto
+// Moneda principal: la elegida por el usuario en Settings
+const primaryCurrency = computed(() => settingsStore.currency || 'COP')
+
+// ponytail: conversión con tasas manuales del workspace; sin tasa configurada se suma 1:1
+const convert = (amount: number, currency: string) =>
+  goalsStore.convertToPrimary(amount, currency, primaryCurrency.value)
+
+// Patrimonio Neto consolidado en la moneda principal
 const netWorthValue = computed(() => {
   const totals = accountsStore.netWorthByCurrency
-  const currencies = Object.keys(totals)
-  if (currencies.length === 0) return 0
-  // Sumamos los saldos tal cual (en una app multi-moneda premium real harías conversiones, 
-  // aquí mostramos la suma simplificada o la moneda principal). Mostramos el total de la primera moneda.
-  return totals[currencies[0]] || 0
-})
-
-const primaryCurrency = computed(() => {
-  if (accountsStore.accounts.length === 0) return 'COP'
-  return accountsStore.accounts[0].currency || 'COP'
+  return Object.entries(totals).reduce((sum, [cur, total]) => sum + convert(total, cur), 0)
 })
 
 // Ingresos del mes actual
@@ -324,8 +398,8 @@ const getMoMData = (type: 'income' | 'expense') => {
   transactionsStore.transactions.forEach(t => {
     if (t.type === type) {
       const m = t.date.getMonth(), y = t.date.getFullYear()
-      if (m === thisMonth && y === thisYear) current += Math.abs(t.amount)
-      else if (m === lastMonth && y === lastMonthYear) previous += Math.abs(t.amount)
+      if (m === thisMonth && y === thisYear) current += convert(Math.abs(t.amount), t.currency)
+      else if (m === lastMonth && y === lastMonthYear) previous += convert(Math.abs(t.amount), t.currency)
     }
   })
   
@@ -367,7 +441,7 @@ const memberExpenses = computed(() => {
     if (t.type === 'expense' && t.date.getMonth() === thisMonth && t.date.getFullYear() === thisYear) {
       const uid = t.userId || authStore.user?.uid || 'unknown'
       if (!totals[uid]) totals[uid] = 0
-      totals[uid] += Math.abs(t.amount)
+      totals[uid] += convert(Math.abs(t.amount), t.currency)
     }
   })
   
@@ -396,6 +470,49 @@ const recentTransactions = computed(() => {
   return transactionsStore.transactions.slice(0, 5)
 })
 
+// Resumen de presupuesto del mes (categoryBudgets vs gasto real convertido)
+const budgetSummary = computed(() => {
+  const budgets = goalsStore.categoryBudgets
+  const ids = Object.keys(budgets)
+  if (ids.length === 0) return null
+
+  const spending = transactionsStore.spendingByCategoryThisMonth((amt, cur) => convert(amt, cur))
+  let totalBudget = 0, totalSpent = 0
+  const rows = ids.map(catId => {
+    const limit = budgets[catId]
+    const spent = spending[catId] || 0
+    totalBudget += limit
+    totalSpent += Math.min(spent, limit) // para el % global no penalizamos doble el exceso
+    const cat = getCategory(catId)
+    return {
+      name: cat?.name || 'Categoría',
+      color: cat?.color || '#94a3b8',
+      spent,
+      limit,
+      percent: limit > 0 ? Math.round((spent / limit) * 100) : 0
+    }
+  }).sort((a, b) => b.percent - a.percent)
+
+  return {
+    rows: rows.slice(0, 4),
+    percent: totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0,
+    totalBudget,
+    totalSpentReal: ids.reduce((s, id) => s + (spending[id] || 0), 0)
+  }
+})
+
+// Progreso de metas (widget)
+const goalProgress = computed(() =>
+  goalsStore.goals.slice(0, 4).map(g => ({
+    id: g.id,
+    name: g.name,
+    currency: g.currency,
+    current: g.currentAmount,
+    target: g.targetAmount,
+    percent: g.targetAmount > 0 ? Math.round((g.currentAmount / g.targetAmount) * 100) : 0
+  }))
+)
+
 // Agrupación de gastos por categoría para el gráfico de dona
 const expensesByCategory = computed(() => {
   const now = new Date()
@@ -408,7 +525,7 @@ const expensesByCategory = computed(() => {
     const cat = getCategory(t.categoryId)
     const name = cat ? cat.name : 'Otros'
     if (!groups[name]) groups[name] = 0
-    groups[name] += Math.abs(t.amount)
+    groups[name] += convert(Math.abs(t.amount), t.currency)
   })
   return groups
 })
@@ -486,8 +603,8 @@ const renderCharts = () => {
       const txDate = t.date
       const match = last6Months.find(m => m.month === txDate.getMonth() && m.year === txDate.getFullYear())
       if (match) {
-        if (t.type === 'income') match.income += Math.abs(t.amount)
-        if (t.type === 'expense') match.expense += Math.abs(t.amount)
+        if (t.type === 'income') match.income += convert(Math.abs(t.amount), t.currency)
+        if (t.type === 'expense') match.expense += convert(Math.abs(t.amount), t.currency)
       }
     })
 

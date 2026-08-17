@@ -52,6 +52,7 @@ export interface Transaction {
   toAccountId?: string | null;
   statementImportId?: string | null;
   receiptUrl?: string | null;
+  notes?: string | null;
   currency: string;
   createdAt: Date;
 }
@@ -92,6 +93,10 @@ export interface BudgetSettings {
   budgetWantsPercent: number;
   budgetSavingsPercent: number;
   budgetAllocations: Record<string, number>;
+  // Presupuesto mensual recurrente por categoría (categoryId -> límite)
+  categoryBudgets: Record<string, number>;
+  // Tasas de cambio manuales hacia la moneda principal (currency -> cuántas unidades de la principal vale 1 unidad)
+  exchangeRates: Record<string, number>;
 }
 
 export interface ChatMessage {

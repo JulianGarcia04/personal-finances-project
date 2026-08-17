@@ -2,14 +2,15 @@ import { defineStore } from 'pinia'
 import { db, auth } from '@/lib/firebase'
 import { Account, AccountType } from '@/types'
 import { useAuthStore } from '@/stores/authStore'
-import { 
-  collection, 
-  query, 
-  where, 
-  getDocs, 
-  addDoc, 
-  doc, 
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  addDoc,
+  doc,
   deleteDoc,
+  updateDoc,
   runTransaction
 } from 'firebase/firestore'
 
@@ -96,6 +97,34 @@ export const useAccountsStore = defineStore('accounts', {
         return accountWithId
       } catch (error) {
         console.error('Error adding account:', error)
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+
+    // Editar cuenta (balance NO editable: lo mutan las transacciones)
+    async updateAccount(accountId: string, updates: {
+      name: string;
+      type: AccountType;
+      limit: number;
+      currency: string;
+    }): Promise<void> {
+      this.loading = true
+      try {
+        const fields = {
+          name: updates.name,
+          type: updates.type,
+          limit: updates.type === 'credit' ? Number(updates.limit) : 0,
+          currency: updates.currency
+        }
+        await updateDoc(doc(db, 'accounts', accountId), fields)
+        const index = this.accounts.findIndex(acc => acc.id === accountId)
+        if (index !== -1) {
+          this.accounts[index] = { ...this.accounts[index], ...fields }
+        }
+      } catch (error) {
+        console.error('Error updating account:', error)
         throw error
       } finally {
         this.loading = false

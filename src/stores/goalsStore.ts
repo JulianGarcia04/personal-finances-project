@@ -22,6 +22,8 @@ interface GoalsState {
   budgetWantsPercent: number;
   budgetSavingsPercent: number;
   budgetAllocations: Record<string, number>;
+  categoryBudgets: Record<string, number>;
+  exchangeRates: Record<string, number>;
   loading: boolean;
 }
 
@@ -33,10 +35,19 @@ export const useGoalsStore = defineStore('goals', {
     budgetWantsPercent: 30,
     budgetSavingsPercent: 20,
     budgetAllocations: {},
+    categoryBudgets: {},
+    exchangeRates: {},
     loading: false,
   }),
   getters: {
     getGoalById: (state) => (id: string): Goal | undefined => state.goals.find(g => g.id === id),
+    // Convierte un monto a la moneda principal usando las tasas manuales.
+    // ponytail: si no hay tasa configurada, se suma tal cual (1:1) — el usuario configura las tasas en Objetivos & Presupuesto.
+    convertToPrimary: (state) => (amount: number, currency: string, primaryCurrency: string): number => {
+      if (!currency || currency === primaryCurrency) return amount
+      const rate = state.exchangeRates[currency]
+      return rate ? amount * rate : amount
+    }
   },
   actions: {
     // 1. Cargar Objetivos de Ahorro
@@ -156,7 +167,9 @@ export const useGoalsStore = defineStore('goals', {
             budgetNeedsPercent: this.budgetNeedsPercent,
             budgetWantsPercent: this.budgetWantsPercent,
             budgetSavingsPercent: this.budgetSavingsPercent,
-            budgetAllocations: newAllocations
+            budgetAllocations: newAllocations,
+            categoryBudgets: this.categoryBudgets,
+            exchangeRates: this.exchangeRates
           })
         }
       } catch (error) {
@@ -183,6 +196,8 @@ export const useGoalsStore = defineStore('goals', {
           this.budgetWantsPercent = data.budgetWantsPercent !== undefined ? Number(data.budgetWantsPercent) : 30
           this.budgetSavingsPercent = data.budgetSavingsPercent !== undefined ? Number(data.budgetSavingsPercent) : 20
           this.budgetAllocations = data.budgetAllocations || {}
+          this.categoryBudgets = data.categoryBudgets || {}
+          this.exchangeRates = data.exchangeRates || {}
         }
       } catch (error) {
         console.error('Error al cargar configuraciones del presupuesto:', error)
@@ -205,7 +220,9 @@ export const useGoalsStore = defineStore('goals', {
           budgetNeedsPercent: Number(settings.budgetNeedsPercent),
           budgetWantsPercent: Number(settings.budgetWantsPercent),
           budgetSavingsPercent: Number(settings.budgetSavingsPercent),
-          budgetAllocations: settings.budgetAllocations
+          budgetAllocations: settings.budgetAllocations,
+          categoryBudgets: settings.categoryBudgets,
+          exchangeRates: settings.exchangeRates
         })
 
         this.budgetIncome = Number(settings.budgetIncome)
@@ -213,6 +230,8 @@ export const useGoalsStore = defineStore('goals', {
         this.budgetWantsPercent = Number(settings.budgetWantsPercent)
         this.budgetSavingsPercent = Number(settings.budgetSavingsPercent)
         this.budgetAllocations = settings.budgetAllocations
+        this.categoryBudgets = settings.categoryBudgets
+        this.exchangeRates = settings.exchangeRates
       } catch (error) {
         console.error('Error al guardar configuraciones del presupuesto:', error)
         throw error

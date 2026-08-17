@@ -248,6 +248,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
+import { useGoalsStore } from '@/stores/goalsStore'
 import { useChatsStore } from '@/stores/chatsStore'
 import { 
   Sparkles as SparklesIcon, 
@@ -263,6 +264,7 @@ const authStore = useAuthStore()
 const settingsStore = useSettingsStore()
 const accountsStore = useAccountsStore()
 const transactionsStore = useTransactionsStore()
+const goalsStore = useGoalsStore()
 const chatsStore = useChatsStore()
 
 // State
@@ -397,9 +399,10 @@ const sendMessage = async () => {
     // Agregar la respuesta de la IA al chat
     await chatsStore.addMessageToChat(chatId, 'assistant', data.response || 'No recibí respuesta del asesor.')
 
-    // Sincronizar datos locales en segundo plano por si el agente creó cuentas o transacciones
+    // Sincronizar datos locales en segundo plano por si el agente creó cuentas, transacciones o presupuestos
     await accountsStore.fetchAccounts()
     await transactionsStore.fetchTransactions()
+    await goalsStore.loadBudgetSettings()
 
   } catch (err: any) {
     console.error('Error del Asesor IA:', err)
