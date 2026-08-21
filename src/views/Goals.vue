@@ -509,6 +509,7 @@ import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { Goal } from '@/types'
+import { expenseAmountForDate } from '@/lib/installments'
 import {
   Target as TargetIcon,
   PiggyBank as PiggyBankIcon,
@@ -577,10 +578,12 @@ const realMonthTotals = computed(() => {
   const now = new Date()
   let income = 0, expense = 0
   transactionsStore.transactions.forEach(t => {
-    if (t.date.getMonth() !== now.getMonth() || t.date.getFullYear() !== now.getFullYear()) return
-    const converted = goalsStore.convertToPrimary(Math.abs(t.amount), t.currency, userCurrency.value)
-    if (t.type === 'income') income += converted
-    else if (t.type === 'expense') expense += converted
+    if (t.type === 'income') {
+      if (t.date.getMonth() !== now.getMonth() || t.date.getFullYear() !== now.getFullYear()) return
+      income += goalsStore.convertToPrimary(Math.abs(t.amount), t.currency, userCurrency.value)
+    } else if (t.type === 'expense') {
+      expense += goalsStore.convertToPrimary(expenseAmountForDate(t, now), t.currency, userCurrency.value)
+    }
   })
   return { income, expense }
 })

@@ -13,7 +13,9 @@ export const AccountSchema = z.object({
   limit: z.number().default(0),
   currency: z.string()
     .min(3, 'El código de moneda debe tener exactamente 3 caracteres')
-    .max(3, 'El código de moneda debe tener exactamente 3 caracteres')
+    .max(3, 'El código de moneda debe tener exactamente 3 caracteres'),
+  statementClosingDay: z.number().int().min(1).max(31).nullable().optional(),
+  paymentDueDay: z.number().int().min(1).max(31).nullable().optional()
 })
 
 export const TransactionSchema = z.object({
@@ -33,6 +35,7 @@ export const TransactionSchema = z.object({
   toAccountId: z.string().nullable().optional(),
   receiptUrl: z.string().nullable().optional(),
   notes: z.string().max(500, 'Las notas no pueden exceder 500 caracteres').nullable().optional(),
+  installments: z.number().int().min(1).max(60).nullable().optional(),
   userId: z.string().optional()
 }).refine(data => {
   if (data.type === 'transfer') {

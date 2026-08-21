@@ -19,6 +19,21 @@ const GEMINI_MODEL = "gemini-2.5-flash";
 const EMBEDDING_MODEL = "gemini-embedding-2";
 const LEGACY_EMBEDDING_DIM = 768; // text-embedding-004, apagado en enero 2026
 
+function expenseAmountForMonth(data: admin.firestore.DocumentData, year: number, month: number): number {
+  if (data.type !== "expense") return 0;
+  const transactionDate = data.date?.toDate ? data.date.toDate() : new Date(data.date);
+  if (Number.isNaN(transactionDate.getTime())) return 0;
+
+  const installments = Number.isInteger(data.installments) && data.installments > 0 ? data.installments : 1;
+  const monthIndex = year * 12 + month - (transactionDate.getFullYear() * 12 + transactionDate.getMonth());
+  if (monthIndex < 0 || monthIndex >= installments) return 0;
+
+  const totalCents = Math.round(Math.abs(Number(data.amount) || 0) * 100);
+  const baseCents = Math.floor(totalCents / installments);
+  const remainderCents = totalCents % installments;
+  return (baseCents + (monthIndex < remainderCents ? 1 : 0)) / 100;
+}
+
 function getDefaultGeminiApiKey(): string | undefined {
   return process.env.GOOGLE_GENAI_API_KEY || process.env.GEMINI_API_KEY;
 }
@@ -384,10 +399,12 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
           balance: z.number().describe('El saldo inicial de la cuenta'),
           limit: z.number().optional().describe('El límite de crédito en caso de tarjetas de crédito (0 por defecto)'),
           currency: z.string().describe('Código de moneda de 3 caracteres (ej. "COP", "USD", "EUR")'),
+          statementClosingDay: z.number().int().min(1).max(31).optional().describe('Día mensual de corte de la tarjeta'),
+          paymentDueDay: z.number().int().min(1).max(31).optional().describe('Día mensual límite de pago de la tarjeta'),
         }),
         outputSchema: z.any(),
       },
-      async ({ name, type, balance, limit, currency }) => {
+      async ({ name, type, balance, limit, currency, statementClosingDay, paymentDueDay }) => {
         const newAccountRef = db.collection('accounts').doc();
         const newAccount = {
           userId,
@@ -396,6 +413,8 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
           balance: Number(balance),
           limit: type === 'credit' ? Number(limit || 0) : 0,
           currency: currency.toUpperCase(),
+          statementClosingDay: type === 'credit' ? statementClosingDay || null : null,
+          paymentDueDay: type === 'credit' ? paymentDueDay || null : null,
           createdAt: admin.firestore.FieldValue.serverTimestamp()
         };
         await newAccountRef.set(newAccount);
@@ -449,10 +468,11 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
           type: z.enum(['income', 'expense', 'transfer']).describe('El tipo de movimiento'),
           toAccountId: z.string().optional().describe('El ID de la cuenta destino (requerido únicamente para transferencias)'),
           date: z.string().optional().describe('Fecha en formato YYYY-MM-DD (por defecto el día de hoy)'),
+          installments: z.number().int().min(1).max(60).optional().describe('Número de cuotas para una compra en tarjeta de crédito'),
         }),
         outputSchema: z.any(),
       },
-      async ({ accountId, amount, description, categoryId, type, toAccountId, date }) => {
+      async ({ accountId, amount, description, categoryId, type, toAccountId, date, installments }) => {
         await db.runTransaction(async (transaction) => {
           const accountRef = db.collection('accounts').doc(accountId);
           const accountDoc = await transaction.get(accountRef);
@@ -482,6 +502,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
             date: admin.firestore.Timestamp.fromDate(txDate),
             type,
             toAccountId: toAccountId || null,
+            installments: type === 'expense' && accountData.type === 'credit' ? installments || 1 : 1,
             currency: accountData.currency || 'USD',
             createdAt: admin.firestore.FieldValue.serverTimestamp()
           };
@@ -750,13 +771,16 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       },
       async ({ months }) => {
         const monthsBack = Math.min(Math.max(months || 3, 1), 12);
-        const startDate = new Date();
-        startDate.setMonth(startDate.getMonth() - monthsBack);
+        const now = new Date();
+        const firstMonth = new Date(now.getFullYear(), now.getMonth() - monthsBack + 1, 1);
+        const periodMonths = Array.from({ length: monthsBack }, (_, index) => ({
+          year: firstMonth.getFullYear(),
+          month: firstMonth.getMonth() + index
+        }));
 
         const snapshot = await db.collection('transactions')
           .where('userId', '==', userId)
           .where('type', '==', 'expense')
-          .where('date', '>=', admin.firestore.Timestamp.fromDate(startDate))
           .orderBy('date', 'desc')
           .get();
 
@@ -770,7 +794,9 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
           const data = docSnap.data();
           const key = data.categoryId || 'sin-categoria';
           if (!totals[key]) totals[key] = { total: 0, count: 0 };
-          totals[key].total += Math.abs(Number(data.amount) || 0);
+          periodMonths.forEach(({ year, month }) => {
+            totals[key].total += expenseAmountForMonth(data, year, month);
+          });
           totals[key].count += 1;
         });
 

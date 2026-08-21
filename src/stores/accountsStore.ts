@@ -66,12 +66,14 @@ export const useAccountsStore = defineStore('accounts', {
     },
 
     // Agregar una nueva cuenta
-    async addAccount({ name, type, balance, limit = 0, currency = 'USD' }: { 
+    async addAccount({ name, type, balance, limit = 0, currency = 'USD', statementClosingDay = null, paymentDueDay = null }: {
       name: string; 
       type: AccountType; 
       balance: number; 
       limit?: number; 
       currency?: string; 
+      statementClosingDay?: number | null;
+      paymentDueDay?: number | null;
     }): Promise<Account> {
       const user = auth.currentUser
       const authStore = useAuthStore()
@@ -88,6 +90,8 @@ export const useAccountsStore = defineStore('accounts', {
           balance: Number(balance),
           limit: type === 'credit' ? Number(limit) : 0,
           currency,
+          statementClosingDay: type === 'credit' ? statementClosingDay : null,
+          paymentDueDay: type === 'credit' ? paymentDueDay : null,
           createdAt: new Date()
         }
 
@@ -109,6 +113,8 @@ export const useAccountsStore = defineStore('accounts', {
       type: AccountType;
       limit: number;
       currency: string;
+      statementClosingDay?: number | null;
+      paymentDueDay?: number | null;
     }): Promise<void> {
       this.loading = true
       try {
@@ -116,7 +122,9 @@ export const useAccountsStore = defineStore('accounts', {
           name: updates.name,
           type: updates.type,
           limit: updates.type === 'credit' ? Number(updates.limit) : 0,
-          currency: updates.currency
+          currency: updates.currency,
+          statementClosingDay: updates.type === 'credit' ? updates.statementClosingDay ?? null : null,
+          paymentDueDay: updates.type === 'credit' ? updates.paymentDueDay ?? null : null
         }
         await updateDoc(doc(db, 'accounts', accountId), fields)
         const index = this.accounts.findIndex(acc => acc.id === accountId)

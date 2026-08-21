@@ -132,6 +132,9 @@
               <td class="py-4 px-4 font-medium">
                 <div class="truncate max-w-xs md:max-w-md">{{ tx.description }}</div>
                 <div v-if="tx.notes" class="text-[11px] text-text-muted mt-0.5 max-w-xs md:max-w-md whitespace-pre-wrap break-words">{{ tx.notes }}</div>
+                <div v-if="tx.installments && tx.installments > 1" class="text-[10px] text-accent-amber mt-1">
+                  {{ tx.installments }} cuotas · {{ formatCurrency(getMonthlyInstallmentAmount(tx.amount, tx.installments), tx.currency || getAccountCurrency(tx.accountId)) }} / mes
+                </div>
                 <div v-if="workspacesStore.activeWorkspaceProfiles.length > 1" class="text-[10px] text-text-muted mt-0.5">
                   Registrado por: {{ getUserName(tx.userId) }}
                 </div>
@@ -244,6 +247,9 @@
             <div class="min-w-0">
               <p class="text-sm font-medium text-text-primary break-words">{{ tx.description }}</p>
               <p v-if="tx.notes" class="text-[11px] text-text-muted mt-0.5 whitespace-pre-wrap break-words">{{ tx.notes }}</p>
+              <p v-if="tx.installments && tx.installments > 1" class="text-[10px] text-accent-amber mt-1">
+                {{ tx.installments }} cuotas · {{ formatCurrency(getMonthlyInstallmentAmount(tx.amount, tx.installments), tx.currency || getAccountCurrency(tx.accountId)) }} / mes
+              </p>
               <p class="text-[10px] text-text-muted mt-1">{{ getAccountName(tx.accountId) }} · {{ formatDate(tx.date) }}</p>
             </div>
           </div>
@@ -420,6 +426,22 @@
                 class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
               />
             </div>
+          </div>
+
+          <div v-if="isNewCreditExpense" class="rounded-2xl border border-accent-amber/20 bg-accent-amber/[0.04] p-4 space-y-2 animate-fade-in">
+            <div class="space-y-1">
+              <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Número de cuotas</label>
+              <input
+                v-model.number="newTx.installments"
+                type="number"
+                min="1"
+                max="60"
+                step="1"
+                required
+                class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-accent-amber/20 text-sm text-text-primary focus:outline-none focus:border-accent-amber"
+              />
+            </div>
+            <p class="text-[10px] text-text-muted">El saldo registra la compra completa; los KPIs la repartirán mes a mes.</p>
           </div>
 
           <div class="space-y-1">
@@ -631,6 +653,22 @@
             </div>
           </div>
 
+          <div v-if="isEditCreditExpense" class="rounded-2xl border border-accent-amber/20 bg-accent-amber/[0.04] p-4 space-y-2 animate-fade-in">
+            <div class="space-y-1">
+              <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Número de cuotas</label>
+              <input
+                v-model.number="editTx.installments"
+                type="number"
+                min="1"
+                max="60"
+                step="1"
+                required
+                class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-accent-amber/20 text-sm text-text-primary focus:outline-none focus:border-accent-amber"
+              />
+            </div>
+            <p class="text-[10px] text-text-muted">El monto mostrado sigue siendo el total de la compra.</p>
+          </div>
+
           <div class="space-y-1">
             <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Descripción / Comercio</label>
             <input
@@ -731,6 +769,7 @@ import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { TransactionType } from '@/types'
 import { TransactionSchema } from '@/schemas'
+import { getMonthlyInstallmentAmount } from '@/lib/installments'
 import { 
   Plus as PlusIcon, 
   Trash2 as TrashIcon, 
@@ -815,6 +854,7 @@ const newTx = ref<{
   toAccountId: string;
   categoryId: string;
   amount: number | null;
+  installments: number | null;
   date: string;
   description: string;
   notes: string;
@@ -825,6 +865,7 @@ const newTx = ref<{
   toAccountId: '',
   categoryId: '',
   amount: null,
+  installments: 1,
   date: new Date().toISOString().substring(0, 10),
   description: '',
   notes: '',
@@ -840,6 +881,7 @@ const editTx = ref<{
   toAccountId: string;
   categoryId: string;
   amount: number | null;
+  installments: number | null;
   date: string;
   description: string;
   notes: string;
@@ -850,6 +892,7 @@ const editTx = ref<{
   toAccountId: '',
   categoryId: '',
   amount: null,
+  installments: 1,
   date: new Date().toISOString().substring(0, 10),
   description: '',
   notes: '',
@@ -862,6 +905,14 @@ const editSelectedFileName = ref('')
 const editUploadedReceiptUrl = ref('')
 const editUploadingReceipt = ref(false)
 const editReceiptError = ref('')
+
+const isNewCreditExpense = computed(() =>
+  newTx.value.type === 'expense' && accountsStore.getAccountById(newTx.value.accountId)?.type === 'credit'
+)
+
+const isEditCreditExpense = computed(() =>
+  editTx.value.type === 'expense' && accountsStore.getAccountById(editTx.value.accountId)?.type === 'credit'
+)
 
 // Computed properties for Edit Modal
 const availableEditDestinationAccounts = computed(() => {
@@ -911,6 +962,7 @@ const closeAddModal = () => {
     toAccountId: '',
     categoryId: '',
     amount: null,
+    installments: 1,
     date: new Date().toISOString().substring(0, 10),
     description: '',
     notes: '',
@@ -921,6 +973,7 @@ const closeAddModal = () => {
 
 const saveTransaction = async () => {
   const parsedAmount = Number(newTx.value.amount || 0)
+  const installments = isNewCreditExpense.value ? Number(newTx.value.installments || 1) : 1
   let finalAmount = parsedAmount
   if (newTx.value.type === 'expense') {
     finalAmount = -Math.abs(parsedAmount)
@@ -939,6 +992,7 @@ const saveTransaction = async () => {
     toAccountId: newTx.value.type === 'transfer' ? newTx.value.toAccountId : null,
     receiptUrl: uploadedReceiptUrl.value || null,
     notes: newTx.value.notes || null,
+    installments,
     userId: newTx.value.userId || undefined
   })
 
@@ -959,6 +1013,7 @@ const saveTransaction = async () => {
       toAccountId: newTx.value.type === 'transfer' ? newTx.value.toAccountId : null,
       receiptUrl: uploadedReceiptUrl.value || null,
       notes: newTx.value.notes || null,
+      installments,
       userId: newTx.value.userId || undefined
     })
     closeAddModal()
@@ -978,6 +1033,7 @@ const openEditModal = (tx: any) => {
     toAccountId: tx.toAccountId || '',
     categoryId: tx.categoryId || '',
     amount: Math.abs(tx.amount),
+    installments: tx.installments || 1,
     date: tx.date instanceof Date 
       ? tx.date.toISOString().substring(0, 10) 
       : new Date(tx.date).toISOString().substring(0, 10),
@@ -1000,6 +1056,7 @@ const closeEditModal = () => {
     toAccountId: '',
     categoryId: '',
     amount: null,
+    installments: 1,
     date: new Date().toISOString().substring(0, 10),
     description: '',
     notes: '',
@@ -1010,6 +1067,7 @@ const closeEditModal = () => {
 
 const saveEditedTransaction = async () => {
   const parsedAmount = Number(editTx.value.amount || 0)
+  const installments = isEditCreditExpense.value ? Number(editTx.value.installments || 1) : 1
   let finalAmount = parsedAmount
   if (editTx.value.type === 'expense') {
     finalAmount = -Math.abs(parsedAmount)
@@ -1028,6 +1086,7 @@ const saveEditedTransaction = async () => {
     toAccountId: editTx.value.type === 'transfer' ? editTx.value.toAccountId : null,
     receiptUrl: editUploadedReceiptUrl.value || null,
     notes: editTx.value.notes || null,
+    installments,
     userId: editTx.value.userId || undefined
   })
 
@@ -1048,6 +1107,7 @@ const saveEditedTransaction = async () => {
       toAccountId: editTx.value.type === 'transfer' ? editTx.value.toAccountId : null,
       receiptUrl: editUploadedReceiptUrl.value || null,
       notes: editTx.value.notes || null,
+      installments,
       userId: editTx.value.userId || undefined
     })
     closeEditModal()

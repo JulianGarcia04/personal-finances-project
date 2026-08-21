@@ -88,7 +88,7 @@
         <div class="glass-panel rounded-2xl p-4 sm:p-6 relative overflow-hidden group border border-white/5 flex flex-col justify-between">
           <div>
             <div class="absolute top-0 right-0 w-24 h-24 bg-accent-rose/5 rounded-full blur-xl pointer-events-none"></div>
-            <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Gastos del Mes</span>
+            <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Gastos imputados del Mes</span>
             <div class="flex items-end gap-2 mt-2">
               <h4 class="font-display font-bold text-2xl text-accent-rose truncate">
                 {{ formatPrimaryCurrency(monthlyExpenses) }}
@@ -98,6 +98,7 @@
               </span>
             </div>
             <span class="text-[10px] text-text-muted mt-1 block">vs mes anterior ({{ formatPrimaryCurrency(expensesData.previous) }})</span>
+            <span class="text-[10px] text-text-secondary mt-2 block">Compras registradas: {{ formatPrimaryCurrency(monthlyPurchaseTotal) }} total</span>
           </div>
           
           <div v-if="topBleeder" class="mt-4 pt-3 border-t border-white/5">
@@ -324,6 +325,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useGoalsStore } from '@/stores/goalsStore'
 import { AccountType } from '@/types'
+import { expenseAmountForMonth } from '@/lib/installments'
 import { 
   Plus as PlusIcon, 
   Sparkles as SparklesIcon,
@@ -398,8 +400,14 @@ const getMoMData = (type: 'income' | 'expense') => {
   transactionsStore.transactions.forEach(t => {
     if (t.type === type) {
       const m = t.date.getMonth(), y = t.date.getFullYear()
-      if (m === thisMonth && y === thisYear) current += convert(Math.abs(t.amount), t.currency)
-      else if (m === lastMonth && y === lastMonthYear) previous += convert(Math.abs(t.amount), t.currency)
+      if (type === 'expense') {
+        current += convert(expenseAmountForMonth(t, thisYear, thisMonth), t.currency)
+        previous += convert(expenseAmountForMonth(t, lastMonthYear, lastMonth), t.currency)
+      } else if (m === thisMonth && y === thisYear) {
+        current += convert(Math.abs(t.amount), t.currency)
+      } else if (m === lastMonth && y === lastMonthYear) {
+        previous += convert(Math.abs(t.amount), t.currency)
+      }
     }
   })
   
@@ -414,6 +422,16 @@ const monthlyIncome = computed(() => incomeData.value.current)
 // Gastos del mes actual y comparativa
 const expensesData = computed(() => getMoMData('expense'))
 const monthlyExpenses = computed(() => expensesData.value.current)
+
+const monthlyPurchaseTotal = computed(() => {
+  const now = new Date()
+  return transactionsStore.transactions.reduce((total, t) => {
+    if (t.type !== 'expense' || t.date.getMonth() !== now.getMonth() || t.date.getFullYear() !== now.getFullYear()) {
+      return total
+    }
+    return total + convert(Math.abs(t.amount), t.currency)
+  }, 0)
+})
 
 // ponytail: Runway y Liquidez
 const liquidityDays = computed(() => {
@@ -438,10 +456,12 @@ const memberExpenses = computed(() => {
   const totals: Record<string, number> = {}
   
   transactionsStore.transactions.forEach(t => {
-    if (t.type === 'expense' && t.date.getMonth() === thisMonth && t.date.getFullYear() === thisYear) {
+    if (t.type === 'expense') {
+      const amount = expenseAmountForMonth(t, thisYear, thisMonth)
+      if (amount === 0) return
       const uid = t.userId || authStore.user?.uid || 'unknown'
       if (!totals[uid]) totals[uid] = 0
-      totals[uid] += convert(Math.abs(t.amount), t.currency)
+      totals[uid] += convert(amount, t.currency)
     }
   })
   
@@ -516,16 +536,14 @@ const goalProgress = computed(() =>
 // Agrupación de gastos por categoría para el gráfico de dona
 const expensesByCategory = computed(() => {
   const now = new Date()
-  const currentMonthExpenses = transactionsStore.transactions.filter(
-    t => t.type === 'expense' && t.date.getMonth() === now.getMonth() && t.date.getFullYear() === now.getFullYear()
-  )
+  const currentMonthExpenses = transactionsStore.transactions.filter(t => t.type === 'expense')
 
   const groups: Record<string, number> = {}
   currentMonthExpenses.forEach(t => {
     const cat = getCategory(t.categoryId)
     const name = cat ? cat.name : 'Otros'
     if (!groups[name]) groups[name] = 0
-    groups[name] += convert(Math.abs(t.amount), t.currency)
+    groups[name] += convert(expenseAmountForMonth(t, now.getFullYear(), now.getMonth()), t.currency)
   })
   return groups
 })
@@ -600,11 +618,13 @@ const renderCharts = () => {
     }
 
     transactionsStore.transactions.forEach(t => {
-      const txDate = t.date
-      const match = last6Months.find(m => m.month === txDate.getMonth() && m.year === txDate.getFullYear())
-      if (match) {
-        if (t.type === 'income') match.income += convert(Math.abs(t.amount), t.currency)
-        if (t.type === 'expense') match.expense += convert(Math.abs(t.amount), t.currency)
+      if (t.type === 'income') {
+        const match = last6Months.find(m => m.month === t.date.getMonth() && m.year === t.date.getFullYear())
+        if (match) match.income += convert(Math.abs(t.amount), t.currency)
+      } else if (t.type === 'expense') {
+        last6Months.forEach(month => {
+          month.expense += convert(expenseAmountForMonth(t, month.year, month.month), t.currency)
+        })
       }
     })
 

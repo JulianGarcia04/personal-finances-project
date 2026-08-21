@@ -4,6 +4,7 @@ import { useAccountsStore } from './accountsStore'
 import { useAuthStore } from './authStore'
 import { Transaction, Category, TransactionType } from '@/types'
 import { planMirror, planSettlement } from '@/lib/mirror'
+import { expenseAmountForDate, getInstallmentCount } from '@/lib/installments'
 import { 
   collection, 
   query, 
@@ -92,9 +93,10 @@ export const useTransactionsStore = defineStore('transactions', {
       const result: Record<string, number> = {}
       state.transactions.forEach(t => {
         if (t.type !== 'expense' || !t.categoryId) return
-        if (t.date.getMonth() !== now.getMonth() || t.date.getFullYear() !== now.getFullYear()) return
-        const amount = convert ? convert(Math.abs(t.amount), t.currency) : Math.abs(t.amount)
-        result[t.categoryId] = (result[t.categoryId] || 0) + amount
+        const amount = expenseAmountForDate(t, now)
+        if (amount === 0) return
+        const convertedAmount = convert ? convert(amount, t.currency) : amount
+        result[t.categoryId] = (result[t.categoryId] || 0) + convertedAmount
       })
       return result
     }
@@ -208,7 +210,7 @@ export const useTransactionsStore = defineStore('transactions', {
     },
 
     // 3. Crear una nueva Transacción
-    async addTransaction({ accountId, amount, description, categoryId, date, type, toAccountId = null, receiptUrl = null, notes = null, userId }: {
+    async addTransaction({ accountId, amount, description, categoryId, date, type, toAccountId = null, receiptUrl = null, notes = null, installments = 1, userId }: {
       accountId: string;
       amount: number;
       description: string;
@@ -218,6 +220,7 @@ export const useTransactionsStore = defineStore('transactions', {
       toAccountId?: string | null;
       receiptUrl?: string | null;
       notes?: string | null;
+      installments?: number | null;
       userId?: string;
     }): Promise<Transaction> {
       const user = auth.currentUser
@@ -232,12 +235,15 @@ export const useTransactionsStore = defineStore('transactions', {
       // Cuenta puente: un gasto contra ella se replica solo en el workspace espejo.
       // Solo gastos: la transferencia de liquidación no debe replicarse.
       if (type === 'expense' && account.mirror) {
-        return this.addMirroredExpense({ accountId, amount, description, categoryId, date, receiptUrl, notes, userId })
+        return this.addMirroredExpense({ accountId, amount, description, categoryId, date, receiptUrl, notes, installments, userId })
       }
 
       this.loading = true
       try {
         const transactionDate = date instanceof Date ? date : new Date(date)
+        const installmentCount = type === 'expense' && account.type === 'credit'
+          ? getInstallmentCount(installments)
+          : 1
         const newTx = {
           workspaceId,
           userId: userId || user.uid,
@@ -250,6 +256,7 @@ export const useTransactionsStore = defineStore('transactions', {
           toAccountId,
           receiptUrl,
           notes,
+          installments: installmentCount,
           currency: account.currency || 'USD',
           createdAt: new Date()
         }
@@ -286,7 +293,7 @@ export const useTransactionsStore = defineStore('transactions', {
     // Escribe el gasto en este workspace + la transferencia espejo en el otro.
     // Los 2 documentos y los 3 saldos van en un solo writeBatch: o entra todo o nada,
     // así no queda una pata huérfana en un workspace que no estás mirando.
-    async addMirroredExpense({ accountId, amount, description, categoryId, date, receiptUrl = null, notes = null, userId }: {
+    async addMirroredExpense({ accountId, amount, description, categoryId, date, receiptUrl = null, notes = null, installments = 1, userId }: {
       accountId: string;
       amount: number;
       description: string;
@@ -294,6 +301,7 @@ export const useTransactionsStore = defineStore('transactions', {
       date: Date;
       receiptUrl?: string | null;
       notes?: string | null;
+      installments?: number | null;
       userId?: string;
     }): Promise<Transaction> {
       const user = auth.currentUser
@@ -331,6 +339,7 @@ export const useTransactionsStore = defineStore('transactions', {
         })
 
         const transactionDate = date instanceof Date ? date : new Date(date)
+        const installmentCount = bridge.type === 'credit' ? getInstallmentCount(installments) : 1
         // IDs por adelantado para que cada pata apunte a su gemela desde el inicio.
         const mainRef = doc(collection(db, 'transactions'))
         const mirrorRef = doc(collection(db, 'transactions'))
@@ -348,6 +357,7 @@ export const useTransactionsStore = defineStore('transactions', {
           toAccountId: null,
           receiptUrl,
           notes,
+          installments: installmentCount,
           mirrorOf: mirrorRef.id,
           currency: bridge.currency || 'USD',
           createdAt: new Date()
@@ -664,6 +674,7 @@ export const useTransactionsStore = defineStore('transactions', {
       toAccountId?: string | null;
       receiptUrl?: string | null;
       notes?: string | null;
+      installments?: number | null;
       userId?: string;
     }): Promise<Transaction> {
       const user = auth.currentUser
@@ -685,6 +696,9 @@ export const useTransactionsStore = defineStore('transactions', {
         const transactionDate = updates.date instanceof Date ? updates.date : new Date(updates.date)
         const account = accountsStore.getAccountById(updates.accountId)
         if (!account) throw new Error('Cuenta origen no encontrada')
+        const installmentCount = updates.type === 'expense' && account.type === 'credit'
+          ? getInstallmentCount(updates.installments)
+          : 1
 
         // 1. Revertir balances de las cuentas antiguas
         if (oldTx.type === 'transfer' && oldTx.toAccountId) {
@@ -714,6 +728,7 @@ export const useTransactionsStore = defineStore('transactions', {
           toAccountId: updates.type === 'transfer' ? updates.toAccountId : null,
           receiptUrl: updates.receiptUrl,
           notes: updates.notes ?? null,
+          installments: installmentCount,
           userId: updates.userId || oldTx.userId,
           currency: account.currency || 'USD',
         }

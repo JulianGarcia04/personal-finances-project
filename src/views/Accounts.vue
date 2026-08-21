@@ -81,6 +81,10 @@
             <span class="truncate">Puente → {{ mirrorWorkspaceName(account) }}</span>
           </p>
           <p v-else class="text-xs text-text-secondary uppercase tracking-wide mt-1">{{ formatType(account.type) }}</p>
+          <div v-if="account.type === 'credit'" class="flex items-center gap-3 text-[10px] text-text-muted mt-3">
+            <span>Corte: <strong class="text-text-secondary">{{ account.statementClosingDay ? `día ${account.statementClosingDay}` : '—' }}</strong></span>
+            <span>Pago: <strong class="text-text-secondary">{{ account.paymentDueDay ? `día ${account.paymentDueDay}` : '—' }}</strong></span>
+          </div>
         </div>
 
         <!-- Card Bottom Details -->
@@ -198,6 +202,36 @@
             </div>
           </div>
 
+          <div v-if="newAcc.type === 'credit'" class="space-y-2 animate-fade-in">
+            <div class="grid grid-cols-2 gap-4">
+              <div class="space-y-1">
+                <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Día de corte</label>
+                <input
+                  v-model.number="newAcc.statementClosingDay"
+                  type="number"
+                  min="1"
+                  max="31"
+                  step="1"
+                  placeholder="Ej. 15"
+                  class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                />
+              </div>
+              <div class="space-y-1">
+                <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Día límite de pago</label>
+                <input
+                  v-model.number="newAcc.paymentDueDay"
+                  type="number"
+                  min="1"
+                  max="31"
+                  step="1"
+                  placeholder="Ej. 30"
+                  class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                />
+              </div>
+            </div>
+            <p class="text-[10px] text-text-muted">Se repiten cada mes. Son opcionales.</p>
+          </div>
+
           <!-- Buttons -->
           <div class="flex space-x-3 pt-4">
             <button 
@@ -278,8 +312,38 @@
               v-model.number="editAcc.limit"
               type="number"
               step="any"
-              class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
-            />
+            class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+          />
+          </div>
+
+          <div v-if="editAcc.type === 'credit'" class="space-y-2 animate-fade-in">
+            <div class="grid grid-cols-2 gap-4">
+              <div class="space-y-1">
+                <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Día de corte</label>
+                <input
+                  v-model.number="editAcc.statementClosingDay"
+                  type="number"
+                  min="1"
+                  max="31"
+                  step="1"
+                  placeholder="Ej. 15"
+                  class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                />
+              </div>
+              <div class="space-y-1">
+                <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Día límite de pago</label>
+                <input
+                  v-model.number="editAcc.paymentDueDay"
+                  type="number"
+                  min="1"
+                  max="31"
+                  step="1"
+                  placeholder="Ej. 30"
+                  class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                />
+              </div>
+            </div>
+            <p class="text-[10px] text-text-muted">Se repiten cada mes. Son opcionales.</p>
           </div>
 
           <!-- Espejo entre workspaces (cuenta puente) -->
@@ -512,12 +576,16 @@ const newAcc = ref<{
   balance: number;
   limit: number;
   currency: string;
+  statementClosingDay: number | null;
+  paymentDueDay: number | null;
 }>({
   name: '',
   type: 'savings',
   balance: 0,
   limit: 0,
-  currency: 'COP'
+  currency: 'COP',
+  statementClosingDay: null,
+  paymentDueDay: null
 })
 
 onMounted(async () => {
@@ -587,7 +655,9 @@ const closeAddModal = () => {
     type: 'savings',
     balance: 0,
     limit: 0,
-    currency: 'COP'
+    currency: 'COP',
+    statementClosingDay: null,
+    paymentDueDay: null
   }
 }
 
@@ -598,7 +668,9 @@ const saveAccount = async () => {
     type: newAcc.value.type,
     balance: newAcc.value.balance,
     limit: newAcc.value.limit,
-    currency: newAcc.value.currency.toUpperCase()
+    currency: newAcc.value.currency.toUpperCase(),
+    statementClosingDay: newAcc.value.statementClosingDay || null,
+    paymentDueDay: newAcc.value.paymentDueDay || null
   })
 
   if (!validation.success) {
@@ -613,7 +685,9 @@ const saveAccount = async () => {
       type: newAcc.value.type,
       balance: newAcc.value.balance,
       limit: newAcc.value.limit,
-      currency: newAcc.value.currency.toUpperCase()
+      currency: newAcc.value.currency.toUpperCase(),
+      statementClosingDay: newAcc.value.statementClosingDay || null,
+      paymentDueDay: newAcc.value.paymentDueDay || null
     })
     closeAddModal()
   } catch (err) {
@@ -628,7 +702,9 @@ const editAcc = ref<{
   type: AccountType;
   limit: number;
   currency: string;
-}>({ name: '', type: 'savings', limit: 0, currency: 'COP' })
+  statementClosingDay: number | null;
+  paymentDueDay: number | null;
+}>({ name: '', type: 'savings', limit: 0, currency: 'COP', statementClosingDay: null, paymentDueDay: null })
 const editingAccountId = ref('')
 
 const openEditModal = (account: Account) => {
@@ -637,7 +713,9 @@ const openEditModal = (account: Account) => {
     name: account.name,
     type: account.type,
     limit: account.limit,
-    currency: account.currency
+    currency: account.currency,
+    statementClosingDay: account.statementClosingDay ?? null,
+    paymentDueDay: account.paymentDueDay ?? null
   }
   editMirror.value = account.mirror ? { ...account.mirror } : emptyMirror()
   mirrorAccounts.value = []
@@ -648,9 +726,11 @@ const openEditModal = (account: Account) => {
 const saveEditedAccount = async () => {
   const currency = editAcc.value.currency.toUpperCase()
   // Validar con el mismo schema (balance queda por fuera, no se edita)
-  const validation = AccountSchema.pick({ name: true, type: true, limit: true, currency: true }).safeParse({
+  const validation = AccountSchema.pick({ name: true, type: true, limit: true, currency: true, statementClosingDay: true, paymentDueDay: true }).safeParse({
     ...editAcc.value,
-    currency
+    currency,
+    statementClosingDay: editAcc.value.statementClosingDay || null,
+    paymentDueDay: editAcc.value.paymentDueDay || null
   })
   if (!validation.success) {
     alert(validation.error.errors[0].message)
@@ -671,7 +751,12 @@ const saveEditedAccount = async () => {
 
   loading.value = true
   try {
-    await accountsStore.updateAccount(editingAccountId.value, { ...editAcc.value, currency })
+    await accountsStore.updateAccount(editingAccountId.value, {
+      ...editAcc.value,
+      currency,
+      statementClosingDay: editAcc.value.statementClosingDay || null,
+      paymentDueDay: editAcc.value.paymentDueDay || null
+    })
     await accountsStore.setAccountMirror(
       editingAccountId.value,
       workspaceId ? { workspaceId, sourceAccountId, accountId } : null

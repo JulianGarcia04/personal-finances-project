@@ -43,6 +43,9 @@ export interface Account {
   balance: number;
   limit: number;
   currency: string;
+  // Recurring credit-card cycle days. Null/undefined keeps legacy accounts valid.
+  statementClosingDay?: number | null;
+  paymentDueDay?: number | null;
   mirror?: AccountMirror | null;
   createdAt: Date;
 }
@@ -63,6 +66,8 @@ export interface Transaction {
   statementImportId?: string | null;
   receiptUrl?: string | null;
   notes?: string | null;
+  // Full purchase stays in amount; KPIs distribute it across this many months.
+  installments?: number | null;
   // ID de la pata gemela en el otro workspace (gastos espejo). Borrar una borra la otra.
   mirrorOf?: string | null;
   currency: string;
@@ -126,4 +131,3 @@ export interface Chat {
   createdAt: any;
   updatedAt: any;
 }
-
