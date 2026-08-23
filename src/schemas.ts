@@ -31,7 +31,7 @@ export const TransactionSchema = z.object({
     required_error: 'La fecha es requerida',
     invalid_type_error: 'Fecha inválida'
   }),
-  type: z.enum(['income', 'expense', 'transfer']),
+  type: z.enum(['income', 'expense', 'transfer', 'loan', 'loan_payment']),
   toAccountId: z.string().nullable().optional(),
   receiptUrl: z.string().nullable().optional(),
   notes: z.string().max(500, 'Las notas no pueden exceder 500 caracteres').nullable().optional(),

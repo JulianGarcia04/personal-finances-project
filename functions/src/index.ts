@@ -344,6 +344,12 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
     const userData = userDoc.exists ? userDoc.data() : null;
     const userCountry = userData?.country || "CO";
     const userCurrency = userData?.currency || "COP";
+    // El agente opera sobre el workspace activo del usuario (mismo scope que el frontend).
+    const activeWorkspaceId = (userData?.activeWorkspaceId as string) || null;
+    if (!activeWorkspaceId) {
+      res.status(400).json({ error: "No hay un workspace activo configurado para el usuario." });
+      return;
+    }
 
     // Obtener API Key activa
     let activeApiKey: string | undefined = undefined;
@@ -380,7 +386,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
         outputSchema: z.any(),
       },
       async () => {
-        const snapshot = await db.collection('accounts').where('userId', '==', userId).get();
+        const snapshot = await db.collection('accounts').where('workspaceId', '==', activeWorkspaceId).get();
         const accounts: any[] = [];
         snapshot.forEach(docSnap => {
           accounts.push({ id: docSnap.id, ...docSnap.data() });
@@ -407,6 +413,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       async ({ name, type, balance, limit, currency, statementClosingDay, paymentDueDay }) => {
         const newAccountRef = db.collection('accounts').doc();
         const newAccount = {
+          workspaceId: activeWorkspaceId,
           userId,
           name,
           type,
@@ -428,13 +435,13 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
         description: 'Obtiene la lista de transacciones del usuario, con posibilidad de filtrar por cuenta o tipo.',
         inputSchema: z.object({
           accountId: z.string().optional().describe('Filtrar por una cuenta específica ID'),
-          type: z.enum(['income', 'expense', 'transfer']).optional().describe('Filtrar por tipo (ingreso, egreso o transferencia)'),
+          type: z.enum(['income', 'expense', 'transfer', 'loan', 'loan_payment']).optional().describe('Filtrar por tipo (ingreso, egreso, transferencia, préstamo dado o pago de préstamo recibido)'),
           limit: z.number().optional().describe('Límite de resultados a retornar (por defecto 30, máximo 100)'),
         }),
         outputSchema: z.any(),
       },
       async ({ accountId, type, limit }) => {
-        let queryRef: admin.firestore.Query = db.collection('transactions').where('userId', '==', userId);
+        let queryRef: admin.firestore.Query = db.collection('transactions').where('workspaceId', '==', activeWorkspaceId);
         if (accountId) {
           queryRef = queryRef.where('accountId', '==', accountId);
         }
@@ -459,13 +466,13 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
     const createTransactionTool = ai.defineTool(
       {
         name: 'createTransaction',
-        description: 'Registra un movimiento de dinero (ingreso, gasto o transferencia interna entre cuentas). Actualiza automáticamente el saldo de las cuentas.',
+        description: 'Registra un movimiento de dinero (ingreso, gasto, transferencia interna entre cuentas, préstamo dado a alguien o pago de préstamo recibido). Actualiza automáticamente el saldo de las cuentas.',
         inputSchema: z.object({
           accountId: z.string().describe('El ID de la cuenta de origen'),
-          amount: z.number().describe('El monto de la transacción (positivo para ingresos, negativo para gastos)'),
+          amount: z.number().describe('El monto de la transacción (positivo para ingresos y pagos de préstamo recibidos, negativo para gastos y préstamos dados)'),
           description: z.string().describe('La descripción detallada de la transacción'),
-          categoryId: z.string().optional().describe('El ID de la categoría (vacío para transferencias)'),
-          type: z.enum(['income', 'expense', 'transfer']).describe('El tipo de movimiento'),
+          categoryId: z.string().optional().describe('El ID de la categoría (vacío para transferencias y préstamos)'),
+          type: z.enum(['income', 'expense', 'transfer', 'loan', 'loan_payment']).describe('El tipo de movimiento'),
           toAccountId: z.string().optional().describe('El ID de la cuenta destino (requerido únicamente para transferencias)'),
           date: z.string().optional().describe('Fecha en formato YYYY-MM-DD (por defecto el día de hoy)'),
           installments: z.number().int().min(1).max(60).optional().describe('Número de cuotas para una compra en tarjeta de crédito'),
@@ -478,7 +485,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
           const accountDoc = await transaction.get(accountRef);
           if (!accountDoc.exists) throw new Error("La cuenta origen no existe.");
           const accountData = accountDoc.data();
-          if (!accountData || accountData.userId !== userId) throw new Error("Acceso denegado a la cuenta origen.");
+          if (!accountData || accountData.workspaceId !== activeWorkspaceId) throw new Error("Acceso denegado a la cuenta origen.");
 
           let toAccountData: any = null;
           let toAccountRef: admin.firestore.DocumentReference | null = null;
@@ -488,17 +495,18 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
             const toAccountDoc = await transaction.get(toAccountRef);
             if (!toAccountDoc.exists) throw new Error("La cuenta destino no existe.");
             toAccountData = toAccountDoc.data();
-            if (!toAccountData || toAccountData.userId !== userId) throw new Error("Acceso denegado a la cuenta destino.");
+            if (!toAccountData || toAccountData.workspaceId !== activeWorkspaceId) throw new Error("Acceso denegado a la cuenta destino.");
           }
 
           const txDate = date ? new Date(date) : new Date();
           const newTxRef = db.collection('transactions').doc();
           const newTx = {
+            workspaceId: activeWorkspaceId,
             userId,
             accountId,
             amount: Number(amount),
             description,
-            categoryId: categoryId || "",
+            categoryId: type === 'expense' || type === 'income' ? categoryId || "" : "",
             date: admin.firestore.Timestamp.fromDate(txDate),
             type,
             toAccountId: toAccountId || null,
@@ -537,13 +545,13 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
           const txDoc = await transaction.get(txRef);
           if (!txDoc.exists) throw new Error("La transacción no existe.");
           const txData = txDoc.data();
-          if (!txData || txData.userId !== userId) throw new Error("Acceso denegado.");
+          if (!txData || txData.workspaceId !== activeWorkspaceId) throw new Error("Acceso denegado.");
 
           const accountRef = db.collection('accounts').doc(txData.accountId);
           const accountDoc = await transaction.get(accountRef);
           if (!accountDoc.exists) throw new Error("La cuenta asociada no existe.");
           const accountData = accountDoc.data();
-          if (!accountData || accountData.userId !== userId) throw new Error("Acceso denegado o cuenta corrupta.");
+          if (!accountData || accountData.workspaceId !== activeWorkspaceId) throw new Error("Acceso denegado o cuenta corrupta.");
 
           let toAccountRef: admin.firestore.DocumentReference | null = null;
           let toAccountData: any = null;
@@ -578,13 +586,12 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
         outputSchema: z.any(),
       },
       async () => {
-        const snapshot = await db.collection('categories').get();
+        // Mismo scope que el frontend: categorías del workspace activo (las globales
+        // con workspaceId null no se usan; consultarlas aquí es lo que duplicaba).
+        const snapshot = await db.collection('categories').where('workspaceId', '==', activeWorkspaceId).get();
         const categories: any[] = [];
         snapshot.forEach(docSnap => {
-          const data = docSnap.data();
-          if (data.userId === userId || data.userId === null) {
-            categories.push({ id: docSnap.id, ...data });
-          }
+          categories.push({ id: docSnap.id, ...docSnap.data() });
         });
         return categories;
       }
@@ -598,7 +605,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
         outputSchema: z.any(),
       },
       async () => {
-        const snapshot = await db.collection('goals').where('userId', '==', userId).get();
+        const snapshot = await db.collection('goals').where('workspaceId', '==', activeWorkspaceId).get();
         const goals: any[] = [];
         snapshot.forEach(docSnap => {
           const data = docSnap.data();
@@ -630,6 +637,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
         const newGoalRef = db.collection('goals').doc();
         const parsedDate = new Date(targetDate);
         const newGoal = {
+          workspaceId: activeWorkspaceId,
           userId,
           name,
           targetAmount: Number(targetAmount),
@@ -658,7 +666,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
         const goalDoc = await goalRef.get();
         if (!goalDoc.exists) throw new Error("La meta de ahorro no existe.");
         const goalData = goalDoc.data();
-        if (!goalData || goalData.userId !== userId) throw new Error("Acceso denegado a la meta.");
+        if (!goalData || goalData.workspaceId !== activeWorkspaceId) throw new Error("Acceso denegado a la meta.");
 
         await goalRef.update({
           currentAmount: Number(currentAmount)
@@ -682,7 +690,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
         try {
           const queryVector = await embedText(activeApiKey, queryText);
 
-          const snapshot = await db.collection('transactions').where('userId', '==', userId).get();
+          const snapshot = await db.collection('transactions').where('workspaceId', '==', activeWorkspaceId).get();
           const matches: any[] = [];
           snapshot.forEach(docSnap => {
             const data = docSnap.data();
@@ -718,7 +726,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       },
       async () => {
         if (!activeApiKey) return { indexedCount: 0, error: "API Key no disponible." };
-        const snapshot = await db.collection('transactions').where('userId', '==', userId).get();
+        const snapshot = await db.collection('transactions').where('workspaceId', '==', activeWorkspaceId).get();
         let count = 0;
 
         for (const docSnap of snapshot.docs) {
@@ -754,12 +762,6 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       }
     );
 
-    // Helper: resolver el workspace activo del usuario (los presupuestos viven en el doc del workspace)
-    const getActiveWorkspaceId = async (): Promise<string | null> => {
-      const userDoc = await db.collection('users').doc(userId).get();
-      return userDoc.data()?.activeWorkspaceId || null;
-    };
-
     const getExpensesByCategoryTool = ai.defineTool(
       {
         name: 'getExpensesByCategory',
@@ -779,13 +781,13 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
         }));
 
         const snapshot = await db.collection('transactions')
-          .where('userId', '==', userId)
+          .where('workspaceId', '==', activeWorkspaceId)
           .where('type', '==', 'expense')
           .orderBy('date', 'desc')
           .get();
 
-        // Nombres de categorías para que el modelo no trabaje con IDs crudos
-        const catsSnapshot = await db.collection('categories').get();
+        // Nombres de categorías del workspace activo (no de toda la colección)
+        const catsSnapshot = await db.collection('categories').where('workspaceId', '==', activeWorkspaceId).get();
         const catNames: Record<string, string> = {};
         catsSnapshot.forEach(docSnap => { catNames[docSnap.id] = docSnap.data().name || 'Sin nombre'; });
 
@@ -824,10 +826,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
         outputSchema: z.any(),
       },
       async ({ budgets }) => {
-        const workspaceId = await getActiveWorkspaceId();
-        if (!workspaceId) throw new Error("No se encontró un workspace activo para el usuario.");
-
-        const wsRef = db.collection('workspaces').doc(workspaceId);
+        const wsRef = db.collection('workspaces').doc(activeWorkspaceId);
         const wsDoc = await wsRef.get();
         if (!wsDoc.exists) throw new Error("El workspace no existe.");
 
@@ -866,9 +865,11 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       - Las cifras monetarias y cálculos financieros del usuario por defecto deben entenderse en la moneda principal: ${userCurrency}.
       
       Tienes acceso a la base de datos a través de tus herramientas (tools).
+      Todas las operaciones corresponden al workspace activo del usuario.
       Puedes:
       - Listar, crear y actualizar cuentas financieras.
       - Listar, crear y eliminar transacciones de ingresos, egresos y transferencias entre cuentas.
+      - Registrar préstamos: si el usuario presta dinero a alguien, usa type "loan" (monto negativo, sale de la cuenta); cuando se lo pagan, usa type "loan_payment" (monto positivo). Los préstamos no cuentan como gasto ni como ingreso en los KPIs.
       - Listar, crear y aportar a objetivos de ahorro (goals).
       - Buscar transacciones viejas semánticamente a través de embeddings (semanticSearchTransactions).
       - Analizar gastos por categoría de los últimos meses (getExpensesByCategory) y guardar presupuestos mensuales por categoría (saveCategoryBudgets).

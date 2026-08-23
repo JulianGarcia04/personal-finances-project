@@ -718,11 +718,13 @@ export const useTransactionsStore = defineStore('transactions', {
         }
 
         // 3. Preparar documento de actualización
+        // Préstamos y transferencias no llevan categoría ni cuenta destino
+        const neutral = updates.type !== 'income' && updates.type !== 'expense'
         const updatedFields = {
           accountId: updates.accountId,
           amount: newAmount,
           description: updates.description,
-          categoryId: updates.type === 'transfer' ? '' : updates.categoryId,
+          categoryId: neutral ? '' : updates.categoryId,
           date: Timestamp.fromDate(transactionDate),
           type: updates.type,
           toAccountId: updates.type === 'transfer' ? updates.toAccountId : null,

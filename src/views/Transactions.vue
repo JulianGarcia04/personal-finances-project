@@ -15,6 +15,21 @@
       </button>
     </div>
 
+    <!-- Pending Loans Summary -->
+    <div v-if="Object.keys(pendingLoansByCurrency).length > 0" class="glass-panel rounded-2xl p-4 flex items-center gap-4">
+      <div class="p-2.5 rounded-xl bg-accent-violet/10 shrink-0">
+        <HandCoinsIcon class="w-5 h-5 text-accent-violet" />
+      </div>
+      <div class="min-w-0">
+        <p class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Préstamos pendientes por cobrar</p>
+        <p class="font-display font-bold text-lg text-text-primary">
+          <span v-for="(amt, curr) in pendingLoansByCurrency" :key="curr" class="mr-4">
+            {{ formatCurrency(amt, String(curr)) }}
+          </span>
+        </p>
+      </div>
+    </div>
+
     <!-- Filters Pane -->
     <div class="glass-panel rounded-2xl p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
       <!-- Search Input -->
@@ -67,6 +82,8 @@
           <option value="income">Ingreso</option>
           <option value="expense">Gasto</option>
           <option value="transfer">Transferencia</option>
+          <option value="loan">Préstamo</option>
+          <option value="loan_payment">Pago de préstamo</option>
         </select>
       </div>
 
@@ -330,26 +347,42 @@
         <form @submit.prevent="saveTransaction" class="space-y-4">
           <!-- Type Toggle -->
           <div class="grid grid-cols-3 gap-2 p-1 rounded-xl bg-slate-900/80 border border-border">
-            <button 
+            <button
               type="button"
               @click="newTx.type = 'expense'"
               :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', newTx.type === 'expense' ? 'bg-accent-rose/10 text-accent-rose border border-accent-rose/20' : 'text-text-secondary hover:text-text-primary']"
             >
               Gasto
             </button>
-            <button 
+            <button
               type="button"
               @click="newTx.type = 'income'"
               :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', newTx.type === 'income' ? 'bg-accent-emerald/10 text-accent-emerald border border-accent-emerald/20' : 'text-text-secondary hover:text-text-primary']"
             >
               Ingreso
             </button>
-            <button 
+            <button
               type="button"
               @click="newTx.type = 'transfer'"
               :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', newTx.type === 'transfer' ? 'bg-accent-amber/10 text-accent-amber border border-accent-amber/20' : 'text-text-secondary hover:text-text-primary']"
             >
               Transferencia
+            </button>
+            <button
+              type="button"
+              @click="newTx.type = 'loan'"
+              title="Dinero que le presto a alguien (sale de la cuenta, no cuenta como gasto)"
+              :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', newTx.type === 'loan' ? 'bg-accent-violet/10 text-accent-violet border border-accent-violet/20' : 'text-text-secondary hover:text-text-primary']"
+            >
+              Préstamo
+            </button>
+            <button
+              type="button"
+              @click="newTx.type = 'loan_payment'"
+              title="Me pagaron un préstamo (entra a la cuenta, no cuenta como ingreso)"
+              :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', newTx.type === 'loan_payment' ? 'bg-accent-violet/10 text-accent-violet border border-accent-violet/20' : 'text-text-secondary hover:text-text-primary']"
+            >
+              Pago Préstamo
             </button>
           </div>
 
@@ -387,9 +420,9 @@
             </div>
 
             <!-- Category (Expense/Income only) -->
-            <div v-else class="space-y-1">
+            <div v-else-if="newTx.type === 'expense' || newTx.type === 'income'" class="space-y-1">
               <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Categoría</label>
-              <select 
+              <select
                 v-model="newTx.categoryId"
                 required
                 class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
@@ -399,6 +432,16 @@
                   {{ cat.name }}
                 </option>
               </select>
+            </div>
+
+            <!-- Loans: hint instead of category -->
+            <div v-else class="space-y-1">
+              <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Préstamo</label>
+              <p class="text-[10px] text-text-muted px-1 py-2.5">
+                {{ newTx.type === 'loan'
+                  ? 'Indica a quién en la descripción (ej. "Préstamo a Juan"). Sale de la cuenta pero no cuenta como gasto.'
+                  : 'Registra en la descripción quién te pagó (ej. "Juan me pagó"). Entra a la cuenta pero no cuenta como ingreso.' }}
+              </p>
             </div>
           </div>
 
@@ -555,26 +598,42 @@
         <form @submit.prevent="saveEditedTransaction" class="space-y-4">
           <!-- Type Toggle -->
           <div class="grid grid-cols-3 gap-2 p-1 rounded-xl bg-slate-900/80 border border-border">
-            <button 
+            <button
               type="button"
               @click="editTx.type = 'expense'"
               :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', editTx.type === 'expense' ? 'bg-accent-rose/10 text-accent-rose border border-accent-rose/20' : 'text-text-secondary hover:text-text-primary']"
             >
               Gasto
             </button>
-            <button 
+            <button
               type="button"
               @click="editTx.type = 'income'"
               :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', editTx.type === 'income' ? 'bg-accent-emerald/10 text-accent-emerald border border-accent-emerald/20' : 'text-text-secondary hover:text-text-primary']"
             >
               Ingreso
             </button>
-            <button 
+            <button
               type="button"
               @click="editTx.type = 'transfer'"
               :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', editTx.type === 'transfer' ? 'bg-accent-amber/10 text-accent-amber border border-accent-amber/20' : 'text-text-secondary hover:text-text-primary']"
             >
               Transferencia
+            </button>
+            <button
+              type="button"
+              @click="editTx.type = 'loan'"
+              title="Dinero que le presto a alguien (sale de la cuenta, no cuenta como gasto)"
+              :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', editTx.type === 'loan' ? 'bg-accent-violet/10 text-accent-violet border border-accent-violet/20' : 'text-text-secondary hover:text-text-primary']"
+            >
+              Préstamo
+            </button>
+            <button
+              type="button"
+              @click="editTx.type = 'loan_payment'"
+              title="Me pagaron un préstamo (entra a la cuenta, no cuenta como ingreso)"
+              :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', editTx.type === 'loan_payment' ? 'bg-accent-violet/10 text-accent-violet border border-accent-violet/20' : 'text-text-secondary hover:text-text-primary']"
+            >
+              Pago Préstamo
             </button>
           </div>
 
@@ -612,9 +671,9 @@
             </div>
 
             <!-- Category (Expense/Income only) -->
-            <div v-else class="space-y-1">
+            <div v-else-if="editTx.type === 'expense' || editTx.type === 'income'" class="space-y-1">
               <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Categoría</label>
-              <select 
+              <select
                 v-model="editTx.categoryId"
                 required
                 class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
@@ -624,6 +683,16 @@
                   {{ cat.name }}
                 </option>
               </select>
+            </div>
+
+            <!-- Loans: hint instead of category -->
+            <div v-else class="space-y-1">
+              <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Préstamo</label>
+              <p class="text-[10px] text-text-muted px-1 py-2.5">
+                {{ editTx.type === 'loan'
+                  ? 'Indica a quién en la descripción (ej. "Préstamo a Juan"). Sale de la cuenta pero no cuenta como gasto.'
+                  : 'Registra en la descripción quién te pagó (ej. "Juan me pagó"). Entra a la cuenta pero no cuenta como ingreso.' }}
+              </p>
             </div>
           </div>
 
@@ -778,7 +847,8 @@ import {
   Pencil as PencilIcon,
   Utensils, Car, Film, Lightbulb, Heart, GraduationCap, TrendingUp, HelpCircle,
   ShoppingBag, Home, Gift, Coffee, Plane, DollarSign, PiggyBank, Smartphone,
-  Activity, Scissors, BookOpen, Wrench, Shield
+  Activity, Scissors, BookOpen, Wrench, Shield,
+  HandCoins as HandCoinsIcon
 } from 'lucide-vue-next'
 
 const accountsStore = useAccountsStore()
@@ -937,6 +1007,19 @@ const displayedTransactions = computed(() => {
   return transactionsStore.filteredTransactions(filters).slice(0, visibleCount.value)
 })
 
+// Préstamos pendientes por cobrar: |préstamos dados| - pagos recibidos, por moneda.
+// ponytail: agregado por moneda sin conversiones; ceros ocultos (préstamo ya cobrado)
+const pendingLoansByCurrency = computed(() => {
+  const totals: Record<string, number> = {}
+  for (const t of transactionsStore.transactions) {
+    if (t.type !== 'loan' && t.type !== 'loan_payment') continue
+    const curr = t.currency || getAccountCurrency(t.accountId)
+    const delta = t.type === 'loan' ? Math.abs(t.amount) : -Math.abs(t.amount)
+    totals[curr] = (totals[curr] || 0) + delta
+  }
+  return Object.fromEntries(Object.entries(totals).filter(([, v]) => Math.abs(v) > 0.005))
+})
+
 // Filtrar cuentas destino (transferencias) excluyendo la origen
 const availableDestinationAccounts = computed(() => {
   return accountsStore.accounts.filter(a => a.id !== newTx.value.accountId)
@@ -975,18 +1058,19 @@ const saveTransaction = async () => {
   const parsedAmount = Number(newTx.value.amount || 0)
   const installments = isNewCreditExpense.value ? Number(newTx.value.installments || 1) : 1
   let finalAmount = parsedAmount
-  if (newTx.value.type === 'expense') {
+  if (newTx.value.type === 'expense' || newTx.value.type === 'loan') {
     finalAmount = -Math.abs(parsedAmount)
-  } else if (newTx.value.type === 'income') {
+  } else {
     finalAmount = Math.abs(parsedAmount)
   }
+  const loanCategoryId = newTx.value.type === 'expense' || newTx.value.type === 'income' ? newTx.value.categoryId : ''
 
   // Zod Validation
   const validation = TransactionSchema.safeParse({
     accountId: newTx.value.accountId,
     amount: finalAmount,
     description: newTx.value.description,
-    categoryId: newTx.value.type === 'transfer' ? '' : newTx.value.categoryId,
+    categoryId: loanCategoryId,
     date: new Date(newTx.value.date + 'T12:00:00'),
     type: newTx.value.type,
     toAccountId: newTx.value.type === 'transfer' ? newTx.value.toAccountId : null,
@@ -1007,7 +1091,7 @@ const saveTransaction = async () => {
       accountId: newTx.value.accountId,
       amount: finalAmount,
       description: newTx.value.description,
-      categoryId: newTx.value.type === 'transfer' ? '' : newTx.value.categoryId,
+      categoryId: loanCategoryId,
       date: new Date(newTx.value.date + 'T12:00:00'),
       type: newTx.value.type,
       toAccountId: newTx.value.type === 'transfer' ? newTx.value.toAccountId : null,
@@ -1069,18 +1153,19 @@ const saveEditedTransaction = async () => {
   const parsedAmount = Number(editTx.value.amount || 0)
   const installments = isEditCreditExpense.value ? Number(editTx.value.installments || 1) : 1
   let finalAmount = parsedAmount
-  if (editTx.value.type === 'expense') {
+  if (editTx.value.type === 'expense' || editTx.value.type === 'loan') {
     finalAmount = -Math.abs(parsedAmount)
-  } else if (editTx.value.type === 'income') {
+  } else {
     finalAmount = Math.abs(parsedAmount)
   }
+  const loanCategoryId = editTx.value.type === 'expense' || editTx.value.type === 'income' ? editTx.value.categoryId : ''
 
   // Zod Validation
   const validation = TransactionSchema.safeParse({
     accountId: editTx.value.accountId,
     amount: finalAmount,
     description: editTx.value.description,
-    categoryId: editTx.value.type === 'transfer' ? '' : editTx.value.categoryId,
+    categoryId: loanCategoryId,
     date: new Date(editTx.value.date + 'T12:00:00'),
     type: editTx.value.type,
     toAccountId: editTx.value.type === 'transfer' ? editTx.value.toAccountId : null,
@@ -1101,7 +1186,7 @@ const saveEditedTransaction = async () => {
       accountId: editTx.value.accountId,
       amount: finalAmount,
       description: editTx.value.description,
-      categoryId: editTx.value.type === 'transfer' ? '' : editTx.value.categoryId,
+      categoryId: loanCategoryId,
       date: new Date(editTx.value.date + 'T12:00:00'),
       type: editTx.value.type,
       toAccountId: editTx.value.type === 'transfer' ? editTx.value.toAccountId : null,

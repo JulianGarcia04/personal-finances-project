@@ -50,7 +50,9 @@ export interface Account {
   createdAt: Date;
 }
 
-export type TransactionType = 'income' | 'expense' | 'transfer';
+// loan: plata que YO presto (sale de la cuenta, no es gasto).
+// loan_payment: plata que me pagan de un préstamo (entra, no es ingreso).
+export type TransactionType = 'income' | 'expense' | 'transfer' | 'loan' | 'loan_payment';
 
 export interface Transaction {
   id: string;
