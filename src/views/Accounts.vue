@@ -85,6 +85,11 @@
             <span>Corte: <strong class="text-text-secondary">{{ account.statementClosingDay ? `día ${account.statementClosingDay}` : '—' }}</strong></span>
             <span>Pago: <strong class="text-text-secondary">{{ account.paymentDueDay ? `día ${account.paymentDueDay}` : '—' }}</strong></span>
           </div>
+          <div v-if="account.type === 'credit' && (account.statementClosingDay || account.paymentDueDay)" class="flex flex-col gap-0.5 text-[10px] text-text-muted mt-1.5">
+            <span v-if="account.statementClosingDay">{{ closingDaysUntil(account) === 0 ? 'Corte hoy' : `Corte en ${closingDaysUntil(account)} días` }}</span>
+            <span v-if="account.paymentDueDay">{{ dueDaysUntil(account) === 0 ? 'Vence hoy' : `Vence en ${dueDaysUntil(account)} días` }}</span>
+            <span v-if="account.statementClosingDay">A pagar este corte: <strong class="text-text-secondary">{{ formatCurrency(cycleChargeAmount(account), account.currency) }}</strong></span>
+          </div>
         </div>
 
         <!-- Card Bottom Details -->
@@ -549,6 +554,7 @@ import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useAuthStore } from '@/stores/authStore'
 import { Account, AccountType } from '@/types'
 import { AccountSchema } from '@/schemas'
+import { getNextOccurrence, daysUntil, expenseAmountForCycle } from '@/lib/creditCycle'
 import {
   Plus as PlusIcon,
   Trash2 as TrashIcon,
@@ -821,6 +827,22 @@ const creditUtilization = (account: Account) => {
   if (account.type !== 'credit' || !account.limit || account.limit <= 0) return 0
   const used = account.balance < 0 ? -account.balance : 0
   return Math.round((used / account.limit) * 100)
+}
+
+// Días hasta el próximo corte / próxima fecha de pago (ciclo de facturación, no mes calendario)
+const closingDaysUntil = (account: Account) =>
+  account.statementClosingDay ? daysUntil(getNextOccurrence(account.statementClosingDay)) : 0
+
+const dueDaysUntil = (account: Account) =>
+  account.paymentDueDay ? daysUntil(getNextOccurrence(account.paymentDueDay)) : 0
+
+// Total a pagar en el próximo corte: suma las cuotas de este ciclo de facturación
+// para todas las transacciones de la cuenta.
+const cycleChargeAmount = (account: Account) => {
+  if (!account.statementClosingDay) return 0
+  return transactionsStore.transactions
+    .filter(t => t.accountId === account.id)
+    .reduce((sum, t) => sum + expenseAmountForCycle(t, account.statementClosingDay!), 0)
 }
 
 const handleDelete = async (id: string, name: string) => {

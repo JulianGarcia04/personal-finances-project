@@ -13,6 +13,14 @@ export const getInstallmentCount = (value?: number | null) => {
 export const getMonthlyInstallmentAmount = (amount: number, installments?: number | null) =>
   Math.abs(amount) / getInstallmentCount(installments)
 
+// Work in cents so the installments add up to the original purchase amount.
+export const prorateInstallmentCents = (totalAmount: number, installments: number, installmentIndex: number): number => {
+  const totalCents = Math.round(Math.abs(totalAmount) * 100)
+  const baseCents = Math.floor(totalCents / installments)
+  const remainderCents = totalCents % installments
+  return (baseCents + (installmentIndex < remainderCents ? 1 : 0)) / 100
+}
+
 export const expenseAmountForMonth = (
   transaction: InstallmentTransaction,
   year: number,
@@ -32,11 +40,7 @@ export const expenseAmountForMonth = (
 
   if (installmentIndex < 0 || installmentIndex >= installments) return 0
 
-  // Work in cents so the installments add up to the original purchase amount.
-  const totalCents = Math.round(Math.abs(transaction.amount) * 100)
-  const baseCents = Math.floor(totalCents / installments)
-  const remainderCents = totalCents % installments
-  return (baseCents + (installmentIndex < remainderCents ? 1 : 0)) / 100
+  return prorateInstallmentCents(transaction.amount, installments, installmentIndex)
 }
 
 export const expenseAmountForDate = (

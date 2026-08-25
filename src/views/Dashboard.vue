@@ -245,6 +245,35 @@
         </div>
       </div>
 
+      <!-- 2.6 Upcoming card payments (ciclo de facturación, no mes calendario) -->
+      <div v-if="upcomingCardPayments.length > 0" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
+        <div class="flex items-center justify-between">
+          <h4 class="font-display font-bold text-base text-text-primary">Próximos Pagos de Tarjeta</h4>
+          <router-link to="/accounts" class="text-xs text-accent-emerald font-semibold hover:underline">
+            Ver cuentas
+          </router-link>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <div
+            v-for="payment in upcomingCardPayments"
+            :key="payment.id"
+            class="flex items-center justify-between p-3 rounded-xl bg-white/[0.01] border border-white/5"
+          >
+            <div class="truncate pr-2">
+              <p class="text-sm font-medium text-text-primary truncate">{{ payment.name }}</p>
+              <p
+                :class="['text-[10px] mt-0.5', payment.daysLeft <= 3 ? 'text-accent-rose font-semibold' : payment.daysLeft <= 7 ? 'text-accent-amber' : 'text-text-muted']"
+              >
+                {{ payment.daysLeft <= 0 ? 'Vence hoy' : `Vence en ${payment.daysLeft} días` }}
+              </p>
+            </div>
+            <span v-if="payment.amount !== null" class="font-display font-semibold text-sm text-text-primary shrink-0">
+              {{ formatCurrency(payment.amount, payment.currency) }}
+            </span>
+          </div>
+        </div>
+      </div>
+
       <!-- 3. Recent Transactions & Quick Summary -->
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- Recent Transactions (List) -->
@@ -326,6 +355,7 @@ import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useGoalsStore } from '@/stores/goalsStore'
 import { AccountType } from '@/types'
 import { expenseAmountForMonth } from '@/lib/installments'
+import { getNextOccurrence, daysUntil, expenseAmountForCycle } from '@/lib/creditCycle'
 import { 
   Plus as PlusIcon, 
   Sparkles as SparklesIcon,
@@ -700,6 +730,31 @@ const getAccountIcon = (type: AccountType) => {
   if (type === 'cash') return CashIcon
   return BankIcon
 }
+
+// Próximos pagos de tarjeta: agregación por ciclo de facturación (no mes calendario),
+// ordenados por el vencimiento más cercano. Cuentas sin paymentDueDay configurado no aparecen.
+const upcomingCardPayments = computed(() => {
+  return accountsStore.accounts
+    .filter(acc => acc.type === 'credit' && acc.paymentDueDay)
+    .map(acc => {
+      const dueDate = getNextOccurrence(acc.paymentDueDay!)
+      // Sin statementClosingDay no se puede saber qué cae en el corte: se muestra
+      // el recordatorio de fecha sin monto (ver creditCycle.ts).
+      const amount = acc.statementClosingDay
+        ? transactionsStore.transactions
+            .filter(t => t.accountId === acc.id)
+            .reduce((sum, t) => sum + expenseAmountForCycle(t, acc.statementClosingDay!), 0)
+        : null
+      return {
+        id: acc.id,
+        name: acc.name,
+        currency: acc.currency,
+        daysLeft: daysUntil(dueDate),
+        amount
+      }
+    })
+    .sort((a, b) => a.daysLeft - b.daysLeft)
+})
 
 const formatDate = (dateVal: Date | string) => {
   if (!dateVal) return ''
