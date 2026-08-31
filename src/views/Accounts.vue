@@ -610,8 +610,8 @@ const mirrorWorkspaceName = (account: Account) =>
 // El saldo de un puente no es plata: es deuda. Se muestra en absoluto con etiqueta explícita.
 const balanceLabel = (account: Account) => {
   if (!account.mirror) return 'SALDO DISPONIBLE'
-  if (account.balance < 0) return 'TE DEBEN'
-  if (account.balance > 0) return 'DEBES'
+  if (account.balance < 0) return 'DEBES'
+  if (account.balance > 0) return 'TE DEBEN'
   return 'SALDADO'
 }
 

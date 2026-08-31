@@ -305,8 +305,8 @@
                 </div>
               </div>
 
-              <span :class="['font-display font-bold text-sm', tx.amount >= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
-                {{ tx.amount >= 0 ? '+' : '' }}{{ formatCurrency(tx.amount, tx.currency) }}
+              <span :class="['font-display font-bold text-sm', getDisplayAmount(tx) >= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
+                {{ getDisplayAmount(tx) >= 0 ? '+' : '' }}{{ formatCurrency(getDisplayAmount(tx), tx.currency) }}
               </span>
             </div>
             <p v-if="recentTransactions.length === 0" class="text-center text-text-muted text-xs py-6">
@@ -519,6 +519,9 @@ const savingsRate = computed(() => {
 const recentTransactions = computed(() => {
   return transactionsStore.transactions.slice(0, 5)
 })
+
+const getDisplayAmount = (tx: { type: string; amount: number }) =>
+  tx.type === 'transfer' ? -Math.abs(tx.amount) : tx.amount
 
 // Resumen de presupuesto del mes (categoryBudgets vs gasto real convertido)
 const budgetSummary = computed(() => {

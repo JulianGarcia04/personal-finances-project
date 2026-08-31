@@ -20,7 +20,11 @@ export const AccountSchema = z.object({
 
 export const TransactionSchema = z.object({
   accountId: z.string().min(1, 'La cuenta de origen es requerida'),
-  amount: z.number().refine(val => val !== 0, {
+  amount: z.number({
+    invalid_type_error: 'El monto debe ser un número'
+  }).refine(Number.isFinite, {
+    message: 'El monto debe ser un número finito'
+  }).refine(val => val !== 0, {
     message: 'El monto no puede ser cero'
   }),
   description: z.string()
@@ -45,6 +49,12 @@ export const TransactionSchema = z.object({
 }, {
   message: 'Las transferencias requieren una cuenta de destino diferente a la de origen',
   path: ['toAccountId']
+}).refine(data => {
+  if (data.type === 'expense') return data.amount < 0
+  return data.amount > 0
+}, {
+  message: 'Los gastos deben tener un monto negativo; los ingresos y transferencias deben tener uno positivo',
+  path: ['amount']
 })
 
 export const ApiKeySchema = z.object({

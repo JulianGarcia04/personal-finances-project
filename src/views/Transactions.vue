@@ -177,8 +177,8 @@
                 {{ formatDate(tx.date) }}
               </td>
               <!-- Amount -->
-              <td :class="['py-4 px-4 text-right font-display font-semibold', tx.amount >= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
-                {{ tx.amount >= 0 ? '+' : '' }}{{ formatCurrency(tx.amount, tx.currency || getAccountCurrency(tx.accountId)) }}
+              <td :class="['py-4 px-4 text-right font-display font-semibold', getDisplayAmount(tx) >= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
+                {{ getDisplayAmount(tx) >= 0 ? '+' : '' }}{{ formatCurrency(getDisplayAmount(tx), tx.currency || getAccountCurrency(tx.accountId)) }}
               </td>
               <!-- Actions -->
               <td class="py-4 px-4 text-center">
@@ -235,6 +235,7 @@
           <div v-for="(totals, curr) in selectionSummary" :key="curr" class="flex space-x-3">
             <span v-if="totals.income > 0" class="text-accent-emerald">Ingresos: +{{ formatCurrency(totals.income, curr) }}</span>
             <span v-if="totals.expense > 0" class="text-accent-rose">Gastos: -{{ formatCurrency(totals.expense, curr) }}</span>
+            <span v-if="totals.transfer > 0" class="text-text-secondary">Transferencias: {{ formatCurrency(totals.transfer, curr) }}</span>
           </div>
         </div>
 
@@ -270,8 +271,8 @@
               <p class="text-[10px] text-text-muted mt-1">{{ getAccountName(tx.accountId) }} · {{ formatDate(tx.date) }}</p>
             </div>
           </div>
-          <p :class="['font-display font-semibold text-sm shrink-0', tx.amount >= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
-            {{ tx.amount >= 0 ? '+' : '' }}{{ formatCurrency(tx.amount, tx.currency || getAccountCurrency(tx.accountId)) }}
+          <p :class="['font-display font-semibold text-sm shrink-0', getDisplayAmount(tx) >= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
+            {{ getDisplayAmount(tx) >= 0 ? '+' : '' }}{{ formatCurrency(getDisplayAmount(tx), tx.currency || getAccountCurrency(tx.accountId)) }}
           </p>
         </div>
         <div class="flex items-center justify-between pl-8">
@@ -864,6 +865,8 @@ const isAllSelected = computed(() => {
   return displayedTransactions.value.length > 0 && 
          selectedTxIds.value.length === displayedTransactions.value.length
 })
+const getDisplayAmount = (tx: { type: TransactionType; amount: number }) =>
+  tx.type === 'transfer' ? -Math.abs(tx.amount) : tx.amount
 const toggleSelectAll = (e: Event) => {
   if ((e.target as HTMLInputElement).checked) {
     selectedTxIds.value = displayedTransactions.value.map(t => t.id)
@@ -872,14 +875,15 @@ const toggleSelectAll = (e: Event) => {
   }
 }
 const selectionSummary = computed(() => {
-  const totals: Record<string, { income: number, expense: number }> = {}
+  const totals: Record<string, { income: number, expense: number, transfer: number }> = {}
   for (const id of selectedTxIds.value) {
     const tx = displayedTransactions.value.find(t => t.id === id)
     if (!tx) continue
     const curr = tx.currency || getAccountCurrency(tx.accountId)
-    if (!totals[curr]) totals[curr] = { income: 0, expense: 0 }
+    if (!totals[curr]) totals[curr] = { income: 0, expense: 0, transfer: 0 }
     
-    if (tx.amount >= 0) totals[curr].income += tx.amount
+    if (tx.type === 'transfer') totals[curr].transfer += Math.abs(tx.amount)
+    else if (tx.amount >= 0) totals[curr].income += tx.amount
     else totals[curr].expense += Math.abs(tx.amount)
   }
   return totals
