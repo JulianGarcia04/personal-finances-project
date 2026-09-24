@@ -3,7 +3,14 @@ import { db, auth, storage } from '@/lib/firebase'
 import { useAccountsStore } from './accountsStore'
 import { useAuthStore } from './authStore'
 import { Transaction, Category, TransactionType } from '@/types'
-import { planMirror, planSettlement } from '@/lib/mirror'
+import {
+  isSettlementCandidate,
+  planMirror,
+  planSettlement,
+  planSettlementReversal,
+  SettlementAccountRecord,
+  SettlementLegRecord
+} from '@/lib/mirror'
 import { expenseAmountForDate, getInstallmentCount } from '@/lib/installments'
 import { 
   collection, 
@@ -48,6 +55,7 @@ const normalizeTransactionAmount = (amount: number, type: TransactionType): numb
 interface TransactionsState {
   transactions: Transaction[];
   categories: Category[];
+  reversibleSettlementIds: string[];
   loading: boolean;
 }
 
@@ -55,6 +63,7 @@ export const useTransactionsStore = defineStore('transactions', {
   state: (): TransactionsState => ({
     transactions: [],
     categories: [],
+    reversibleSettlementIds: [],
     loading: false,
   }),
   getters: {
@@ -196,6 +205,11 @@ export const useTransactionsStore = defineStore('transactions', {
           } as Transaction)
         })
         this.transactions = transactionsList
+        this.reversibleSettlementIds = []
+        const reversibleIds = await Promise.all(
+          transactionsList.map(async tx => await this.canReverseSettlement(tx) ? tx.id : null)
+        )
+        this.reversibleSettlementIds = reversibleIds.filter((id): id is string => id !== null)
       } catch (error) {
         console.error('Error fetching transactions:', error)
       } finally {
@@ -621,6 +635,7 @@ export const useTransactionsStore = defineStore('transactions', {
             toAccountId: bridgeAccountId,
             notes: `Reembolso pagado desde ${from.name}`,
             mirrorOf: mirrorRef.id,
+            settlementType: 'settlement',
             currency: bridgeData.currency || 'USD'
           })
           transaction.set(mirrorRef, {
@@ -631,6 +646,7 @@ export const useTransactionsStore = defineStore('transactions', {
             toAccountId,
             notes: `Reembolso recibido en ${to.name}`,
             mirrorOf: localRef.id,
+            settlementType: 'settlement',
             currency: to.currency || 'USD'
           })
           transaction.update(fromRef, { balance: fromBalance + deltas.from })
@@ -643,6 +659,184 @@ export const useTransactionsStore = defineStore('transactions', {
         await this.fetchTransactions()
       } catch (error) {
         console.error('Error al liquidar cuenta puente:', error)
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+
+    // Preflight used only to expose the action; reversal validates again inside its atomic transaction.
+    async canReverseSettlement(record: Transaction): Promise<boolean> {
+      const user = auth.currentUser
+      const authStore = useAuthStore()
+      if (!user || !authStore.activeWorkspaceId || record.workspaceId !== authStore.activeWorkspaceId) return false
+      if (!isSettlementCandidate(record)) return false
+
+      try {
+        const currentSnap = await getDoc(doc(db, 'transactions', record.id))
+        if (!currentSnap.exists()) return false
+        const current = { ...currentSnap.data(), id: currentSnap.id } as SettlementLegRecord
+        if (!isSettlementCandidate(current)) return false
+        const twinId = current.mirrorOf
+        if (!twinId) return false
+
+        const twinSnap = await getDoc(doc(db, 'transactions', twinId))
+        if (!twinSnap.exists()) return false
+        const twin = { ...twinSnap.data(), id: twinSnap.id } as SettlementLegRecord
+        const accountIds = [current.accountId, current.toAccountId, twin.accountId, twin.toAccountId]
+        if (!accountIds.every((id): id is string => typeof id === 'string' && id.length > 0) || new Set(accountIds).size !== 4) {
+          return false
+        }
+
+        const accountSnaps = await Promise.all(accountIds.map(id => getDoc(doc(db, 'accounts', id))))
+        const accountData = accountSnaps.map(snap => snap.exists() ? snap.data() : undefined)
+        if (accountData.some(data => !data || !Number.isFinite(data.balance))) return false
+        const accountsById: Record<string, SettlementAccountRecord> = {}
+        for (let index = 0; index < accountSnaps.length; index++) {
+          const data = accountData[index]
+          if (!data) return false
+          accountsById[accountSnaps[index].id] = { ...data, id: accountSnaps[index].id } as SettlementAccountRecord
+        }
+        planSettlementReversal({ first: current, second: twin, accountsById })
+
+        const workspaceIds = [...new Set([current.workspaceId, twin.workspaceId])]
+        const workspaceSnaps = await Promise.all(workspaceIds.map(id => getDoc(doc(db, 'workspaces', id))))
+        return workspaceSnaps.length === 2 && workspaceSnaps.every(snap => {
+          if (!snap.exists()) return false
+          const data = snap.data()
+          return !!data && Array.isArray(data.members) && data.members.includes(user.uid)
+        })
+      } catch {
+        return false
+      }
+    },
+
+    // Reverses only a validated bridge settlement; it records compensating entries in Vault and never moves bank funds.
+    async reverseSettlement(transactionId: string): Promise<void> {
+      const user = auth.currentUser
+      const authStore = useAuthStore()
+      const activeWorkspaceId = authStore.activeWorkspaceId
+      if (!user || !activeWorkspaceId) throw new Error('Usuario o Workspace no inicializado')
+
+      const paidReversalRef = doc(collection(db, 'transactions'))
+      const receivedReversalRef = doc(collection(db, 'transactions'))
+      const accountsStore = useAccountsStore()
+      this.loading = true
+      try {
+        await runTransaction(db, async (transaction) => {
+          const requestedRef = doc(db, 'transactions', transactionId)
+          const requestedSnap = await transaction.get(requestedRef)
+          if (!requestedSnap.exists()) throw new Error('No se encontró la liquidación que deseas revertir')
+          const requested = { ...requestedSnap.data(), id: requestedSnap.id } as SettlementLegRecord
+          if (requested.workspaceId !== activeWorkspaceId || !isSettlementCandidate(requested)) {
+            throw new Error('La transacción no es una liquidación reversible del workspace activo')
+          }
+          if (!requested.mirrorOf) throw new Error('Falta la pata vinculada de la liquidación')
+
+          const twinRef = doc(db, 'transactions', requested.mirrorOf)
+          const twinSnap = await transaction.get(twinRef)
+          if (!twinSnap.exists()) throw new Error('No se encontró la pata vinculada de la liquidación')
+          const twin = { ...twinSnap.data(), id: twinSnap.id } as SettlementLegRecord
+          const accountIds = [requested.accountId, requested.toAccountId, twin.accountId, twin.toAccountId]
+          if (!accountIds.every((id): id is string => typeof id === 'string' && id.length > 0) || new Set(accountIds).size !== 4) {
+            throw new Error('Las cuentas vinculadas de la liquidación no son válidas')
+          }
+          const workspaceIds = [...new Set([requested.workspaceId, twin.workspaceId])]
+          if (workspaceIds.length !== 2 || workspaceIds.some(id => typeof id !== 'string' || !id)) {
+            throw new Error('Los workspaces de la liquidación no son válidos')
+          }
+
+          const [accountSnaps, workspaceSnaps] = await Promise.all([
+            Promise.all(accountIds.map(id => transaction.get(doc(db, 'accounts', id)))),
+            Promise.all(workspaceIds.map(id => transaction.get(doc(db, 'workspaces', id))))
+          ])
+          const accountData = accountSnaps.map(snap => snap.exists() ? snap.data() : undefined)
+          if (accountData.some(data => !data)) throw new Error('Falta una cuenta asociada a la liquidación')
+          const accountsById: Record<string, SettlementAccountRecord> = {}
+          const balancesById: Record<string, number> = {}
+          for (let index = 0; index < accountSnaps.length; index++) {
+            const snap = accountSnaps[index]
+            const data = accountData[index]
+            if (!data) throw new Error('Falta una cuenta asociada a la liquidación')
+            if (typeof data.balance !== 'number' || !Number.isFinite(data.balance)) {
+              throw new Error('Una cuenta asociada tiene un saldo inválido')
+            }
+            accountsById[snap.id] = { ...data, id: snap.id } as SettlementAccountRecord
+            balancesById[snap.id] = data.balance
+          }
+          if (!workspaceSnaps.every(snap => {
+            if (!snap.exists()) return false
+            const data = snap.data()
+            return !!data && Array.isArray(data.members) && data.members.includes(user.uid)
+          })) {
+            throw new Error('Debes pertenecer a ambos workspaces para revertir esta liquidación')
+          }
+
+          const plan = planSettlementReversal({ first: requested, second: twin, accountsById })
+          const paidLeg = requested.id === plan.paidLegId ? requested : twin
+          const receivedLeg = requested.id === plan.receivedLegId ? requested : twin
+          const reversalDate = Timestamp.now()
+          const reversalDescription = `Reversión contable de ${paidLeg.description}`
+          const reversalNotes = 'Ajuste contable de Vault. No representa ni inicia un movimiento bancario.'
+          const sharedReversal = {
+            amount: plan.amount,
+            description: reversalDescription,
+            categoryId: '',
+            date: reversalDate,
+            type: 'transfer' as TransactionType,
+            receiptUrl: null,
+            settlementType: 'reversal' as const,
+            createdAt: reversalDate
+          }
+
+          transaction.set(paidReversalRef, {
+            ...sharedReversal,
+            workspaceId: plan.workspaceId,
+            userId: user.uid,
+            accountId: plan.bridgeAccountId,
+            toAccountId: plan.fromAccountId,
+            notes: reversalNotes,
+            mirrorOf: receivedReversalRef.id,
+            reversalOf: paidLeg.id,
+            currency: paidLeg.currency
+          })
+          transaction.set(receivedReversalRef, {
+            ...sharedReversal,
+            workspaceId: plan.mirrorWorkspaceId,
+            userId: user.uid,
+            accountId: plan.toAccountId,
+            toAccountId: plan.receivableAccountId,
+            notes: reversalNotes,
+            mirrorOf: paidReversalRef.id,
+            reversalOf: receivedLeg.id,
+            currency: receivedLeg.currency
+          })
+          transaction.update(doc(db, 'transactions', plan.paidLegId), {
+            reversedBy: paidReversalRef.id,
+            reversedAt: reversalDate
+          })
+          transaction.update(doc(db, 'transactions', plan.receivedLegId), {
+            reversedBy: receivedReversalRef.id,
+            reversedAt: reversalDate
+          })
+          transaction.update(doc(db, 'accounts', plan.fromAccountId), {
+            balance: balancesById[plan.fromAccountId] + plan.deltas.from
+          })
+          transaction.update(doc(db, 'accounts', plan.bridgeAccountId), {
+            balance: balancesById[plan.bridgeAccountId] + plan.deltas.bridge
+          })
+          transaction.update(doc(db, 'accounts', plan.receivableAccountId), {
+            balance: balancesById[plan.receivableAccountId] + plan.deltas.receivable
+          })
+          transaction.update(doc(db, 'accounts', plan.toAccountId), {
+            balance: balancesById[plan.toAccountId] + plan.deltas.to
+          })
+        })
+
+        this.reversibleSettlementIds = this.reversibleSettlementIds.filter(id => id !== transactionId)
+        await Promise.all([accountsStore.fetchAccounts(), this.fetchTransactions()])
+      } catch (error) {
+        console.error('Error al revertir la liquidación contable:', error)
         throw error
       } finally {
         this.loading = false
