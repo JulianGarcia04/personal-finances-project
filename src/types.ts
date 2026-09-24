@@ -70,8 +70,13 @@ export interface Transaction {
   notes?: string | null;
   // Full purchase stays in amount; KPIs distribute it across this many months.
   installments?: number | null;
-  // ID de la pata gemela en el otro workspace (gastos espejo). Borrar una borra la otra.
+  // ID de la pata gemela en el otro workspace (actividad espejo).
   mirrorOf?: string | null;
+  // Distinguishes new bridge settlements from other mirrored transfers and their reversals.
+  settlementType?: 'settlement' | 'reversal' | null;
+  reversalOf?: string | null;
+  reversedBy?: string | null;
+  reversedAt?: Date | null;
   currency: string;
   createdAt: Date;
 }
