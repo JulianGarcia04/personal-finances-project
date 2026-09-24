@@ -36,18 +36,20 @@ A workspace bridge settlement updates the balances of accounts in both workspace
 - Post-commit verifier confirmed the commit scope and passed loan 3/3, full suite 25/25, and build; commands ran against the current worktree, not an isolated checkout.
 - Work-unit commit 2 is on `feat/reverse-bridge-settlement-01-domain`: `540f24d78a310876fd953709d72dd61048b0d400` — `feat(bridges): model settlement reversals`. Its commit-local diff is 262 insertions and 1 deletion across types, planner, and planner tests.
 - Independent verifier found no blocking issue in commit 2 and passed mirror 12/12, full suite 25/25, and build against the current worktree (not isolated). It noted several implemented rejection branches lack focused tests; Firestore behavior is not integration-tested.
-- No PR or push has been created. The store/UI integration child-branch commit remains pending.
+- Work-unit commit 3 is on `feat/reverse-bridge-settlement-02-integration`: `be8ffd5511a5b18be404975602b400e33304be29` — `feat(bridges): wire settlement reversal`. Its commit-local diff is 299 insertions and 9 deletions across the store, UI, and task record.
+- Independent verifier found no blocking issue: the transaction validates/reads before writes, commits compensations, markers, and balances atomically, and concurrent retries fail closed. Loan 3/3, mirror 12/12, full suite 25/25, and build passed against the current worktree, which matched HEAD.
+- The user subsequently authorized a direct push to `main` and deployment; no PR is part of the requested path.
 
 ## TDD and checks
 - TDD: **on**, explicitly selected by the user for this feature; strict RED then GREEN. No project-level TDD setting was found.
 - Test runner: `pnpm test` (`node --test src/**/*.test.ts` from the root package).
 - RED: writer reports `pnpm test` failed after adding the reversal test and before production edits because the reversal planner was not exported; the same run showed the loan-sign failure below.
-- Focused GREEN: writer and independent verifier report `node --test src/lib/mirror.test.ts` passed, 12/12. The post-commit domain verifier reran this successfully against the current worktree.
+- Focused GREEN: writer and independent verifier report `node --test src/lib/mirror.test.ts` passed, 12/12. Post-commit verifiers for domain and integration slices reran this successfully.
 - Loan-fix RED: writer reports `node --test src/lib/loan.test.ts` failed before production edits because `TransactionSchema` rejected negative `loan` (1 failure).
-- Loan-fix GREEN: writer reports the same targeted command passed after edits (3/3), with sign regressions for `loan` and `loan_payment`.
-- Full suite: writer and independent verifier report `pnpm test` passed, 25/25. Post-commit verifiers for work-unit commits 1 and 2 reran it successfully against the current worktree.
-- Build: writer and independent verifier report `pnpm build` passed; Vite transformed 1,823 modules. Post-commit verifiers for work-unit commits 1 and 2 reran it successfully against the current worktree.
-- Coverage limitations: loan schema cases are directly tested, but `normalizeTransactionAmount` lacks a direct unit test; writer avoided exposing the internal helper. Bridge tests cover the pure planner, not Firestore writes or concurrency. No authenticated two-workspace emulator fixture exists.
+- Loan-fix GREEN: writer reports the same targeted command passed after edits (3/3), with sign regressions for `loan` and `loan_payment`. The post-commit integration verifier reran this successfully.
+- Full suite: writer and independent verifier report `pnpm test` passed, 25/25. Post-commit verifiers for all three work-unit commits reran it successfully against the current worktree.
+- Build: writer and independent verifier report `pnpm build` passed; Vite transformed 1,823 modules. Post-commit verifiers for all three work-unit commits reran it successfully against the current worktree.
+- Coverage limitations: loan schema cases are directly tested, but `normalizeTransactionAmount` lacks a direct unit test; writer avoided exposing the internal helper. Some planner rejection branches lack focused tests. No authenticated two-workspace emulator fixture covers Firestore writes/concurrency, and UI behavior was not tested interactively.
 - Work-unit rollback boundary: the feature's source and test files listed under the implementation task below, plus this feature document; preserve all unrelated working-tree changes.
 
 ## Acceptance criteria
@@ -67,8 +69,8 @@ A workspace bridge settlement updates the balances of accounts in both workspace
 - [x] `RBS-6` — Map the authorized `src/lib/loan.test.ts:13` failure. Evidence: `loan` is expected negative but schema treats all non-expense types as positive; store normalizer also forces `loan` positive.
 - [x] `RBS-7` — Add failing loan sign regression tests, then align schema sign validation and store normalization. Writer reports strict RED then GREEN.
 - [x] `RBS-8` — Independently verify all changed behavior, focused/full tests, and build. Evidence: loan 3/3, mirror 12/12, full suite 25/25, build passed; no blocking code defect found. Record the untested normalizer and Firestore emulator paths as limitations.
-- [ ] `RBS-9` (in progress) — Continue the selected local feature-branch-chain commit slices without artificial splitting. Work-unit commits 1 and 2 passed independent post-commit checks; create the store/UI integration child next. Preserve unrelated working-tree changes.
-- [ ] `RBS-10` — Close the feature work unit with commit identities and exact verification evidence; do not push/create a PR without an approved linked issue and explicit user direction.
+- [x] `RBS-9` — Complete the selected local feature-branch chain without artificial splitting. The tracker, domain-planner, and store/UI integration slices are committed locally; unrelated working-tree changes remain unstaged and outside the chain.
+- [x] `RBS-10` — Record all three commit identities, independent checks, and coverage limitations. The user subsequently authorized direct publication to `main` and deployment; no PR is requested.
 
 ## Authorized implementation surfaces
 ### Settlement reversal
@@ -86,4 +88,4 @@ A workspace bridge settlement updates the balances of accounts in both workspace
 - No other loan-related paths are authorized.
 
 ## Current status and next step
-Branch `feat/reverse-bridge-settlement-02-integration` is active, based on domain commit `540f24d78a310876fd953709d72dd61048b0d400`; the integration commit is pending. The domain commit contains reversal types/planner/tests, and its independent verifier found no blocking issue and passed mirror 12/12, full suite 25/25, and build against the current worktree, not an isolated checkout. The tracker commit verifier passed loan 3/3, full suite 25/25, and build on the same basis. Coverage limitations: the private loan normalizer has no direct unit test; some planner rejection branches lack focused tests; no authenticated cross-workspace Firestore emulator fixture covers writes/concurrency. Native assessment was unassessable/schema-incompatible twice for commit 1 and once for commit 2, so both were independently verified. The tracked source diff is 568 authored lines; the user selected `feature-branch-chain`. No push or PR; no approved issue or exact PR instruction has been provided. Existing `.atl/.skill-registry.cache.json`, `.atl/skill-registry.md`, and `.gitignore` changes remain untouched and out of scope.
+The local feature-branch chain is complete: tracker `feat/reverse-bridge-settlement` at `241ee702d254aa88da640cd5d669eec632b9f2f8`, domain child `feat/reverse-bridge-settlement-01-domain` at `540f24d78a310876fd953709d72dd61048b0d400`, and integration child `feat/reverse-bridge-settlement-02-integration` at `be8ffd5511a5b18be404975602b400e33304be29`. All three post-commit independent verifiers passed; the integration reviewer found no blocker and confirmed atomic writes/idempotency. Loan tests 3/3, mirror tests 12/12, full suite 25/25, and production build passed against current worktrees (no isolated checkouts). Native assessments remained unassessable/schema-incompatible and were followed by independent verification. Coverage limits: no direct normalizer unit test, some planner rejection paths untested, no authenticated two-workspace Firestore emulator or interactive UI test. The user selected `feature-branch-chain` and subsequently authorized a direct push to `main` plus deployment; no PR is requested. Existing `.atl/.skill-registry.cache.json`, `.atl/skill-registry.md`, and `.gitignore` remain untouched and unstaged.
