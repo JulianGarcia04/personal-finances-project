@@ -50,10 +50,10 @@ export const TransactionSchema = z.object({
   message: 'Las transferencias requieren una cuenta de destino diferente a la de origen',
   path: ['toAccountId']
 }).refine(data => {
-  if (data.type === 'expense') return data.amount < 0
+  if (data.type === 'expense' || data.type === 'loan') return data.amount < 0
   return data.amount > 0
 }, {
-  message: 'Los gastos deben tener un monto negativo; los ingresos y transferencias deben tener uno positivo',
+  message: 'Los gastos y préstamos deben tener un monto negativo; los ingresos, transferencias y pagos de préstamos deben tener uno positivo',
   path: ['amount']
 })
 

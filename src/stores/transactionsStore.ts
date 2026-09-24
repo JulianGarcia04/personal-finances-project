@@ -42,7 +42,7 @@ const normalizeTransactionAmount = (amount: number, type: TransactionType): numb
     throw new Error('El monto debe ser un número finito distinto de cero')
   }
 
-  return type === 'expense' ? -Math.abs(numericAmount) : Math.abs(numericAmount)
+  return type === 'expense' || type === 'loan' ? -Math.abs(numericAmount) : Math.abs(numericAmount)
 }
 
 interface TransactionsState {
