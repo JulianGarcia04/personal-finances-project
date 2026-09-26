@@ -305,8 +305,11 @@
                 </div>
               </div>
 
-              <span :class="['font-display font-bold text-sm', tx.amount >= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
-                {{ tx.amount >= 0 ? '+' : '' }}{{ formatCurrency(tx.amount, tx.currency) }}
+              <span class="text-right shrink-0">
+                <span :class="['font-display font-bold text-sm', displayOf(tx).amountClass]">
+                  {{ displayOf(tx).prefix }}{{ formatCurrency(displayOf(tx).amount, tx.currency) }}
+                </span>
+                <span v-if="displayOf(tx).route" class="block text-[10px] text-text-muted mt-0.5">{{ displayOf(tx).route }}</span>
               </span>
             </div>
             <p v-if="recentTransactions.length === 0" class="text-center text-text-muted text-xs py-6">
@@ -353,8 +356,9 @@ import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useGoalsStore } from '@/stores/goalsStore'
-import { AccountType } from '@/types'
+import { AccountType, Transaction } from '@/types'
 import { expenseAmountForMonth } from '@/lib/installments'
+import { getTransactionDisplay } from '@/lib/transactionDisplay'
 import { getNextOccurrence, daysUntil, expenseAmountForCycle } from '@/lib/creditCycle'
 import { 
   Plus as PlusIcon, 
@@ -723,6 +727,8 @@ const getAccountName = (id: string) => {
   const acc = accountsStore.getAccountById(id)
   return acc ? acc.name : 'Desconocida'
 }
+
+const displayOf = (tx: Transaction) => getTransactionDisplay(tx, getAccountName)
 
 const getAccountIcon = (type: AccountType) => {
   if (type === 'savings') return SavingsIcon

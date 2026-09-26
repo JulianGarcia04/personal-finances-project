@@ -177,8 +177,9 @@
                 {{ formatDate(tx.date) }}
               </td>
               <!-- Amount -->
-              <td :class="['py-4 px-4 text-right font-display font-semibold', tx.amount >= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
-                {{ tx.amount >= 0 ? '+' : '' }}{{ formatCurrency(tx.amount, tx.currency || getAccountCurrency(tx.accountId)) }}
+              <td :class="['py-4 px-4 text-right font-display font-semibold', displayOf(tx).amountClass]">
+                {{ displayOf(tx).prefix }}{{ formatCurrency(displayOf(tx).amount, tx.currency || getAccountCurrency(tx.accountId)) }}
+                <div v-if="displayOf(tx).route" class="text-[10px] text-text-muted mt-0.5">{{ displayOf(tx).route }}</div>
               </td>
               <!-- Actions -->
               <td class="py-4 px-4 text-center">
@@ -270,8 +271,9 @@
               <p class="text-[10px] text-text-muted mt-1">{{ getAccountName(tx.accountId) }} · {{ formatDate(tx.date) }}</p>
             </div>
           </div>
-          <p :class="['font-display font-semibold text-sm shrink-0', tx.amount >= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
-            {{ tx.amount >= 0 ? '+' : '' }}{{ formatCurrency(tx.amount, tx.currency || getAccountCurrency(tx.accountId)) }}
+          <p :class="['font-display font-semibold text-sm shrink-0 text-right', displayOf(tx).amountClass]">
+            {{ displayOf(tx).prefix }}{{ formatCurrency(displayOf(tx).amount, tx.currency || getAccountCurrency(tx.accountId)) }}
+            <span v-if="displayOf(tx).route" class="block text-[10px] text-text-muted mt-0.5">{{ displayOf(tx).route }}</span>
           </p>
         </div>
         <div class="flex items-center justify-between pl-8">
@@ -836,9 +838,10 @@ import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
-import { TransactionType } from '@/types'
+import { Transaction, TransactionType } from '@/types'
 import { TransactionSchema } from '@/schemas'
 import { getMonthlyInstallmentAmount } from '@/lib/installments'
+import { getTransactionDisplay } from '@/lib/transactionDisplay'
 import { 
   Plus as PlusIcon, 
   Trash2 as TrashIcon, 
@@ -1259,6 +1262,8 @@ const getAccountCurrency = (id: string) => {
   const acc = accountsStore.getAccountById(id)
   return acc ? acc.currency : 'COP'
 }
+
+const displayOf = (tx: Transaction) => getTransactionDisplay(tx, getAccountName)
 
 const getCategory = (id: string) => {
   return transactionsStore.categories.find(c => c.id === id)
