@@ -30,8 +30,8 @@ Implement exclusive monthly and event budgets while retaining the existing categ
 
 - [x] **B1 — Allocation core**: exclusive membership/default fallback, monthly/event/category aggregation, prototype-safe rollups and deterministic checks; commit `a118876cb36f7d82a026827ab76e6123ec4bf7c6`, native approval acknowledged.
 - [x] **B2M — Parent contracts**: strict draft/record/patch types and validation; 42 tests/build passed; commit `f6e197bf450f3570b49dbfa338afe702615a4e01`, native approval acknowledged.
-- [ ] **B2S — Parent CRUD security** (in progress: scoped policy commit and native review): budget policy, isolated emulator infrastructure and raw SDK attacks; first candidate independent of service implementation.
-- [ ] **B2P — Parent SDK persistence** (pending: implemented, splitting service checks): injected/captured-workspace lifecycle and dedicated round-trip/decoded-read tests; second candidate after B2S. Thin Pinia/baseline adapter remains B4.
+- [x] **B2S — Parent CRUD security**: independent raw 5/5, combined 9/9, full 42/42/build; scoped commit `dc9e0fbc6fdc6465673164fdbac1a2b1851e02f6`; native `review-e699046ea5a67bde` approved, exact acknowledgement burned. R2-001 readability suggestion remains a separate follow-up.
+- [ ] **B2P — Parent SDK persistence** (in progress: scoped SDK commit and native review): captured-workspace helper and independent service suite pass combined 9/9/full 42/42/build. Thin Pinia/baseline adapter remains B4.
 - [ ] **B2C — Category caps** (pending): scalar category-cap documents, finite/nonnegative validation, parent/category isolation, archived retention, and security/persistence tests.
 - [ ] **B2R — Expense reference isolation** (pending): same-workspace references, getAfter archive semantics, immutable workspace identity, classification-only diff guards, and adversarial tests.
 - [ ] **B3 — Balance-neutral expense assignment** (pending): isolated classification update and transaction selectors, preserving every financial field and existing entry defaults.
@@ -77,7 +77,7 @@ Each work unit closes only after its outcome and applicable checks are observed,
 | --- | --- | --- | --- |
 | B1 | Regression RED; GREEN/final 9 focused + 34 full tests/build passed | `a118876cb36f7d82a026827ab76e6123ec4bf7c6` | Approved/acknowledged `review-c8fdc65e768a6d84`; ASSESS derived closed |
 | B2M | RED missing export; GREEN/refactor 9 focused; full 42/42 + build passed | `f6e197bf450f3570b49dbfa338afe702615a4e01` | Approved/acknowledged `review-ee2b5228c82be4c1`; ASSESS derived closed |
-| B2S | Original RED; writer + independent raw 5/5, combined 9/9, full 42/42 + build | Pending | Independent verification passed; native review pending |
+| B2S | Original RED; writer + independent raw 5/5, combined 9/9, full 42/42 + build | `dc9e0fbc6fdc6465673164fdbac1a2b1851e02f6` (276 diff lines) | `review-e699046ea5a67bde` approved + burned; post-ack ASSESS unassessable from future untracked SDK, separate high-risk verifier already passed |
 | B2P | Writer + independent combined 9/9, full 42/42 + build; timestamp/scope/clear checks | Pending | Independent verification passed; native review pending |
 | B2C | Category-cap persistence/security pending | Pending | Pending |
 | B2R | Reference/archive/diff-guard security pending | Pending | Pending |
@@ -90,4 +90,4 @@ No interest schedule, statement/payment reconciliation, historical FX/cap snapsh
 
 ## Next step
 
-B2S/B2P independent verifier passed raw-only 5/5, combined 9/9, full 42/42 and build; no source writer is active. First B2S commit includes only rules, raw security test, emulator config, package script and tracking, against f6e197bf450f3570b49dbfa338afe702615a4e01; SDK/service tests stay uncommitted for the next slice. Configured ports clear after shutdown; default Firestore websocket 9150 was also opened during runs, and parent post-run lsof found no listener there. Do not claim strictly only three runtime ports. B2P deleteApp rejection aggregation and missing-document read remain unasserted/nonblocking follow-ups, not successful contracts. No category/reference/Pinia/UI, production data, publication or .atl staging.
+B2S is closed: commit dc9e0fbc6fdc6465673164fdbac1a2b1851e02f6; native review-e699046ea5a67bde approved, exact acknowledgement burned revision sha256:03e7f783543545cf0f681cd33b6422b4c013f817e4ab40f2a08330f1b78b5c52. R2-001 at firestore.rules:107 is an informational readability suggestion, message unavailable; keep separate, never reopen B2S. ASSESS still unassessable on untracked SDK files; independent high-risk verification was already observed. B2P is now active: commit only src/lib/budgetPersistence.ts + tests/firestore/budgets.persistence.test.ts + tracking, against dc9e0fbc6fdc6465673164fdbac1a2b1851e02f6, then inspect/review/acknowledge the exact committed slice. No writer active; tests/build independently pass. Preserve surfaced default websocket9150/cleanup caveats. No caps/references/Pinia/UI, production data, publishing or .atl staging.
