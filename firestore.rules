@@ -78,5 +78,66 @@ service cloud.firestore {
       allow create: if isWorkspaceMember(request.resource.data.workspaceId);
       allow update, delete: if isWorkspaceMember(resource.data.workspaceId);
     }
+
+    // Additional operating budgets; the default monthly baseline remains in workspace settings.
+    function hasBudgetFields(data) {
+      return data.keys().hasAll([
+        'workspaceId', 'kind', 'name', 'capCurrency', 'archived', 'createdAt', 'updatedAt'
+      ]) && data.keys().hasOnly([
+        'workspaceId', 'kind', 'name', 'capCurrency', 'totalLimit', 'archived',
+        'createdAt', 'updatedAt', 'startDate', 'endDate'
+      ]);
+    }
+
+    // Subtracting a number from itself yields zero only for finite values (including large finite doubles).
+    function isFiniteNonnegative(value) {
+      return value is number && value >= 0 && value - value == 0;
+    }
+
+    function hasValidBudgetPlanningDates(data) {
+      return (data.kind == 'monthly' && !('startDate' in data) && !('endDate' in data)) ||
+        (data.kind == 'event' &&
+          (!('startDate' in data) || data.startDate is timestamp) &&
+          (!('endDate' in data) || data.endDate is timestamp) &&
+          (!('startDate' in data) || !('endDate' in data) || data.endDate >= data.startDate));
+    }
+
+    function isValidBudgetRecord(data, budgetId) {
+      return budgetId != 'default-monthly' && hasBudgetFields(data) &&
+        data.workspaceId is string && data.workspaceId.size() > 0 && data.workspaceId.size() <= 1500 &&
+        data.kind in ['monthly', 'event'] &&
+        data.name is string && data.name.matches('.*\\S.*') && data.name.size() <= 100 &&
+        data.capCurrency is string && data.capCurrency.matches('^[A-Z]{3}$') &&
+        (!('totalLimit' in data) || isFiniteNonnegative(data.totalLimit)) &&
+        data.archived is bool && data.createdAt is timestamp && data.updatedAt is timestamp &&
+        hasValidBudgetPlanningDates(data);
+    }
+
+    function isValidBudgetCreate(data, budgetId) {
+      return isValidBudgetRecord(data, budgetId) && data.archived == false &&
+        data.createdAt == request.time && data.updatedAt == request.time;
+    }
+
+    function isValidBudgetUpdate(data, budgetId) {
+      return isValidBudgetRecord(data, budgetId) &&
+        data.workspaceId == resource.data.workspaceId && data.kind == resource.data.kind &&
+        data.capCurrency == resource.data.capCurrency && data.createdAt == resource.data.createdAt &&
+        data.updatedAt == request.time &&
+        ((!resource.data.archived && !data.archived &&
+          data.diff(resource.data).affectedKeys().hasOnly([
+            'name', 'totalLimit', 'startDate', 'endDate', 'updatedAt'
+          ])) ||
+         (!resource.data.archived && data.archived &&
+          data.diff(resource.data).affectedKeys().hasOnly(['archived', 'updatedAt'])));
+    }
+
+    match /budgets/{budgetId} {
+      allow read: if isWorkspaceMember(resource.data.workspaceId);
+      allow create: if isWorkspaceMember(request.resource.data.workspaceId) &&
+        isValidBudgetCreate(request.resource.data, budgetId);
+      allow update: if isWorkspaceMember(resource.data.workspaceId) &&
+        isValidBudgetUpdate(request.resource.data, budgetId);
+      allow delete: if false;
+    }
   }
 }
