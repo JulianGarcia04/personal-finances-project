@@ -94,6 +94,75 @@ export const BudgetSchema = z.object({
   path: ['budgetNeedsPercent']
 })
 
+// Limits are finite and nonnegative, with no arbitrary magnitude/product cap.
+const operatingBudgetLimitSchema = z.number().finite().nonnegative()
+const operatingBudgetNameSchema = z.string().trim().min(1).max(100)
+const operatingBudgetCurrencySchema = z.string().regex(/^[A-Z]{3}$/)
+const operatingBudgetDateSchema = z.date().refine(date => Number.isFinite(date.getTime()))
+// Keep aligned with DEFAULT_MONTHLY_BUDGET_ID in src/lib/budgets.ts; the schema tests guard this contract.
+const defaultOperatingBudgetId = 'default-monthly'
+const operatingBudgetIdSchema = z.string().min(1).refine(id =>
+  id.trim().length > 0 && !id.includes('/') && id !== '.' && id !== '..' && !/^__.*__$/.test(id),
+  'Invalid Firestore document ID'
+)
+const additionalOperatingBudgetIdSchema = operatingBudgetIdSchema.refine(
+  id => id !== defaultOperatingBudgetId,
+  'The default monthly baseline is not an additional budget record'
+)
+
+export const OperatingBudgetKindSchema = z.enum(['monthly', 'event'])
+
+const operatingBudgetPlanningFields = {
+  startDate: operatingBudgetDateSchema.optional(),
+  endDate: operatingBudgetDateSchema.optional()
+}
+
+const validateOperatingBudgetPlanning = (
+  data: { kind: 'monthly' | 'event'; startDate?: Date; endDate?: Date },
+  ctx: z.RefinementCtx
+) => {
+  if (data.kind === 'monthly' && (data.startDate !== undefined || data.endDate !== undefined)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Monthly budgets cannot have planning dates' })
+  }
+  if (data.startDate && data.endDate && data.endDate < data.startDate) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Event end date cannot precede its start date' })
+  }
+}
+
+export const OperatingBudgetDraftSchema = z.object({
+  kind: OperatingBudgetKindSchema,
+  name: operatingBudgetNameSchema,
+  capCurrency: operatingBudgetCurrencySchema,
+  totalLimit: operatingBudgetLimitSchema.optional(),
+  ...operatingBudgetPlanningFields
+}).strict().superRefine(validateOperatingBudgetPlanning)
+
+// id is injected from the root document ID by the reader; createdAt/updatedAt must already be decoded Dates.
+export const OperatingBudgetRecordSchema = z.object({
+  id: additionalOperatingBudgetIdSchema,
+  workspaceId: operatingBudgetIdSchema,
+  kind: OperatingBudgetKindSchema,
+  name: operatingBudgetNameSchema,
+  capCurrency: operatingBudgetCurrencySchema,
+  totalLimit: operatingBudgetLimitSchema.optional(),
+  archived: z.boolean(),
+  createdAt: operatingBudgetDateSchema,
+  updatedAt: operatingBudgetDateSchema,
+  ...operatingBudgetPlanningFields
+}).strict().superRefine(validateOperatingBudgetPlanning)
+
+// B2P must merge a patch with the stored record and validate the full post-state (kind/date chronology included).
+export const OperatingBudgetPatchSchema = z.object({
+  name: operatingBudgetNameSchema.optional(),
+  totalLimit: operatingBudgetLimitSchema.nullable().optional(),
+  startDate: operatingBudgetDateSchema.nullable().optional(),
+  endDate: operatingBudgetDateSchema.nullable().optional()
+}).strict().superRefine((patch, ctx) => {
+  if (!Object.values(patch).some(value => value !== undefined)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Patch must change at least one field' })
+  }
+})
+
 export const CategorySchema = z.object({
   name: z.string()
     .min(1, 'El nombre es requerido')

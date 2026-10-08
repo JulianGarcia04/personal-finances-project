@@ -123,6 +123,37 @@ export interface BudgetSettings {
   exchangeRates: Record<string, number>;
 }
 
+export type OperatingBudgetKind = 'monthly' | 'event';
+
+// Additional operating-budget record. The default monthly baseline remains in legacy workspace settings.
+export interface OperatingBudget {
+  id: string;
+  workspaceId: string;
+  kind: OperatingBudgetKind;
+  name: string;
+  capCurrency: string; // Stable denomination shared by this budget's scalar caps.
+  totalLimit?: number;
+  archived: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  // Event planning metadata only; it does not affect transaction attribution or installments.
+  startDate?: Date;
+  endDate?: Date;
+}
+
+// Form input contains no record identity, lifecycle, audit, or ledger fields.
+export type OperatingBudgetDraft = Pick<OperatingBudget,
+  'kind' | 'name' | 'capCurrency' | 'totalLimit' | 'startDate' | 'endDate'
+>;
+
+// Omitted keys mean no change; null clears the optional limit or event date.
+export interface OperatingBudgetPatch {
+  name?: string;
+  totalLimit?: number | null;
+  startDate?: Date | null;
+  endDate?: Date | null;
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;

@@ -28,8 +28,9 @@ Implement exclusive monthly and event budgets while retaining the existing categ
 
 ## Work units
 
-- [ ] **B1 — Allocation core** (in progress: scoped commit and candidate review): exclusive membership, default fallback, monthly/event/category aggregation, and deterministic tests.
-- [ ] **B2 — Budget lifecycle** (pending): additive parent persistence, create/edit/archive, stable denomination, protected baseline compatibility, and CRUD/security checks.
+- [x] **B1 — Allocation core**: exclusive membership/default fallback, monthly/event/category aggregation, prototype-safe rollups and deterministic checks; commit `a118876cb36f7d82a026827ab76e6123ec4bf7c6`, native approval acknowledged.
+- [ ] **B2M — Parent contracts** (in progress: scoped commit and candidate review): additional operating-budget types plus separate draft/record/patch validation and deterministic tests; no SDK/rules/ledger changes.
+- [ ] **B2P — Parent persistence** (pending): injected SDK/store lifecycle, stable denomination, protected baseline compatibility, budget CRUD policy and isolated security tests.
 - [ ] **B2C — Category caps** (pending): scalar category-cap documents, finite/nonnegative validation, parent/category isolation, archived retention, and security/persistence tests.
 - [ ] **B2R — Expense reference isolation** (pending): same-workspace references, getAfter archive semantics, immutable workspace identity, classification-only diff guards, and adversarial tests.
 - [ ] **B3 — Balance-neutral expense assignment** (pending): isolated classification update and transaction selectors, preserving every financial field and existing entry defaults.
@@ -55,12 +56,14 @@ Each work unit closes only after its outcome and applicable checks are observed,
 - Firestore preflight resolved: Firebase CLI `15.33.0` reported the existing default database as `STANDARD`, `FIRESTORE_NATIVE`, location `nam5`; source uses `getFirestore(app)` without a database ID. No live financial records were accessed.
 - Known baseline environmental failures: none observed.
 - B1 writer and correction settled: initial RED (new module absent), then 8/8 focused tests and 33/33 full tests/build. Regression `muzqqj6v-7-oxy3` observed meaningful RED (8 passes/1 failure: inherited constructor value), GREEN/final 9/9, `pnpm test` 34/34, and build passed (1,823 modules). Public API unchanged; own-property checks/safe definition preserve plain-record numeric rollups. Two files: 278 source/test lines. Parent narrowly spot-checked the correction.
-- B2/B2C/B2R: split the estimated 650-900-line persistence/security area into three coherent candidates. Keep deterministic and isolated demo-project security tests with each behavior; never deploy or access live financial records.
+- B2M/B2P/B2C/B2R: split the estimated 650-900-line persistence/security area into validated contracts, parent persistence, category caps and reference isolation. B2M writer `mv011gy2-8-ujbn` settled: RED missing export; GREEN/post-refactor 9/9 focused; full tests 42/42; build passed (1,823 modules), Git whitespace check passed. Three files: +199/-1, legacy planner unchanged. Parent spot-checked strict shapes, finite caps, reserved ID and clear semantics. B2P introduces isolated demo-project CRUD verification; no security or deployed behavior is claimed.
 - Security-test preparation: installed Firebase SDK supports emulator mock identities without a new test dependency. Java `26.0.1` is available; no listeners were observed on candidate ports `8185`, `4415`, `4515`. These are prerequisite observations only; no emulator/security test has run.
 - Category-cap check `muzojn17-6-hr7b` settled: store each additional cap under `/budgets/{id}/categoryCaps/{categoryId}`, inheriting parent denomination and assembling maps only in memory. This preserves overall-only/category-only/both without a cap-count product limit; verify finite predicates and post-batch constraints in raw SDK tests. Do not claim undocumented map-value quantification. Chunked writes must report partial failures honestly.
 - B3: prove budget-only changes cannot mutate ledger fields; verify manual/import/AI defaults and mirrored-expense handling.
 - B4: tests/build plus functional UI checks when available. Record any unavailable runner or emulator as a blocker, not a pass.
 - Native review: inspect authority before each candidate when RDD is on; candidate consent and exact provider routing remain separate from implementation authority.
+- B1 local commit contains exactly the two allocation files plus this locator (363 lines), excluding `.atl`. Native `review-c8fdc65e768a6d84` approved; exact acknowledgement returned `authority: burned`, consumed revision `sha256:76055ef47bee86940aa645d9066a15228963ebea1413950f94258b4faa223fe5`. Post-ack ASSESS derived `consumed: true`, outcome `closed`, no separate verifier. Persistence, selectors and deployed behavior remain unimplemented.
+- Separate later follow-up: non-blocking native advisory `R3-001`, reliability, `src/lib/budgets.ts:28`, WARNING/informational. Detailed message was not returned; inspect the converter boundary during later reporting integration, not as a B1 correction or review rerun.
 - If native review declines/is unavailable, use native ASSESS and its verifier plan; functional checks still apply.
 - Keep writes single-threaded and delegate nontrivial multi-file units with narrow allowed edit surfaces.
 - Aim for reviewable work units around 400 changed lines; split by behavior or surface an overage, never compress code/tests to fit.
@@ -69,8 +72,9 @@ Each work unit closes only after its outcome and applicable checks are observed,
 
 | Unit | Functional evidence | Local work-unit commit | Review/independent evidence |
 | --- | --- | --- | --- |
-| B1 | Regression RED observed; GREEN/final 9 focused + 34 full tests/build passed | Pending | Pending |
-| B2 | Parent lifecycle/security pending | Pending | Pending |
+| B1 | Regression RED; GREEN/final 9 focused + 34 full tests/build passed | `a118876cb36f7d82a026827ab76e6123ec4bf7c6` | Approved/acknowledged `review-c8fdc65e768a6d84`; ASSESS derived closed |
+| B2M | RED missing export; GREEN/refactor 9 focused; full 42/42 + build passed | Pending | Pending |
+| B2P | Parent lifecycle/security pending | Pending | Pending |
 | B2C | Category-cap persistence/security pending | Pending | Pending |
 | B2R | Reference/archive/diff-guard security pending | Pending | Pending |
 | B3 | Pending | Pending | Pending |
@@ -82,4 +86,4 @@ No interest schedule, statement/payment reconciliation, historical FX/cap snapsh
 
 ## Next step
 
-B1 and its regression correction are verified by the writer; no source writer is active. Create the scoped B1 work-unit commit from the two library files and this task locator, excluding all `.atl` edits. Review only that committed slice against its previous boundary under the current RDD switch, follow native ASSESS/verification routing and record exact evidence before closing B1. B2/B2C/B2R remain pending with separate writer surfaces; no publication or parallel writers.
+B1 is closed. B2M writer settled; no source writer is active. Parent will commit only `src/types.ts`, `src/schemas.ts`, `src/lib/schemas.test.ts` and this locator, excluding `.atl`, then assess/review that slice against `a118876cb36f7d82a026827ab76e6123ec4bf7c6`. API: OperatingBudget/Draft/Patch with explicit capCurrency, optional totalLimit and decoded Date metadata; null clears optional patch fields. B2P must merge/validate complete records and enforce SDK/rules isolation; schema validation alone is not authorization. Caps remain B2C, expense guards B2R. No publication or parallel source writers.
