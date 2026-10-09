@@ -131,6 +131,34 @@ service cloud.firestore {
           data.diff(resource.data).affectedKeys().hasOnly(['archived', 'updatedAt'])));
     }
 
+    function isCurrentBudgetWorkspaceMember(budgetId) {
+      let budgetPath = /databases/$(database)/documents/budgets/$(budgetId);
+      return budgetId != 'default-monthly' && exists(budgetPath) &&
+        isWorkspaceMember(get(budgetPath).data.workspaceId);
+    }
+
+    function isActiveBudgetWorkspaceMemberAfter(budgetId) {
+      let budgetPath = /databases/$(database)/documents/budgets/$(budgetId);
+      return budgetId != 'default-monthly' && existsAfter(budgetPath) &&
+        getAfter(budgetPath).data.archived == false &&
+        isWorkspaceMember(getAfter(budgetPath).data.workspaceId);
+    }
+
+    function hasValidCategoryCapAmount(data) {
+      return data.keys().hasAll(['amount']) && data.keys().hasOnly(['amount']) &&
+        isFiniteNonnegative(data.amount);
+    }
+
+    function isExpenseCategoryForBudgetAfter(budgetId, categoryId) {
+      let budgetPath = /databases/$(database)/documents/budgets/$(budgetId);
+      let categoryPath = /databases/$(database)/documents/categories/$(categoryId);
+      return existsAfter(budgetPath) && existsAfter(categoryPath) &&
+        ('workspaceId' in getAfter(categoryPath).data) &&
+        getAfter(categoryPath).data.type in ['expense', 'both'] &&
+        (getAfter(categoryPath).data.workspaceId == null ||
+          getAfter(categoryPath).data.workspaceId == getAfter(budgetPath).data.workspaceId);
+    }
+
     match /budgets/{budgetId} {
       allow read: if isWorkspaceMember(resource.data.workspaceId);
       allow create: if isWorkspaceMember(request.resource.data.workspaceId) &&
@@ -138,6 +166,16 @@ service cloud.firestore {
       allow update: if isWorkspaceMember(resource.data.workspaceId) &&
         isValidBudgetUpdate(request.resource.data, budgetId);
       allow delete: if false;
+
+      // Child caps inherit denomination and workspace from their actual parent.
+      // Reads retain archived/orphan history; every mutation requires the active post-state.
+      match /categoryCaps/{categoryId} {
+        allow read: if isCurrentBudgetWorkspaceMember(budgetId);
+        allow create, update: if isActiveBudgetWorkspaceMemberAfter(budgetId) &&
+          hasValidCategoryCapAmount(request.resource.data) &&
+          isExpenseCategoryForBudgetAfter(budgetId, categoryId);
+        allow delete: if isActiveBudgetWorkspaceMemberAfter(budgetId);
+      }
     }
   }
 }
