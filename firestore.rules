@@ -269,19 +269,21 @@ service cloud.firestore {
         (!('mirrorOf' in data) || data.mirrorOf == null);
     }
 
-    function validMovementLinkedAccount(accountId, workspaceId, currency, transactionId, operation) {
+    // Persistent movement markers are not proof; changed transaction deltas need current balance effects.
+    function validMovementLinkedAccount(accountId, beforeData, afterData, transactionId, operation) {
+      let accountBefore = get(accountPath(accountId));
       let accountAfter = getAfter(accountPath(accountId));
-      return accountAfter != null &&
-        accountAfter.data.workspaceId == workspaceId &&
-        accountAfter.data.currency == currency &&
-        accountAfter.data.lastPocketMovementId == transactionId &&
-        accountAfter.data.lastPocketMovementType == operation;
+      return accountBefore != null && accountAfter != null &&
+        accountAfter.data.balance != accountBefore.data.balance &&
+        ((hasNoParent(accountAfter.data) && childIds(accountAfter.data).size() == 0) ||
+         (accountAfter.data.lastPocketMovementId == transactionId &&
+          accountAfter.data.lastPocketMovementType == operation));
     }
 
     function validPocketMovementCreate(transactionId, data) {
       return !('pocketAllocation' in data) &&
-        validMovementLinkedAccount(data.accountId, data.workspaceId, data.currency, transactionId, 'created') &&
-        (data.type != 'transfer' || validMovementLinkedAccount(data.toAccountId, data.workspaceId, data.currency, transactionId, 'created')) &&
+        validMovementLinkedAccount(data.accountId, {}, data, transactionId, 'created') &&
+        (data.type != 'transfer' || validMovementLinkedAccount(data.toAccountId, {}, data, transactionId, 'created')) &&
         validPocketMovementShape(data, data.workspaceId);
     }
 
@@ -309,11 +311,29 @@ service cloud.firestore {
         afterData.diff(beforeData).affectedKeys().hasOnly([
           'amount', 'description', 'categoryId', 'date', 'receiptUrl', 'notes', 'installments', 'userId'
         ]) &&
-        validMovementLinkedAccount(beforeData.accountId, beforeData.workspaceId, beforeData.currency, transactionId, 'updated') &&
-        validMovementLinkedAccount(beforeData.toAccountId, beforeData.workspaceId, beforeData.currency, transactionId, 'updated');
+        (beforeData.amount == afterData.amount ||
+          (validMovementLinkedAccount(beforeData.accountId, beforeData, afterData, transactionId, 'updated') &&
+           validMovementLinkedAccount(beforeData.toAccountId, beforeData, afterData, transactionId, 'updated')));
+    }
+
+    // Account rules validate each posted delta; pair conservation rejects a one-sided transfer edit.
+    function validPocketTransferPairConserved(beforeData, afterData) {
+      let sourceBefore = get(accountPath(beforeData.accountId));
+      let destinationBefore = get(accountPath(beforeData.toAccountId));
+      let sourceAfter = getAfter(accountPath(afterData.accountId));
+      let destinationAfter = getAfter(accountPath(afterData.toAccountId));
+      return sourceBefore != null && destinationBefore != null && sourceAfter != null && destinationAfter != null &&
+        sourceBefore.data.balance + destinationBefore.data.balance ==
+        sourceAfter.data.balance + destinationAfter.data.balance;
     }
 
     function validPocketMovementUpdate(transactionId, beforeData, afterData) {
+      let sameTransferPair = beforeData.type == 'transfer' && afterData.type == 'transfer' &&
+        ((beforeData.accountId == afterData.accountId && beforeData.toAccountId == afterData.toAccountId) ||
+         (beforeData.accountId == afterData.toAccountId && beforeData.toAccountId == afterData.accountId));
+      let noDeltaChange = beforeData.accountId == afterData.accountId &&
+        beforeData.type == afterData.type && beforeData.amount == afterData.amount &&
+        (beforeData.type != 'transfer' || beforeData.toAccountId == afterData.toAccountId);
       return ('pocketAllocation' in beforeData && beforeData.pocketAllocation == true)
         ? validPocketOpeningUpdate(transactionId, beforeData, afterData)
         : beforeData.workspaceId == afterData.workspaceId &&
@@ -323,20 +343,23 @@ service cloud.firestore {
           'receiptUrl', 'notes', 'installments', 'userId', 'currency', 'statementImportId'
         ]) &&
         validExistingPocketMovement(beforeData) &&
-        validMovementLinkedAccount(beforeData.accountId, beforeData.workspaceId, beforeData.currency, transactionId, 'updated') &&
-        (beforeData.type != 'transfer' || validMovementLinkedAccount(beforeData.toAccountId, beforeData.workspaceId, beforeData.currency, transactionId, 'updated')) &&
-        (afterData.accountId == beforeData.accountId ||
-          (beforeData.type == 'transfer' && afterData.accountId == beforeData.toAccountId) ||
-          validMovementLinkedAccount(afterData.accountId, afterData.workspaceId, afterData.currency, transactionId, 'updated')) &&
-        (afterData.type != 'transfer' || afterData.toAccountId == beforeData.accountId ||
-          (beforeData.type == 'transfer' && afterData.toAccountId == beforeData.toAccountId) ||
-          validMovementLinkedAccount(afterData.toAccountId, afterData.workspaceId, afterData.currency, transactionId, 'updated')) &&
+        (noDeltaChange ||
+          (validMovementLinkedAccount(beforeData.accountId, beforeData, afterData, transactionId, 'updated') &&
+           (sameTransferPair
+             ? validPocketTransferPairConserved(beforeData, afterData)
+             : (beforeData.type != 'transfer' || validMovementLinkedAccount(beforeData.toAccountId, beforeData, afterData, transactionId, 'updated')) &&
+               (afterData.accountId == beforeData.accountId ||
+                 (beforeData.type == 'transfer' && afterData.accountId == beforeData.toAccountId) ||
+                 validMovementLinkedAccount(afterData.accountId, beforeData, afterData, transactionId, 'updated')) &&
+               (afterData.type != 'transfer' || afterData.toAccountId == beforeData.accountId ||
+                 (beforeData.type == 'transfer' && afterData.toAccountId == beforeData.toAccountId) ||
+                 validMovementLinkedAccount(afterData.toAccountId, beforeData, afterData, transactionId, 'updated'))))) &&
         validPocketMovementShape(afterData, afterData.workspaceId);
     }
 
     function validPocketMovementDelete(transactionId, data) {
-      return validMovementLinkedAccount(data.accountId, data.workspaceId, data.currency, transactionId, 'deleted') &&
-        (data.type != 'transfer' || validMovementLinkedAccount(data.toAccountId, data.workspaceId, data.currency, transactionId, 'deleted')) &&
+      return validMovementLinkedAccount(data.accountId, data, {}, transactionId, 'deleted') &&
+        (data.type != 'transfer' || validMovementLinkedAccount(data.toAccountId, data, {}, transactionId, 'deleted')) &&
         validPocketMovementShape(data, data.workspaceId);
     }
 

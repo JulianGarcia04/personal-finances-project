@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test, { after, before } from 'node:test'
-import { collection, deleteDoc, doc, setDoc, updateDoc } from 'firebase/firestore'
+import { collection, deleteDoc, doc, setDoc, updateDoc, writeBatch } from 'firebase/firestore'
 import { createPocketFixture, functionsRequire } from './pockets.fixtures.mjs'
 
 let fixture
@@ -146,6 +146,94 @@ test('client edits and reversals update overlapping pocket accounts atomically',
   assert.equal((await adminDb.collection('accounts').doc(pocket.id).get()).data().balance, 100)
   assert.equal((await adminDb.collection('accounts').doc(parent.id).get()).data().balance, 800)
   assert.equal((await adminDb.collection('accounts').doc(pocket.id).get()).data().pocketActivity, true)
+})
+
+test('rules reject transaction-only amount edits after a legitimate linked pocket edit', async () => {
+  const { accountsStore, transactionsStore, db, adminDb } = fixture
+  const parent = await accountsStore.addAccount({ name: 'Stale marker parent', type: 'checking', balance: 500, currency: 'COP' })
+  const pocket = await accountsStore.addAccount({ name: 'Stale marker pocket', type: 'savings', balance: 0, currency: 'COP', parentAccountId: parent.id })
+  const date = new Date('2026-10-05T12:00:00.000Z')
+  const created = await transactionsStore.addTransaction({
+    accountId: pocket.id, amount: 50, description: 'Initial pocket income', categoryId: 'income', date, type: 'income'
+  })
+  await transactionsStore.updateTransaction(created.id, {
+    accountId: pocket.id, amount: 40, description: 'Legitimately edited pocket income', categoryId: 'income', date, type: 'income'
+  })
+
+  const [markedAccount, editedTransaction] = await Promise.all([
+    adminDb.collection('accounts').doc(pocket.id).get(),
+    adminDb.collection('transactions').doc(created.id).get()
+  ])
+  assert.equal(markedAccount.data().lastPocketMovementId, created.id)
+  assert.equal(markedAccount.data().lastPocketMovementType, 'updated')
+  assert.equal(editedTransaction.data().amount, 40)
+
+  await assert.rejects(updateDoc(doc(db, 'transactions', created.id), { amount: 30 }),
+    error => error?.code === 'permission-denied')
+
+  const [storedAccount, storedTransaction] = await Promise.all([
+    adminDb.collection('accounts').doc(pocket.id).get(),
+    adminDb.collection('transactions').doc(created.id).get()
+  ])
+  assert.equal(storedAccount.data().balance, 40)
+  assert.equal(storedTransaction.data().amount, 40)
+
+  await updateDoc(doc(db, 'transactions', created.id), { description: 'Metadata-only edit' })
+  const [metadataAccount, metadataTransaction] = await Promise.all([
+    adminDb.collection('accounts').doc(pocket.id).get(),
+    adminDb.collection('transactions').doc(created.id).get()
+  ])
+  assert.equal(metadataAccount.data().balance, 40)
+  assert.equal(metadataTransaction.data().description, 'Metadata-only edit')
+})
+
+test('rules reject a transaction-only edit piggybacking on another linked movement', async () => {
+  const { accountsStore, transactionsStore, db, adminDb } = fixture
+  const parent = await accountsStore.addAccount({ name: 'Piggyback parent', type: 'checking', balance: 500, currency: 'COP' })
+  const pocket = await accountsStore.addAccount({ name: 'Piggyback pocket', type: 'savings', balance: 0, currency: 'COP', parentAccountId: parent.id })
+  const date = new Date('2026-10-06T12:00:00.000Z')
+  const linked = await transactionsStore.addTransaction({
+    accountId: pocket.id, amount: 40, description: 'Linked income', categoryId: 'income', date, type: 'income'
+  })
+  const unlinked = await transactionsStore.addTransaction({
+    accountId: pocket.id, amount: 60, description: 'Unlinked income', categoryId: 'income', date, type: 'income'
+  })
+
+  const batch = writeBatch(db)
+  batch.update(doc(db, 'accounts', pocket.id), {
+    balance: 110,
+    lastPocketMovementId: linked.id,
+    lastPocketMovementType: 'updated'
+  })
+  batch.update(doc(db, 'transactions', linked.id), { amount: 50 })
+  batch.update(doc(db, 'transactions', unlinked.id), { amount: 70 })
+  let batchError
+  try {
+    await batch.commit()
+  } catch (error) {
+    batchError = error
+  }
+
+  const [storedAccount, storedLinked, storedUnlinked] = await Promise.all([
+    adminDb.collection('accounts').doc(pocket.id).get(),
+    adminDb.collection('transactions').doc(linked.id).get(),
+    adminDb.collection('transactions').doc(unlinked.id).get()
+  ])
+  assert.deepEqual({
+    balance: storedAccount.data().balance,
+    markerId: storedAccount.data().lastPocketMovementId,
+    markerType: storedAccount.data().lastPocketMovementType,
+    linkedAmount: storedLinked.data().amount,
+    unlinkedAmount: storedUnlinked.data().amount,
+    error: batchError?.code
+  }, {
+    balance: 100,
+    markerId: unlinked.id,
+    markerType: 'created',
+    linkedAmount: 40,
+    unlinkedAmount: 60,
+    error: 'permission-denied'
+  })
 })
 
 test('client movement results stay scoped to the workspace captured before awaits', async () => {
