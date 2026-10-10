@@ -8,6 +8,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { genkit } from "genkit";
 import { googleAI } from "@genkit-ai/google-genai";
 import { z } from "zod";
+import { assertLegacyTransactionAccountsAreUnpocketed, createWorkspaceAccount } from "./pockets";
 
 dotenv.config();
 const corsHandler = cors({ origin: true });
@@ -407,25 +408,23 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
           currency: z.string().describe('Código de moneda de 3 caracteres (ej. "COP", "USD", "EUR")'),
           statementClosingDay: z.number().int().min(1).max(31).optional().describe('Día mensual de corte de la tarjeta'),
           paymentDueDay: z.number().int().min(1).max(31).optional().describe('Día mensual límite de pago de la tarjeta'),
+          parentAccountId: z.string().min(1).optional().describe('ID de una cuenta bancaria para crear un bolsillo de ahorros'),
         }),
         outputSchema: z.any(),
       },
-      async ({ name, type, balance, limit, currency, statementClosingDay, paymentDueDay }) => {
-        const newAccountRef = db.collection('accounts').doc();
-        const newAccount = {
+      async ({ name, type, balance, limit, currency, statementClosingDay, paymentDueDay, parentAccountId }) => {
+        return createWorkspaceAccount(db, {
           workspaceId: activeWorkspaceId,
           userId,
           name,
           type,
           balance: Number(balance),
-          limit: type === 'credit' ? Number(limit || 0) : 0,
-          currency: currency.toUpperCase(),
-          statementClosingDay: type === 'credit' ? statementClosingDay || null : null,
-          paymentDueDay: type === 'credit' ? paymentDueDay || null : null,
-          createdAt: admin.firestore.FieldValue.serverTimestamp()
-        };
-        await newAccountRef.set(newAccount);
-        return { id: newAccountRef.id, ...newAccount };
+          limit,
+          currency,
+          statementClosingDay,
+          paymentDueDay,
+          parentAccountId
+        });
       }
     );
 
@@ -481,6 +480,9 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       },
       async ({ accountId, amount, description, categoryId, type, toAccountId, date, installments }) => {
         await db.runTransaction(async (transaction) => {
+          if (toAccountId && type !== 'transfer') {
+            throw new Error("La cuenta destino solo se permite para transferencias.");
+          }
           const accountRef = db.collection('accounts').doc(accountId);
           const accountDoc = await transaction.get(accountRef);
           if (!accountDoc.exists) throw new Error("La cuenta origen no existe.");
@@ -497,6 +499,11 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
             toAccountData = toAccountDoc.data();
             if (!toAccountData || toAccountData.workspaceId !== activeWorkspaceId) throw new Error("Acceso denegado a la cuenta destino.");
           }
+
+          await assertLegacyTransactionAccountsAreUnpocketed(db, transaction, [
+            { id: accountId, data: accountData },
+            ...(toAccountData && toAccountId ? [{ id: toAccountId, data: toAccountData }] : [])
+          ]);
 
           const txDate = date ? new Date(date) : new Date();
           const newTxRef = db.collection('transactions').doc();
@@ -546,6 +553,9 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
           if (!txDoc.exists) throw new Error("La transacción no existe.");
           const txData = txDoc.data();
           if (!txData || txData.workspaceId !== activeWorkspaceId) throw new Error("Acceso denegado.");
+          if (txData.pocketAllocation === true) {
+            throw new Error("La asignación inicial de un bolsillo no se puede revertir por esta herramienta.");
+          }
 
           const accountRef = db.collection('accounts').doc(txData.accountId);
           const accountDoc = await transaction.get(accountRef);
@@ -555,13 +565,18 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
 
           let toAccountRef: admin.firestore.DocumentReference | null = null;
           let toAccountData: any = null;
-          if (txData.type === 'transfer' && txData.toAccountId) {
+          if (txData.toAccountId) {
             toAccountRef = db.collection('accounts').doc(txData.toAccountId);
             const toAccountDoc = await transaction.get(toAccountRef);
             if (toAccountDoc.exists) {
               toAccountData = toAccountDoc.data();
             }
           }
+
+          await assertLegacyTransactionAccountsAreUnpocketed(db, transaction, [
+            { id: txData.accountId, data: accountData },
+            ...(toAccountRef && toAccountData ? [{ id: toAccountRef.id, data: toAccountData }] : [])
+          ]);
 
           // Revertir balances
           if (txData.type === 'transfer' && toAccountRef && toAccountData) {

@@ -47,6 +47,11 @@ export interface Account {
   statementClosingDay?: number | null;
   paymentDueDay?: number | null;
   mirror?: AccountMirror | null;
+  // Pockets are one level deep; these fields are absent on legacy root accounts.
+  parentAccountId?: string | null;
+  childAccountIds?: string[];
+  pocketActivity?: boolean;
+  openingAllocationId?: string | null;
   createdAt: Date;
 }
 

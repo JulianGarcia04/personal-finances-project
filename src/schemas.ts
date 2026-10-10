@@ -15,7 +15,17 @@ export const AccountSchema = z.object({
     .min(3, 'El código de moneda debe tener exactamente 3 caracteres')
     .max(3, 'El código de moneda debe tener exactamente 3 caracteres'),
   statementClosingDay: z.number().int().min(1).max(31).nullable().optional(),
-  paymentDueDay: z.number().int().min(1).max(31).nullable().optional()
+  paymentDueDay: z.number().int().min(1).max(31).nullable().optional(),
+  parentAccountId: z.string().min(1).nullable().optional()
+})
+
+export const PocketOpeningSchema = z.object({
+  name: z.string()
+    .min(1, 'El nombre es requerido')
+    .max(50, 'El nombre no puede exceder 50 caracteres'),
+  parentAccountId: z.string().min(1, 'La cuenta principal es requerida'),
+  balance: z.number().finite().min(0, 'El saldo inicial debe ser mayor o igual a cero'),
+  currency: z.string().length(3).optional()
 })
 
 export const TransactionSchema = z.object({
