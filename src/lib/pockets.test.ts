@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { Account } from '../types.ts'
-import { getAccountPocketTotals, isPocketAccount, planPocketOpening } from './pockets.ts'
+import {
+  getAccountPocketTotals,
+  getTransactionAccountDeltas,
+  getTransactionReplacementDeltas,
+  isPocketAccount,
+  planPocketOpening
+} from './pockets.ts'
 
 function account(overrides: Partial<Account> & Pick<Account, 'id' | 'balance'>): Account {
   return {
@@ -78,4 +84,27 @@ test('pocket opening rejects invalid amounts, ineligible parents, and insufficie
   assert.throws(() => planPocketOpening(account({ id: 'pocket', balance: 100, parentAccountId: 'bank' }), 1, 'workspace-1'))
   assert.throws(() => planPocketOpening(account({ id: 'bank', balance: 100 }), 1, 'workspace-2'))
   assert.throws(() => planPocketOpening(parent, 1, 'workspace-1', 'USD'))
+})
+
+test('pocket movement deltas preserve income, expense, and neutral transfer semantics', () => {
+  assert.deepEqual(getTransactionAccountDeltas({ accountId: 'pocket', amount: 40, type: 'income' }), { pocket: 40 })
+  assert.deepEqual(getTransactionAccountDeltas({ accountId: 'pocket', amount: -15, type: 'expense' }), { pocket: -15 })
+  assert.deepEqual(getTransactionAccountDeltas({
+    accountId: 'bank', toAccountId: 'pocket', amount: 25, type: 'transfer'
+  }), { bank: -25, pocket: 25 })
+  assert.throws(() => getTransactionAccountDeltas({ accountId: 'pocket', amount: 1, type: 'loan' }))
+})
+
+test('transaction replacement deltas combine overlapping old and new accounts', () => {
+  assert.deepEqual(getTransactionReplacementDeltas(
+    { accountId: 'bank', toAccountId: 'pocket', amount: 30, type: 'transfer' },
+    { accountId: 'pocket', toAccountId: 'bank', amount: 20, type: 'transfer' }
+  ), { bank: 50, pocket: -50 })
+  assert.deepEqual(getTransactionReplacementDeltas(
+    { accountId: 'pocket', amount: -40, type: 'expense' },
+    { accountId: 'pocket', amount: -15, type: 'expense' }
+  ), { pocket: 25 })
+  assert.deepEqual(getTransactionReplacementDeltas(
+    { accountId: 'pocket', amount: 10, type: 'income' }, null
+  ), { pocket: -10 })
 })

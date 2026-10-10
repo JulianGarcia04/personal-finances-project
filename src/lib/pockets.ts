@@ -1,4 +1,4 @@
-import type { Account } from '../types.ts'
+import type { Account, TransactionType } from '../types.ts'
 
 export interface AccountPocketTotals {
   availableBalance: number
@@ -14,8 +14,56 @@ export interface PocketOpeningPlan {
   openingTransactionAmount: number | null
 }
 
+export interface PocketMovement {
+  accountId: string
+  amount: number
+  type: TransactionType
+  toAccountId?: string | null
+}
+
+export type AccountBalanceDeltas = Record<string, number>
+
 export function isPocketAccount(account: Pick<Account, 'parentAccountId'>): boolean {
   return typeof account.parentAccountId === 'string' && account.parentAccountId.length > 0
+}
+
+export function isPocketRelatedAccount(account: Pick<Account, 'parentAccountId' | 'childAccountIds'>): boolean {
+  return isPocketAccount(account) || (account.childAccountIds?.length ?? 0) > 0
+}
+
+export function getTransactionAccountDeltas(movement: PocketMovement): AccountBalanceDeltas {
+  const { accountId, amount, type, toAccountId } = movement
+  if (!accountId || !Number.isFinite(amount)) throw new Error('El movimiento de bolsillo no es válido.')
+
+  const deltas: AccountBalanceDeltas = { [accountId]: 0 }
+  if (type === 'transfer') {
+    if (!toAccountId || toAccountId === accountId || amount <= 0) {
+      throw new Error('La transferencia de bolsillo debe tener cuentas distintas y un monto positivo.')
+    }
+    deltas[accountId] = -amount
+    deltas[toAccountId] = (deltas[toAccountId] ?? 0) + amount
+  } else if (type === 'income' || type === 'expense') {
+    deltas[accountId] = amount
+  } else {
+    throw new Error('Este tipo de movimiento no está disponible para bolsillos.')
+  }
+  return deltas
+}
+
+export function getTransactionReplacementDeltas(
+  before: PocketMovement | null,
+  after: PocketMovement | null
+): AccountBalanceDeltas {
+  const deltas: AccountBalanceDeltas = {}
+  const add = (movement: PocketMovement | null, direction: 1 | -1) => {
+    if (!movement) return
+    for (const [accountId, delta] of Object.entries(getTransactionAccountDeltas(movement))) {
+      deltas[accountId] = (deltas[accountId] ?? 0) + delta * direction
+    }
+  }
+  add(before, -1)
+  add(after, 1)
+  return Object.fromEntries(Object.entries(deltas).filter(([, delta]) => delta !== 0))
 }
 
 export function getAccountPocketTotals(parentId: string, accounts: Account[]): AccountPocketTotals {

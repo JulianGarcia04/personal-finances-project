@@ -8,7 +8,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { genkit } from "genkit";
 import { googleAI } from "@genkit-ai/google-genai";
 import { z } from "zod";
-import { assertLegacyTransactionAccountsAreUnpocketed, createWorkspaceAccount } from "./pockets";
+import { createWorkspaceAccount, mutateWorkspaceTransaction } from "./pockets";
 
 dotenv.config();
 const corsHandler = cors({ origin: true });
@@ -479,58 +479,22 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
         outputSchema: z.any(),
       },
       async ({ accountId, amount, description, categoryId, type, toAccountId, date, installments }) => {
-        await db.runTransaction(async (transaction) => {
-          if (toAccountId && type !== 'transfer') {
-            throw new Error("La cuenta destino solo se permite para transferencias.");
-          }
-          const accountRef = db.collection('accounts').doc(accountId);
-          const accountDoc = await transaction.get(accountRef);
-          if (!accountDoc.exists) throw new Error("La cuenta origen no existe.");
-          const accountData = accountDoc.data();
-          if (!accountData || accountData.workspaceId !== activeWorkspaceId) throw new Error("Acceso denegado a la cuenta origen.");
-
-          let toAccountData: any = null;
-          let toAccountRef: admin.firestore.DocumentReference | null = null;
-          if (type === 'transfer') {
-            if (!toAccountId) throw new Error("La cuenta destino es requerida para transferencias.");
-            toAccountRef = db.collection('accounts').doc(toAccountId);
-            const toAccountDoc = await transaction.get(toAccountRef);
-            if (!toAccountDoc.exists) throw new Error("La cuenta destino no existe.");
-            toAccountData = toAccountDoc.data();
-            if (!toAccountData || toAccountData.workspaceId !== activeWorkspaceId) throw new Error("Acceso denegado a la cuenta destino.");
-          }
-
-          await assertLegacyTransactionAccountsAreUnpocketed(db, transaction, [
-            { id: accountId, data: accountData },
-            ...(toAccountData && toAccountId ? [{ id: toAccountId, data: toAccountData }] : [])
-          ]);
-
-          const txDate = date ? new Date(date) : new Date();
-          const newTxRef = db.collection('transactions').doc();
-          const newTx = {
-            workspaceId: activeWorkspaceId,
-            userId,
+        if (toAccountId && type !== 'transfer') {
+          throw new Error("La cuenta destino solo se permite para transferencias.");
+        }
+        await mutateWorkspaceTransaction(db, {
+          kind: 'created',
+          userId,
+          workspaceId: activeWorkspaceId,
+          movement: {
             accountId,
             amount: Number(amount),
             description,
-            categoryId: type === 'expense' || type === 'income' ? categoryId || "" : "",
-            date: admin.firestore.Timestamp.fromDate(txDate),
+            categoryId,
             type,
             toAccountId: toAccountId || null,
-            installments: type === 'expense' && accountData.type === 'credit' ? installments || 1 : 1,
-            currency: accountData.currency || 'USD',
-            createdAt: admin.firestore.FieldValue.serverTimestamp()
-          };
-
-          // Escribir transacción
-          transaction.set(newTxRef, newTx);
-
-          // Actualizar balances
-          if (type === 'transfer' && toAccountRef && toAccountData) {
-            transaction.update(accountRef, { balance: Number(accountData.balance) - Number(amount) });
-            transaction.update(toAccountRef, { balance: Number(toAccountData.balance) + Number(amount) });
-          } else {
-            transaction.update(accountRef, { balance: Number(accountData.balance) + Number(amount) });
+            date: date ? new Date(date) : new Date(),
+            installments
           }
         });
         return { success: true, message: "Transacción agregada y saldos actualizados." };
@@ -547,47 +511,11 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
         outputSchema: z.any(),
       },
       async ({ transactionId }) => {
-        await db.runTransaction(async (transaction) => {
-          const txRef = db.collection('transactions').doc(transactionId);
-          const txDoc = await transaction.get(txRef);
-          if (!txDoc.exists) throw new Error("La transacción no existe.");
-          const txData = txDoc.data();
-          if (!txData || txData.workspaceId !== activeWorkspaceId) throw new Error("Acceso denegado.");
-          if (txData.pocketAllocation === true) {
-            throw new Error("La asignación inicial de un bolsillo no se puede revertir por esta herramienta.");
-          }
-
-          const accountRef = db.collection('accounts').doc(txData.accountId);
-          const accountDoc = await transaction.get(accountRef);
-          if (!accountDoc.exists) throw new Error("La cuenta asociada no existe.");
-          const accountData = accountDoc.data();
-          if (!accountData || accountData.workspaceId !== activeWorkspaceId) throw new Error("Acceso denegado o cuenta corrupta.");
-
-          let toAccountRef: admin.firestore.DocumentReference | null = null;
-          let toAccountData: any = null;
-          if (txData.toAccountId) {
-            toAccountRef = db.collection('accounts').doc(txData.toAccountId);
-            const toAccountDoc = await transaction.get(toAccountRef);
-            if (toAccountDoc.exists) {
-              toAccountData = toAccountDoc.data();
-            }
-          }
-
-          await assertLegacyTransactionAccountsAreUnpocketed(db, transaction, [
-            { id: txData.accountId, data: accountData },
-            ...(toAccountRef && toAccountData ? [{ id: toAccountRef.id, data: toAccountData }] : [])
-          ]);
-
-          // Revertir balances
-          if (txData.type === 'transfer' && toAccountRef && toAccountData) {
-            transaction.update(accountRef, { balance: Number(accountData.balance) + Number(txData.amount) });
-            transaction.update(toAccountRef, { balance: Number(toAccountData.balance) - Number(txData.amount) });
-          } else {
-            transaction.update(accountRef, { balance: Number(accountData.balance) - Number(txData.amount) });
-          }
-
-          // Borrar transacción
-          transaction.delete(txRef);
+        await mutateWorkspaceTransaction(db, {
+          kind: 'deleted',
+          transactionId,
+          userId,
+          workspaceId: activeWorkspaceId
         });
         return { success: true, message: "Transacción eliminada y saldos restaurados." };
       }

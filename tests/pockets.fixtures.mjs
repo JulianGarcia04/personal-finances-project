@@ -61,6 +61,7 @@ export async function createPocketFixture() {
     const { createPinia, setActivePinia } = await import('pinia')
     const authStoreModule = await vite.ssrLoadModule('/src/stores/authStore.ts')
     const accountsStoreModule = await vite.ssrLoadModule('/src/stores/accountsStore.ts')
+    const transactionsStoreModule = await vite.ssrLoadModule('/src/stores/transactionsStore.ts')
     const identity = await createUserWithEmailAndPassword(
       auth,
       `pockets-${Date.now()}@example.test`,
@@ -120,6 +121,7 @@ export async function createPocketFixture() {
     const authStore = authStoreModule.useAuthStore()
     authStore.activeWorkspaceId = workspaceId
     const accountsStore = accountsStoreModule.useAccountsStore()
+    const transactionsStore = transactionsStoreModule.useTransactionsStore()
 
     return {
       admin,
@@ -128,6 +130,7 @@ export async function createPocketFixture() {
       auth,
       authStore,
       accountsStore,
+      transactionsStore,
       db,
       identity,
       workspaceId,

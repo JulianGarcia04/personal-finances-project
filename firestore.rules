@@ -46,11 +46,6 @@ service cloud.firestore {
         validChildIds(childIds(account.data)) && childIds(account.data).size() == 0;
     }
 
-    function rootAccountAfterForWorkspace(accountId, workspaceId) {
-      let account = getAfter(accountPath(accountId));
-      return account != null && account.data.workspaceId == workspaceId && hasNoParent(account.data);
-    }
-
     function validPocketOpeningLink(transactionId, parentId, childId, amount, workspaceId, currency) {
       let tx = getAfter(transactionPath(transactionId));
       return transactionId is string &&
@@ -92,6 +87,7 @@ service cloud.firestore {
         data.openingAllocationId == (isFunded ? data.openingAllocationId : null) &&
         (!isFunded || data.openingAllocationId is string) &&
         (!('childAccountIds' in data) || (data.childAccountIds is list && data.childAccountIds.size() == 0)) &&
+        !('lastPocketMovementId' in data) && !('lastPocketMovementType' in data) &&
         data.createdAt is timestamp &&
         parent != null && parentAfter != null &&
         parent.data.workspaceId == data.workspaceId &&
@@ -156,6 +152,7 @@ service cloud.firestore {
       let oldIds = childIds(resource.data);
       let newIds = childIds(request.resource.data);
       let registryChanged = changed.hasAny(['childAccountIds', 'lastPocketChildId', 'lastPocketChange']);
+      let movementChanged = changed.hasAny(['lastPocketMovementId', 'lastPocketMovementType']);
       return hasNoParent(resource.data) && hasNoParent(request.resource.data) &&
         !changed.hasAny(['parentAccountId']) &&
         !('pocketActivity' in request.resource.data) &&
@@ -171,21 +168,28 @@ service cloud.firestore {
           ? validPocketAddition(accountId, oldIds, newIds, changed) ||
             validPocketRemoval(accountId, oldIds, newIds, changed)
           : oldIds.size() == newIds.size() && newIds.hasAll(oldIds) && oldIds.hasAll(newIds) &&
-            (oldIds.size() == 0 || request.resource.data.balance == resource.data.balance));
+            (movementChanged
+              ? validPocketMovementAccount(accountId)
+              : oldIds.size() == 0 || request.resource.data.balance == resource.data.balance));
     }
 
-    function validPocketUpdate() {
+    function validPocketUpdate(accountId) {
       let changed = request.resource.data.diff(resource.data).affectedKeys();
+      let nameOnly = changed.hasOnly(['name']);
       return request.resource.data.parentAccountId == resource.data.parentAccountId &&
         request.resource.data.workspaceId == resource.data.workspaceId &&
         request.resource.data.currency == resource.data.currency &&
         request.resource.data.type == 'savings' && resource.data.type == 'savings' &&
-        request.resource.data.balance == resource.data.balance &&
         request.resource.data.limit == resource.data.limit &&
-        request.resource.data.pocketActivity == resource.data.pocketActivity &&
-        request.resource.data.openingAllocationId == resource.data.openingAllocationId &&
+        (request.resource.data.openingAllocationId == resource.data.openingAllocationId ||
+          (request.resource.data.openingAllocationId == null &&
+           resource.data.openingAllocationId == request.resource.data.lastPocketMovementId &&
+           request.resource.data.lastPocketMovementType == 'deleted')) &&
         (!('mirror' in request.resource.data) || request.resource.data.mirror == null) &&
-        changed.hasOnly(['name']);
+        (nameOnly
+          ? request.resource.data.balance == resource.data.balance &&
+            request.resource.data.pocketActivity == resource.data.pocketActivity
+          : validPocketMovementAccount(accountId));
     }
 
     function validPocketDelete(accountId) {
@@ -214,6 +218,158 @@ service cloud.firestore {
       let destinationExists = data.toAccountId is string && exists(accountPath(data.toAccountId));
       return (!sourceExists || rootAccountForWorkspace(data.accountId, data.workspaceId)) &&
         (!destinationExists || rootAccountForWorkspace(data.toAccountId, data.workspaceId));
+    }
+
+    function validMovementChildEndpoint(accountId, workspaceId, data) {
+      let parent = get(accountPath(data.parentAccountId));
+      return data.parentAccountId is string && data.type == 'savings' && parent != null &&
+        parent.data.workspaceId == workspaceId && parent.data.type in ['checking', 'savings'] &&
+        hasNoParent(parent.data) && (!('mirror' in parent.data) || parent.data.mirror == null) &&
+        parent.data.currency == data.currency && accountId in childIds(parent.data) &&
+        validChildIds(childIds(parent.data)) && childIds(data).size() == 0;
+    }
+
+    function validMovementEndpointData(accountId, workspaceId, data) {
+      return data.workspaceId == workspaceId && data.type in ['checking', 'savings', 'cash'] &&
+        (!('mirror' in data) || data.mirror == null) &&
+        (hasNoParent(data)
+          ? validChildIds(childIds(data))
+          : validMovementChildEndpoint(accountId, workspaceId, data));
+    }
+
+    function transactionDeltaForAccount(data, accountId) {
+      let sourceDelta = 'accountId' in data && data.accountId == accountId
+        ? (data.type == 'transfer' ? -data.amount : data.amount)
+        : 0;
+      let destinationDelta = 'accountId' in data && data.type == 'transfer' && data.toAccountId == accountId ? data.amount : 0;
+      return sourceDelta + destinationDelta;
+    }
+
+    function validPocketTransferShape(data, workspaceId, source) {
+      let destination = get(accountPath(data.toAccountId));
+      return data.toAccountId is string && data.accountId != data.toAccountId &&
+        isFiniteNumber(data.amount) && data.amount > 0 && destination != null &&
+        destination.data.currency == source.data.currency &&
+        validMovementEndpointData(data.toAccountId, workspaceId, destination.data);
+    }
+
+    function validPocketMovementShape(data, workspaceId) {
+      let source = get(accountPath(data.accountId));
+      let validCashflow = (data.type == 'income' && isFiniteNumber(data.amount) && data.amount > 0 && data.toAccountId == null) ||
+        (data.type == 'expense' && isFiniteNumber(data.amount) && data.amount < 0 && data.toAccountId == null);
+      return data.workspaceId == workspaceId && data.userId is string && data.userId.size() > 0 &&
+        data.accountId is string && source != null && validMovementEndpointData(data.accountId, workspaceId, source.data) &&
+        source.data.currency is string &&
+        data.currency == source.data.currency &&
+        (data.type == 'transfer'
+          ? validPocketTransferShape(data, workspaceId, source)
+          : validCashflow) &&
+        data.description is string && data.description.size() > 0 && data.description.size() <= 500 &&
+        data.categoryId is string && data.date is timestamp && data.createdAt is timestamp &&
+        (!('mirrorOf' in data) || data.mirrorOf == null);
+    }
+
+    function validMovementLinkedAccount(accountId, workspaceId, currency, transactionId, operation) {
+      let accountAfter = getAfter(accountPath(accountId));
+      return accountAfter != null &&
+        accountAfter.data.workspaceId == workspaceId &&
+        accountAfter.data.currency == currency &&
+        accountAfter.data.lastPocketMovementId == transactionId &&
+        accountAfter.data.lastPocketMovementType == operation;
+    }
+
+    function validPocketMovementCreate(transactionId, data) {
+      return !('pocketAllocation' in data) &&
+        validMovementLinkedAccount(data.accountId, data.workspaceId, data.currency, transactionId, 'created') &&
+        (data.type != 'transfer' || validMovementLinkedAccount(data.toAccountId, data.workspaceId, data.currency, transactionId, 'created')) &&
+        validPocketMovementShape(data, data.workspaceId);
+    }
+
+    function validExistingPocketMovement(data) {
+      let validTransfer = data.type == 'transfer' && data.toAccountId is string &&
+        data.accountId != data.toAccountId && isFiniteNumber(data.amount) && data.amount > 0;
+      let validCashflow = (data.type == 'income' && isFiniteNumber(data.amount) && data.amount > 0 && data.toAccountId == null) ||
+        (data.type == 'expense' && isFiniteNumber(data.amount) && data.amount < 0 && data.toAccountId == null);
+      return (validTransfer || validCashflow) && (!('mirrorOf' in data) || data.mirrorOf == null);
+    }
+
+    function validPocketOpeningUpdate(transactionId, beforeData, afterData) {
+      return afterData.pocketAllocation == true &&
+        beforeData.workspaceId == afterData.workspaceId &&
+        beforeData.createdAt == afterData.createdAt &&
+        beforeData.type == 'transfer' && afterData.type == 'transfer' &&
+        beforeData.accountId == afterData.accountId &&
+        beforeData.toAccountId == afterData.toAccountId &&
+        afterData.accountId != afterData.toAccountId &&
+        isFiniteNumber(afterData.amount) && afterData.amount > 0 &&
+        beforeData.currency == afterData.currency && afterData.categoryId == '' &&
+        afterData.userId is string && afterData.userId.size() > 0 &&
+        afterData.description is string && afterData.description.size() > 0 && afterData.description.size() <= 500 &&
+        afterData.date is timestamp &&
+        afterData.diff(beforeData).affectedKeys().hasOnly([
+          'amount', 'description', 'categoryId', 'date', 'receiptUrl', 'notes', 'installments', 'userId'
+        ]) &&
+        validMovementLinkedAccount(beforeData.accountId, beforeData.workspaceId, beforeData.currency, transactionId, 'updated') &&
+        validMovementLinkedAccount(beforeData.toAccountId, beforeData.workspaceId, beforeData.currency, transactionId, 'updated');
+    }
+
+    function validPocketMovementUpdate(transactionId, beforeData, afterData) {
+      return ('pocketAllocation' in beforeData && beforeData.pocketAllocation == true)
+        ? validPocketOpeningUpdate(transactionId, beforeData, afterData)
+        : beforeData.workspaceId == afterData.workspaceId &&
+        beforeData.createdAt == afterData.createdAt &&
+        afterData.diff(beforeData).affectedKeys().hasOnly([
+          'accountId', 'amount', 'description', 'categoryId', 'date', 'type', 'toAccountId',
+          'receiptUrl', 'notes', 'installments', 'userId', 'currency', 'statementImportId'
+        ]) &&
+        validExistingPocketMovement(beforeData) &&
+        validMovementLinkedAccount(beforeData.accountId, beforeData.workspaceId, beforeData.currency, transactionId, 'updated') &&
+        (beforeData.type != 'transfer' || validMovementLinkedAccount(beforeData.toAccountId, beforeData.workspaceId, beforeData.currency, transactionId, 'updated')) &&
+        (afterData.accountId == beforeData.accountId ||
+          (beforeData.type == 'transfer' && afterData.accountId == beforeData.toAccountId) ||
+          validMovementLinkedAccount(afterData.accountId, afterData.workspaceId, afterData.currency, transactionId, 'updated')) &&
+        (afterData.type != 'transfer' || afterData.toAccountId == beforeData.accountId ||
+          (beforeData.type == 'transfer' && afterData.toAccountId == beforeData.toAccountId) ||
+          validMovementLinkedAccount(afterData.toAccountId, afterData.workspaceId, afterData.currency, transactionId, 'updated')) &&
+        validPocketMovementShape(afterData, afterData.workspaceId);
+    }
+
+    function validPocketMovementDelete(transactionId, data) {
+      return validMovementLinkedAccount(data.accountId, data.workspaceId, data.currency, transactionId, 'deleted') &&
+        (data.type != 'transfer' || validMovementLinkedAccount(data.toAccountId, data.workspaceId, data.currency, transactionId, 'deleted')) &&
+        validPocketMovementShape(data, data.workspaceId);
+    }
+
+    function validPocketMovementAccount(accountId) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      let transactionId = request.resource.data.lastPocketMovementId;
+      let operation = request.resource.data.lastPocketMovementType;
+      let beforeTransaction = get(transactionPath(transactionId));
+      let afterTransaction = getAfter(transactionPath(transactionId));
+      let beforeData = beforeTransaction == null ? {} : beforeTransaction.data;
+      let afterData = afterTransaction == null ? {} : afterTransaction.data;
+      let beforeDelta = transactionDeltaForAccount(beforeData, accountId);
+      let afterDelta = transactionDeltaForAccount(afterData, accountId);
+      let netDelta = afterDelta - beforeDelta;
+      return transactionId is string && operation in ['created', 'updated', 'deleted'] &&
+        changed.hasOnly(['balance', 'pocketActivity', 'lastPocketMovementId', 'lastPocketMovementType', 'openingAllocationId']) &&
+        ((operation == 'created' && !('accountId' in beforeData) && 'accountId' in afterData) ||
+         (operation == 'updated' && 'accountId' in beforeData && 'accountId' in afterData) ||
+         (operation == 'deleted' && 'accountId' in beforeData && !('accountId' in afterData))) &&
+        request.resource.data.balance == resource.data.balance + netDelta &&
+        (!changed.hasAny(['openingAllocationId']) ||
+          (operation == 'deleted' && beforeData.pocketAllocation == true &&
+           beforeData.toAccountId == accountId && resource.data.openingAllocationId == transactionId &&
+           request.resource.data.openingAllocationId == null)) &&
+        (netDelta == 0
+          ? request.resource.data.lastPocketMovementId == transactionId &&
+            request.resource.data.lastPocketMovementType == operation &&
+            (!('parentAccountId' in resource.data && resource.data.parentAccountId is string) || request.resource.data.pocketActivity == true)
+          : request.resource.data.lastPocketMovementId == transactionId &&
+            request.resource.data.lastPocketMovementType == operation &&
+            (!('parentAccountId' in resource.data && resource.data.parentAccountId is string) || request.resource.data.pocketActivity == true) &&
+            (!(('parentAccountId' in resource.data && resource.data.parentAccountId is string) || childIds(resource.data).size() > 0) ||
+              request.resource.data.balance >= 0));
     }
 
     function validPocketOpeningTransaction(transactionId) {
@@ -270,10 +426,12 @@ service cloud.firestore {
              !('pocketActivity' in request.resource.data) &&
              !('openingAllocationId' in request.resource.data) &&
              !('lastPocketChildId' in request.resource.data) &&
-             !('lastPocketChange' in request.resource.data))
+             !('lastPocketChange' in request.resource.data) &&
+             !('lastPocketMovementId' in request.resource.data) &&
+             !('lastPocketMovementType' in request.resource.data))
           : validPocketCreate(accountId));
       allow update: if isWorkspaceMember(resource.data.workspaceId) &&
-        (hasNoParent(resource.data) ? validRootAccountUpdate(accountId) : validPocketUpdate());
+        (hasNoParent(resource.data) ? validRootAccountUpdate(accountId) : validPocketUpdate(accountId));
       allow delete: if isWorkspaceMember(resource.data.workspaceId) &&
         (hasNoParent(resource.data)
           ? validChildIds(childIds(resource.data)) && childIds(resource.data).size() == 0
@@ -284,13 +442,16 @@ service cloud.firestore {
       allow read: if isWorkspaceMember(resource.data.workspaceId);
       allow create: if isWorkspaceMember(request.resource.data.workspaceId) &&
         (normalTransactionReferencesRoots(request.resource.data) ||
+         validPocketMovementCreate(transactionId, request.resource.data) ||
          validPocketOpeningTransaction(transactionId));
       allow update: if isWorkspaceMember(resource.data.workspaceId) &&
         isWorkspaceMember(request.resource.data.workspaceId) &&
-        safeExistingTransactionReferencesNoPocket(resource.data) &&
-        safeExistingTransactionReferencesNoPocket(request.resource.data);
+        ((safeExistingTransactionReferencesNoPocket(resource.data) &&
+          safeExistingTransactionReferencesNoPocket(request.resource.data)) ||
+         validPocketMovementUpdate(transactionId, resource.data, request.resource.data));
       allow delete: if isWorkspaceMember(resource.data.workspaceId) &&
-        safeExistingTransactionReferencesNoPocket(resource.data);
+        (safeExistingTransactionReferencesNoPocket(resource.data) ||
+         validPocketMovementDelete(transactionId, resource.data));
     }
 
     match /categories/{categoryId} {

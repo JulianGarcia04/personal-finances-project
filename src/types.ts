@@ -52,6 +52,8 @@ export interface Account {
   childAccountIds?: string[];
   pocketActivity?: boolean;
   openingAllocationId?: string | null;
+  lastPocketMovementId?: string;
+  lastPocketMovementType?: 'created' | 'updated' | 'deleted';
   createdAt: Date;
 }
 

@@ -2,7 +2,8 @@ import { defineStore } from 'pinia'
 import { db, auth, storage } from '@/lib/firebase'
 import { useAccountsStore } from './accountsStore'
 import { useAuthStore } from './authStore'
-import { Transaction, Category, TransactionType } from '@/types'
+import { Account, Transaction, Category, TransactionType } from '@/types'
+import { getTransactionReplacementDeltas, isPocketRelatedAccount } from '@/lib/pockets'
 import { planMirror, planSettlement } from '@/lib/mirror'
 import { expenseAmountForDate, getInstallmentCount } from '@/lib/installments'
 import { 
@@ -17,6 +18,7 @@ import {
   updateDoc,
   deleteDoc, 
   writeBatch,
+  runTransaction,
   increment,
   Timestamp
 } from 'firebase/firestore'
@@ -34,6 +36,203 @@ const DEFAULT_CATEGORIES = [
   { name: 'Ahorro', icon: 'PiggyBank', color: '#14b8a6', type: 'expense' },
   { name: 'Otros', icon: 'HelpCircle', color: '#6b7280', type: 'both' }
 ]
+
+type PocketMutationKind = 'created' | 'updated' | 'deleted'
+
+interface PocketMovementTransaction {
+  workspaceId: string
+  userId: string
+  accountId: string
+  amount: number
+  description: string
+  categoryId: string
+  date: Timestamp
+  type: TransactionType
+  toAccountId: string | null
+  receiptUrl?: string | null
+  notes?: string | null
+  installments?: number | null
+  currency: string
+  createdAt: Date
+  mirrorOf?: string | null
+  pocketAllocation?: boolean
+}
+
+function isUsablePocketMovementAccount(account: any): boolean {
+  return account && ['checking', 'savings', 'cash'].includes(account.type) && !account.mirror
+}
+
+function movementAccountIsPocketRelated(account: any): boolean {
+  return !!account && isPocketRelatedAccount(account as Pick<Account, 'parentAccountId' | 'childAccountIds'>)
+}
+
+function assertPocketMovementEndpoint(account: any, accountId: string, workspaceId: string, parents: Map<string, any>): void {
+  if (!account || account.workspaceId !== workspaceId || !isUsablePocketMovementAccount(account)) {
+    throw new Error('Las cuentas del movimiento deben ser cuentas ordinarias del mismo workspace.')
+  }
+  if (account.parentAccountId != null) {
+    const parent = parents.get(account.parentAccountId)
+    if (account.type !== 'savings' || !parent || parent.workspaceId !== workspaceId ||
+        !['checking', 'savings'].includes(parent.type) || parent.parentAccountId != null || parent.mirror ||
+        parent.currency !== account.currency || !Array.isArray(parent.childAccountIds) ||
+        !parent.childAccountIds.includes(accountId)) {
+      throw new Error('La relación del bolsillo con su cuenta principal no es válida.')
+    }
+    if (account.childAccountIds?.length) throw new Error('No se permiten bolsillos anidados.')
+  } else if (account.childAccountIds !== undefined &&
+      (!Array.isArray(account.childAccountIds) || new Set(account.childAccountIds).size !== account.childAccountIds.length)) {
+    throw new Error('El registro de bolsillos de la cuenta no es válido.')
+  }
+}
+
+function movementFromStored(data: any) {
+  return { accountId: data.accountId, toAccountId: data.toAccountId ?? null, amount: Number(data.amount), type: data.type }
+}
+
+function accountIdsForTransaction(transactionData: any): string[] {
+  return [transactionData?.accountId, transactionData?.type === 'transfer' ? transactionData?.toAccountId : null]
+    .filter((id): id is string => typeof id === 'string' && id.length > 0)
+}
+
+function transactionTouchesPocket(accountsStore: ReturnType<typeof useAccountsStore>, ...transactions: any[]): boolean {
+  return transactions.flatMap(accountIdsForTransaction).some(accountId =>
+    movementAccountIsPocketRelated(accountsStore.getAccountById(accountId))
+  )
+}
+
+function publishPocketDeltas(
+  accountsStore: ReturnType<typeof useAccountsStore>,
+  deltas: Record<string, number>,
+  workspaceId: string,
+  userId: string
+): void {
+  const authStore = useAuthStore()
+  if (authStore.activeWorkspaceId !== workspaceId || auth.currentUser?.uid !== userId) return
+  for (const [accountId, delta] of Object.entries(deltas)) {
+    const account = accountsStore.accounts.find(existing => existing.id === accountId)
+    if (!account) continue
+    account.balance += delta
+    if (account.parentAccountId) account.pocketActivity = true
+  }
+}
+
+async function commitPocketMovement(options: {
+  kind: PocketMutationKind
+  transactionId?: string
+  workspaceId: string
+  userId: string
+  next?: PocketMovementTransaction
+}): Promise<{ id: string; data: any; deltas: Record<string, number> }> {
+  const transactionRef = options.transactionId
+    ? doc(db, 'transactions', options.transactionId)
+    : doc(collection(db, 'transactions'))
+  const id = transactionRef.id
+
+  return runTransaction(db, async transaction => {
+    if (auth.currentUser?.uid !== options.userId) throw new Error('La sesión cambió antes de guardar el movimiento.')
+    const beforeSnapshot = options.kind === 'created' ? null : await transaction.get(transactionRef)
+    if (beforeSnapshot && !beforeSnapshot.exists()) throw new Error('Transacción no encontrada.')
+    const before = beforeSnapshot?.data() ?? null
+    if (before && before.workspaceId !== options.workspaceId) throw new Error('La transacción pertenece a otro workspace.')
+    if (before?.mirrorOf || options.next?.mirrorOf) throw new Error('Los movimientos espejo no se pueden combinar con bolsillos.')
+    if (before?.pocketAllocation && options.kind === 'updated' &&
+        (options.next?.type !== 'transfer' || options.next.accountId !== before.accountId ||
+         options.next.toAccountId !== before.toAccountId)) {
+      throw new Error('La asignación inicial debe conservar sus cuentas y el tipo de transferencia.')
+    }
+
+    const endpointIds = new Set<string>()
+    for (const movement of [before && movementFromStored(before), options.next]) {
+      if (!movement) continue
+      endpointIds.add(movement.accountId)
+      if (movement.toAccountId) endpointIds.add(movement.toAccountId)
+    }
+    const accountSnapshots = await Promise.all([...endpointIds].map(accountId =>
+      transaction.get(doc(db, 'accounts', accountId))
+    ))
+    const accounts = new Map<string, any>()
+    for (const snapshot of accountSnapshots) {
+      if (!snapshot.exists()) throw new Error('No se encontró una cuenta del movimiento.')
+      accounts.set(snapshot.id, snapshot.data())
+    }
+    const parentIds = new Set([...accounts.values()].flatMap(account =>
+      typeof account.parentAccountId === 'string' ? [account.parentAccountId] : []
+    ))
+    const parentSnapshots = await Promise.all([...parentIds].map(parentId =>
+      transaction.get(doc(db, 'accounts', parentId))
+    ))
+    const parents = new Map<string, any>()
+    for (const snapshot of parentSnapshots) {
+      if (!snapshot.exists()) throw new Error('No se encontró la cuenta principal del bolsillo.')
+      parents.set(snapshot.id, snapshot.data())
+    }
+
+    const related = [...endpointIds].some(accountId => movementAccountIsPocketRelated(accounts.get(accountId)))
+    if (!related) throw new Error('El movimiento no involucra una cuenta con bolsillos.')
+    for (const accountId of endpointIds) {
+      assertPocketMovementEndpoint(accounts.get(accountId), accountId, options.workspaceId, parents)
+    }
+
+    const movements = [before && movementFromStored(before), options.next].filter(Boolean) as Array<{
+      accountId: string; toAccountId?: string | null; amount: number; type: TransactionType
+    }>
+    for (const movement of movements) {
+      const source = accounts.get(movement.accountId)
+      if (!source || !movement.type || !Number.isFinite(movement.amount)) throw new Error('El movimiento no es válido.')
+      const isNewMovement = movement === options.next
+      const recordedCurrency = isNewMovement ? options.next?.currency : before?.currency
+      if (recordedCurrency !== source.currency) throw new Error('La moneda del movimiento debe coincidir con su cuenta.')
+      if (movement.type === 'transfer') {
+        const destination = movement.toAccountId && accounts.get(movement.toAccountId)
+        if (!destination || movement.amount <= 0 || movement.accountId === movement.toAccountId ||
+            source.currency !== destination.currency) {
+          throw new Error('La transferencia requiere cuentas distintas de la misma moneda.')
+        }
+      } else if ((movement.type !== 'income' && movement.type !== 'expense') ||
+                 (movement.type === 'income' && movement.amount <= 0) ||
+                 (movement.type === 'expense' && movement.amount >= 0)) {
+        throw new Error('Los bolsillos solo admiten ingresos, gastos y transferencias válidas.')
+      }
+      if (movement.type !== 'transfer' && movement.toAccountId) throw new Error('El destino solo se permite en transferencias.')
+    }
+
+    const deltas = getTransactionReplacementDeltas(before ? movementFromStored(before) : null, options.next ?? null)
+    if (auth.currentUser?.uid !== options.userId) throw new Error('La sesión cambió antes de guardar el movimiento.')
+    const balances = new Map<string, number>()
+    for (const accountId of endpointIds) {
+      const delta = deltas[accountId] ?? 0
+      const account = accounts.get(accountId)
+      const balance = Number(account?.balance) + delta
+      if (!Number.isFinite(balance) || (movementAccountIsPocketRelated(account) && balance < 0)) {
+        throw new Error('El saldo disponible de un bolsillo o cuenta principal no puede ser negativo.')
+      }
+      balances.set(accountId, balance)
+    }
+
+    // All reads finish before the first write; record and every affected account commit together.
+    for (const [accountId, balance] of balances) {
+      const account = accounts.get(accountId)
+      transaction.update(doc(db, 'accounts', accountId), {
+        balance,
+        lastPocketMovementId: id,
+        lastPocketMovementType: options.kind,
+        ...(account.parentAccountId != null ? { pocketActivity: true } : {}),
+        ...(options.kind === 'deleted' && before?.pocketAllocation === true &&
+            before.toAccountId === accountId && account.openingAllocationId === id
+          ? { openingAllocationId: null }
+          : {})
+      })
+    }
+    if (options.kind === 'deleted') {
+      transaction.delete(transactionRef)
+      return { id, data: before, deltas }
+    }
+    if (!options.next) throw new Error('Faltan los datos del movimiento.')
+    if (options.kind === 'created') transaction.set(transactionRef, { ...options.next })
+    else transaction.update(transactionRef, { ...options.next })
+    return { id, data: options.next, deltas }
+  })
+}
 
 interface TransactionsState {
   transactions: Transaction[];
@@ -232,6 +431,43 @@ export const useTransactionsStore = defineStore('transactions', {
       const account = accountsStore.getAccountById(accountId)
       if (!account) throw new Error('Cuenta origen no encontrada')
 
+      const candidate = { accountId, toAccountId, type, amount }
+      if (transactionTouchesPocket(accountsStore, candidate)) {
+        this.loading = true
+        try {
+          const transactionDate = date instanceof Date ? date : new Date(date)
+          const next: PocketMovementTransaction = {
+            workspaceId,
+            userId: userId || user.uid,
+            accountId,
+            amount: Number(amount),
+            description,
+            categoryId: type === 'income' || type === 'expense' ? categoryId : '',
+            date: Timestamp.fromDate(transactionDate),
+            type,
+            toAccountId: type === 'transfer' ? toAccountId : null,
+            receiptUrl,
+            notes,
+            installments: 1,
+            currency: account.currency || 'USD',
+            createdAt: new Date()
+          }
+          const result = await commitPocketMovement({ kind: 'created', workspaceId, userId: user.uid, next })
+          const txWithId: Transaction = { id: result.id, ...next, date: transactionDate }
+          publishPocketDeltas(accountsStore, result.deltas, workspaceId, user.uid)
+          if (authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === user.uid) {
+            this.transactions.unshift(txWithId)
+            this.transactions.sort((a, b) => b.date.getTime() - a.date.getTime())
+          }
+          return txWithId
+        } catch (error) {
+          console.error('Error al registrar movimiento de bolsillo:', error)
+          throw error
+        } finally {
+          this.loading = false
+        }
+      }
+
       // Cuenta puente: un gasto contra ella se replica solo en el workspace espejo.
       // Solo gastos: la transferencia de liquidación no debe replicarse.
       if (type === 'expense' && account.mirror) {
@@ -414,6 +650,38 @@ export const useTransactionsStore = defineStore('transactions', {
       if (!tx) return
 
       const accountsStore = useAccountsStore()
+      const authStore = useAuthStore()
+      const workspaceId = authStore.activeWorkspaceId
+      const userId = auth.currentUser?.uid
+      if (transactionTouchesPocket(accountsStore, tx)) {
+        if (!workspaceId || !userId) throw new Error('Usuario o Workspace no inicializado')
+        this.loading = true
+        try {
+          const result = await commitPocketMovement({
+            kind: 'deleted',
+            transactionId,
+            workspaceId,
+            userId
+          })
+          publishPocketDeltas(accountsStore, result.deltas, workspaceId, userId)
+          if (authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === userId) {
+            this.transactions = this.transactions.filter(existing => existing.id !== transactionId)
+          }
+          if (tx.receiptUrl) {
+            try {
+              await deleteObject(storageRef(storage, tx.receiptUrl))
+            } catch (storageErr) {
+              console.warn('No se pudo borrar el comprobante de Storage:', storageErr)
+            }
+          }
+          return
+        } catch (error) {
+          console.error('Error al borrar movimiento de bolsillo:', error)
+          throw error
+        } finally {
+          this.loading = false
+        }
+      }
       this.loading = true
       try {
         // 1. Eliminar de Firestore y revertir saldos.
@@ -598,6 +866,9 @@ export const useTransactionsStore = defineStore('transactions', {
       const accountsStore = useAccountsStore()
       const account = accountsStore.getAccountById(accountId)
       if (!account) throw new Error('Cuenta no encontrada')
+      if (movementAccountIsPocketRelated(account)) {
+        throw new Error('La importación en lote todavía no admite cuentas con bolsillos; no se guardó ningún movimiento.')
+      }
 
       this.loading = true
       const batch = writeBatch(db)
@@ -689,6 +960,54 @@ export const useTransactionsStore = defineStore('transactions', {
       // ponytail: bloquear en vez de sincronizar; borrar y recrear es 2 clics.
       if (oldTx.mirrorOf) {
         throw new Error('Este gasto tiene una pata espejo en otro workspace. Bórralo y vuelve a crearlo para modificarlo.')
+      }
+
+      const authStore = useAuthStore()
+      const workspaceId = authStore.activeWorkspaceId
+      if (transactionTouchesPocket(accountsStore, oldTx, updates)) {
+        if (!workspaceId || oldTx.workspaceId !== workspaceId) throw new Error('La transacción no pertenece al workspace activo.')
+        const account = accountsStore.getAccountById(updates.accountId)
+        if (!account) throw new Error('Cuenta origen no encontrada')
+        this.loading = true
+        try {
+          const transactionDate = updates.date instanceof Date ? updates.date : new Date(updates.date)
+          const newAmount = Number(updates.amount)
+          const neutral = updates.type !== 'income' && updates.type !== 'expense'
+          const next: PocketMovementTransaction = {
+            workspaceId,
+            userId: updates.userId || oldTx.userId || user.uid,
+            accountId: updates.accountId,
+            amount: newAmount,
+            description: updates.description,
+            categoryId: neutral ? '' : updates.categoryId,
+            date: Timestamp.fromDate(transactionDate),
+            type: updates.type,
+            toAccountId: updates.type === 'transfer' ? updates.toAccountId ?? null : null,
+            receiptUrl: updates.receiptUrl ?? null,
+            notes: updates.notes ?? null,
+            installments: updates.type === 'expense' && account.type === 'credit'
+              ? getInstallmentCount(updates.installments)
+              : 1,
+            currency: account.currency || 'USD',
+            createdAt: oldTx.createdAt
+          }
+          const result = await commitPocketMovement({
+            kind: 'updated', transactionId, workspaceId, userId: user.uid, next
+          })
+          const updatedTx: Transaction = { ...oldTx, ...next, date: transactionDate }
+          publishPocketDeltas(accountsStore, result.deltas, workspaceId, user.uid)
+          if (authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === user.uid) {
+            const currentIndex = this.transactions.findIndex(existing => existing.id === transactionId)
+            if (currentIndex !== -1) this.transactions[currentIndex] = updatedTx
+            this.transactions.sort((a, b) => b.date.getTime() - a.date.getTime())
+          }
+          return updatedTx
+        } catch (error) {
+          console.error('Error al actualizar movimiento de bolsillo:', error)
+          throw error
+        } finally {
+          this.loading = false
+        }
       }
 
       this.loading = true
