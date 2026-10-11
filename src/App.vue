@@ -1,5 +1,5 @@
 <template>
-  <div class="min-h-screen bg-background text-text-primary">
+  <div class="min-h-dvh bg-background text-text-primary">
     <!-- Pantalla de Carga Principal -->
     <div v-if="authStore.loading" class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background">
       <div class="relative w-16 h-16 mb-4">
@@ -9,12 +9,20 @@
     </div>
 
     <!-- App Layout -->
-    <div v-else class="flex min-h-screen w-full overflow-x-hidden">
+    <div v-else class="flex min-h-dvh w-full overflow-x-clip">
       <!-- Sidebar de Navegación (Solo si está logueado) -->
       <Sidebar v-if="authStore.isAuthenticated" />
 
       <!-- Área de Contenido Principal -->
-      <main :class="['flex-1 p-4 sm:p-6 lg:p-8 transition-all duration-300 w-full', authStore.isAuthenticated ? 'lg:pl-72 pt-20 lg:pt-8' : '']">
+      <!-- Mobile: clear the fixed top header (4rem + notch) and bottom tab bar (4rem + home indicator). -->
+      <main
+        :class="[
+          'flex-1 min-w-0 px-4 sm:px-6 lg:px-8 transition-all duration-300 w-full',
+          authStore.isAuthenticated
+            ? 'lg:pl-72 pt-[calc(5rem+env(safe-area-inset-top))] pb-[calc(5.5rem+env(safe-area-inset-bottom))] lg:py-8'
+            : 'py-4 sm:py-6 lg:py-8'
+        ]"
+      >
         <router-view v-slot="{ Component }">
           <transition name="page" mode="out-in">
             <component :is="Component" />

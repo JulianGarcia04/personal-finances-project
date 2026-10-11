@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* Variant for pointer devices that can truly hover (excludes touch screens). */
+@custom-variant hover-device (@media (hover: hover));
+
 @theme {
   --color-background: #080c14;
   --color-surface-card: rgba(15, 23, 42, 0.45);
@@ -55,9 +58,15 @@ body {
     linear-gradient(rgba(255, 255, 255, 0.007) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.007) 1px, transparent 1px);
   background-size: 100% 100%, 100% 100%, 40px 40px, 40px 40px;
-  background-attachment: fixed;
   color: var(--color-text-primary);
   font-family: var(--font-sans);
+}
+
+/* Fixed backgrounds jank/repaint on mobile browsers; only pin it on hover-capable devices. */
+@media (hover: hover) {
+  body {
+    background-attachment: fixed;
+  }
 }
 
 /* Glass panel base styles */
@@ -69,26 +78,28 @@ body {
   box-shadow: var(--shadow-glass);
 }
 
-/* Interactive card transitions */
-.glow-card-emerald:hover {
-  border-color: rgba(16, 185, 129, 0.3);
-  box-shadow: var(--shadow-glow-emerald), var(--shadow-glass);
-  transform: translateY(-2px);
-}
-.glow-card-rose:hover {
-  border-color: rgba(244, 63, 94, 0.3);
-  box-shadow: var(--shadow-glow-rose), var(--shadow-glass);
-  transform: translateY(-2px);
-}
-.glow-card-amber:hover {
-  border-color: rgba(251, 191, 36, 0.3);
-  box-shadow: var(--shadow-glow-amber), var(--shadow-glass);
-  transform: translateY(-2px);
-}
-.glow-card-violet:hover {
-  border-color: rgba(139, 92, 246, 0.45);
-  box-shadow: var(--shadow-glow-violet), var(--shadow-glass);
-  transform: translateY(-2px);
+/* Interactive card transitions (hover-capable devices only, avoids sticky hover on touch) */
+@media (hover: hover) {
+  .glow-card-emerald:hover {
+    border-color: rgba(16, 185, 129, 0.3);
+    box-shadow: var(--shadow-glow-emerald), var(--shadow-glass);
+    transform: translateY(-2px);
+  }
+  .glow-card-rose:hover {
+    border-color: rgba(244, 63, 94, 0.3);
+    box-shadow: var(--shadow-glow-rose), var(--shadow-glass);
+    transform: translateY(-2px);
+  }
+  .glow-card-amber:hover {
+    border-color: rgba(251, 191, 36, 0.3);
+    box-shadow: var(--shadow-glow-amber), var(--shadow-glass);
+    transform: translateY(-2px);
+  }
+  .glow-card-violet:hover {
+    border-color: rgba(139, 92, 246, 0.45);
+    box-shadow: var(--shadow-glow-violet), var(--shadow-glass);
+    transform: translateY(-2px);
+  }
 }
 
 /* Cuenta puente: no es plata real, es un pagaré entre workspaces.
@@ -144,4 +155,102 @@ body {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+/* ---------- Mobile foundation ---------- */
+
+/* Minimum 44x44 tap target (Apple HIG / WCAG 2.5.5). */
+@utility tap {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* Safe-area helpers for notched devices (requires viewport-fit=cover). */
+@utility pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+@utility pl-safe {
+  padding-left: env(safe-area-inset-left, 0px);
+}
+@utility pr-safe {
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* Shared form field: 16px on mobile prevents iOS focus zoom; 14px from sm up. */
+@utility field {
+  @apply w-full min-h-11 px-3 py-2 rounded-xl bg-slate-900/50 border border-border text-base sm:text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-emerald;
+}
+
+/* Scrollbar utilities (used in views; previously undefined). */
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.08) transparent;
+}
+@utility custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+  &::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 9999px;
+  }
+}
+
+/* Shared dialog entrance animation. */
+.animate-scale-up {
+  animation: scaleUp 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+@keyframes scaleUp {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* BaseSheet transitions: slide up on mobile, scale in from sm. */
+.sheet-enter-active,
+.sheet-leave-active {
+  transition: opacity 0.25s ease;
+}
+.sheet-enter-active .sheet-panel,
+.sheet-leave-active .sheet-panel {
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease;
+}
+.sheet-enter-from,
+.sheet-leave-to {
+  opacity: 0;
+}
+.sheet-enter-from .sheet-panel,
+.sheet-leave-to .sheet-panel {
+  transform: translateY(100%);
+}
+@media (width >= 40rem) {
+  .sheet-enter-from .sheet-panel,
+  .sheet-leave-to .sheet-panel {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sheet-enter-active .sheet-panel,
+  .sheet-leave-active .sheet-panel {
+    transition: opacity 0.15s ease;
+  }
+  .sheet-enter-from .sheet-panel,
+  .sheet-leave-to .sheet-panel {
+    transform: none;
+  }
 }
