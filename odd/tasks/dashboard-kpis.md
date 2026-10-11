@@ -33,6 +33,8 @@ A misleading KPI is worse than no KPI. Forward-looking KPIs drive decisions.
 - [x] T2 Wire into Dashboard.vue: fix MoM + runway, add 3 KPI cards with hierarchy (spendable as hero). Route: delegated (same writer).
 - [x] T3 Verify `pnpm test` + `pnpm build`; mobile layout check (structural only, see evidence).
 
+- [x] T4 Mobile review fixes (browser proof at 360px found): (a) projection budget warning compares all spending vs sum of budgeted categories only → compare budgeted-category projection vs budget total, all-spending projection vs workspace expense limit; (b) spendable counts savings → use only checking + cash (exclude savings/pockets); (c) COP KPIs show cents → round like rest of app; (d) mobile compaction of the 3 new cards so Patrimonio is not pushed off first screen; (e) card debt shows per-card utilization. Route: delegated (writer).
+
 ## Acceptance criteria
 - MoM on day N compares same N days. Runway uses liquid balance and 3-month avg.
 - Three new KPIs visible, correct for multi-currency, readable at 360px.
@@ -45,9 +47,9 @@ Strategy: ask-on-risk. Forecast ~350–450 authored lines.
 All inputs are converted to the primary currency with `convert` before reaching `src/lib/dashboardMetrics.ts`.
 - **Aligned MoM**: day 1..N of the current month vs day 1..min(N, lastDay) of the previous month. Each monthly installment is imputed on the purchase's day-of-month (clamped to the month's last day). Transfers/loans are never income or expense (only `type === 'income' | 'expense'`).
 - **Runway** = liquid balance / daily burn. Liquid = balances of non-credit, non-mirror accounts (checking/savings/cash, pockets included; pockets are separate balances, not double counted). Daily burn = expenses of the last 3 full months that had activity / their days; fallback to month-to-date expenses / elapsed days. No burn → ∞; liquid ≤ 0 → 0 days.
-- **Disponible para gastar** = available cash − card payments still due this month. Available cash = liquid balance excluding pocket sub-accounts (pockets are money set aside). Card payments due this month = for each credit card whose next due date falls in the current month, min(statement amount, current debt) (the cap avoids subtracting a statement already paid). Per day = amount / days left including today. Negative is shown as a deficit (not clamped), per day 0. Income/expenses are not re-subtracted: card purchases are already in the account balances/debt, and adding them again would double count. Planned goal contributions are not modeled (no data).
-- **Proyección de cierre** = (purchases dated this month / elapsed days × days in month) + installments of earlier purchases imputed to this month. Warns when it exceeds the category budget total or the workspace expense limit.
-- **Deuda en tarjetas** = Σ max(0, −balance) of non-mirror credit accounts; utilization = debt / Σ limit (null when no limit). Amber > 30%, rose > 70%.
+- **Disponible para gastar** = available cash − card payments still due this month. Available cash = top-level checking + cash accounts only (`isSpendableAccount`: savings, pockets, credit and mirror accounts excluded; T4). Runway still uses the full liquid balance. Card payments due this month = for each credit card whose next due date falls in the current month, min(statement amount, current debt) (the cap avoids subtracting a statement already paid). Per day = amount / days left including today. Negative is shown as a deficit (not clamped), per day 0. Income/expenses are not re-subtracted: card purchases are already in the account balances/debt, and adding them again would double count. Planned goal contributions are not modeled (no data).
+- **Proyección de cierre** = (purchases dated this month / elapsed days × days in month) + installments of earlier purchases imputed to this month. Compared like-for-like (T4, `projectionChecks`): the projection of budgeted categories only vs the category budget total ("Categorías con presupuesto: X de Y"), and the all-spending projection vs the workspace expense limit when > 0. No check line when neither cap is set. Forward-looking KPI amounts render rounded to whole units (`formatKpi`).
+- **Deuda en tarjetas** = Σ max(0, −balance) of non-mirror credit accounts; utilization = debt / Σ limit (null when no limit). Amber > 30%, rose > 70%. Per-card rows (`cardDebtRows`, highest utilization first) show name, utilization % and bar (debt amount from sm up).
 
 ## Progress / evidence
 - T1 RED: `pnpm test` → `ℹ tests 66 / pass 65 / fail 1` — `ERR_MODULE_NOT_FOUND ... src/lib/dashboardMetrics.ts` (tests written before the module).
@@ -59,5 +61,10 @@ All inputs are converted to the primary currency with `convert` before reaching 
 - T3 mobile 360px: structural check only — new cards use `grid-cols-1` base, `min-w-0`, `truncate`, `flex-wrap` and the existing `splitMoney` wrapping pattern. Not visually verified in a browser (requires auth + emulators); pending a manual check.
 - Known caveat (pre-existing): `upcomingCardPayments` statement amount uses the current billing cycle; after the closing day it reflects the next statement. The min(statement, debt) cap bounds the error.
 
+- T4 RED: `pnpm test` → `SyntaxError: ... does not provide an export named 'cardDebtRows'` / `ℹ tests 66 / pass 65 / fail 1`.
+- T4 GREEN: `pnpm test` → `ℹ tests 89 / ℹ pass 89 / ℹ fail 0`. `pnpm build` → `✓ built in 427ms`. Route: delegated writer.
+- T4 browser proof (local emulators, demo project `demo-vault-mobile`, seeded COP data): 360/390/1440 scrollWidth == viewport, 0 overflowing elements, no console errors/warnings, no NaN. 360px: spendable $ 7.801.000 (checking+cash $ 8.830.000 − cards $ 1.029.000), projection $ 8.221.627 with "Categorías con presupuesto $ 2.172.818 de $ 2.100.000", per-card Visa 45% (amber) / Mastercard 20%; Patrimonio Neto visible on the first screen. Desktop: no gap above debt rows. Screenshots in session scratchpad `mobile-check/*-after*.png`.
+- T4 commit: `c71a8eb` fix(dashboard): compare like-for-like projections, spendable cash and per-card debt.
+
 ## Next step
-Manual visual check at 360px; then the user decides push/PR.
+User decides push/PR.
