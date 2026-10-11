@@ -1,5 +1,5 @@
 <template>
-  <div class="max-w-6xl mx-auto h-[calc(100vh-7rem)] grid grid-cols-1 lg:grid-cols-4 gap-6">
+  <div class="agent-shell max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-4 gap-6">
     
     <!-- Sidebar de Conversaciones (Escritorio) -->
     <div class="hidden lg:flex lg:col-span-1 flex-col justify-between glass-panel rounded-2xl p-4 border border-white/5 h-full overflow-hidden">
@@ -11,7 +11,7 @@
         <!-- Botón Nueva Conversación -->
         <button 
           @click="createNewConversation"
-          class="w-full flex items-center justify-center space-x-2 px-4 py-3 rounded-xl border border-dashed border-accent-amber/20 hover:border-accent-amber/40 bg-accent-amber/5 hover:bg-accent-amber/10 text-accent-amber text-xs font-semibold tracking-wide transition-all cursor-pointer"
+          class="w-full min-h-11 flex items-center justify-center space-x-2 px-4 py-3 rounded-xl border border-dashed border-accent-amber/20 hover:border-accent-amber/40 bg-accent-amber/5 hover:bg-accent-amber/10 text-accent-amber text-xs font-semibold tracking-wide transition-all cursor-pointer"
         >
           <PlusIcon class="w-4 h-4" />
           <span>Nueva Conversación</span>
@@ -40,7 +40,7 @@
             </div>
             <button 
               @click.stop="deleteConversation(chat.id)"
-              class="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-text-muted hover:text-accent-rose hover:bg-accent-rose/10 transition-all cursor-pointer shrink-0"
+              class="hover-device:opacity-0 group-hover:opacity-100 focus-visible:opacity-100 p-1.5 rounded-lg text-text-muted hover:text-accent-rose hover:bg-accent-rose/10 transition-all cursor-pointer shrink-0"
               title="Eliminar conversación"
             >
               <TrashIcon class="w-3.5 h-3.5" />
@@ -53,21 +53,26 @@
     <!-- Drawer de Conversaciones (Móvil) -->
     <transition name="fade">
       <div v-if="showHistoryDrawer" class="lg:hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex">
-        <div class="w-72 bg-[#0b0f19] border-r border-white/5 h-full p-4 flex flex-col justify-between animate-slide-right">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Conversaciones"
+          class="w-72 max-w-[85vw] bg-[#0b0f19] border-r border-white/5 h-full px-4 pt-[calc(1rem+env(safe-area-inset-top))] pb-[calc(1rem+env(safe-area-inset-bottom))] pl-[calc(1rem+env(safe-area-inset-left))] flex flex-col justify-between animate-slide-right"
+        >
           <div class="flex flex-col h-full overflow-hidden">
             <div class="flex items-center justify-between mb-4">
               <h3 class="font-display font-bold text-sm text-text-primary tracking-wide uppercase text-accent-amber/80">
                 Conversaciones
               </h3>
-              <button @click="showHistoryDrawer = false" class="p-1.5 rounded-lg hover:bg-white/5 text-text-muted hover:text-text-primary transition-all">
-                <XIcon class="w-4 h-4" />
+              <button @click="showHistoryDrawer = false" aria-label="Cerrar historial" class="tap -mr-2 flex items-center justify-center rounded-xl hover:bg-white/5 text-text-muted hover:text-text-primary transition-all">
+                <XIcon class="w-5 h-5" />
               </button>
             </div>
             
             <!-- Botón Nueva Conversación en Móvil -->
             <button 
               @click="createNewConversation"
-              class="w-full flex items-center justify-center space-x-2 px-4 py-3 rounded-xl border border-dashed border-accent-amber/20 hover:border-accent-amber/40 bg-accent-amber/5 hover:bg-accent-amber/10 text-accent-amber text-xs font-semibold tracking-wide transition-all cursor-pointer"
+              class="w-full min-h-11 flex items-center justify-center space-x-2 px-4 py-3 rounded-xl border border-dashed border-accent-amber/20 hover:border-accent-amber/40 bg-accent-amber/5 hover:bg-accent-amber/10 text-accent-amber text-xs font-semibold tracking-wide transition-all cursor-pointer"
             >
               <PlusIcon class="w-4 h-4" />
               <span>Nueva Conversación</span>
@@ -96,7 +101,8 @@
                 </div>
                 <button 
                   @click.stop="deleteConversation(chat.id)"
-                  class="p-1.5 rounded-lg text-text-muted hover:text-accent-rose hover:bg-accent-rose/10 transition-all cursor-pointer shrink-0"
+                  aria-label="Eliminar conversación"
+                  class="tap -my-1.5 -mr-1.5 flex items-center justify-center rounded-lg text-text-muted hover:text-accent-rose hover:bg-accent-rose/10 transition-all cursor-pointer shrink-0"
                   title="Eliminar conversación"
                 >
                   <TrashIcon class="w-3.5 h-3.5" />
@@ -112,21 +118,22 @@
     <!-- Área de Chat Principal -->
     <div class="lg:col-span-3 h-full flex flex-col justify-between overflow-hidden">
       <!-- Chat Header -->
-      <div class="glass-panel rounded-2xl p-4 border border-white/5 flex items-center justify-between shrink-0">
-        <div class="flex items-center space-x-3">
+      <div class="glass-panel rounded-2xl p-2.5 sm:p-4 border border-white/5 flex items-center justify-between gap-3 shrink-0">
+        <div class="min-w-0 flex items-center space-x-3">
           <!-- Botón Historial para Móviles -->
           <button 
             @click="showHistoryDrawer = true" 
-            class="lg:hidden p-2.5 rounded-xl bg-slate-950 border border-white/5 text-text-secondary hover:text-text-primary transition-all cursor-pointer mr-1"
+            aria-label="Ver conversaciones"
+            class="lg:hidden tap shrink-0 flex items-center justify-center rounded-xl bg-slate-950 border border-white/5 text-text-secondary hover:text-text-primary transition-all cursor-pointer"
           >
-            <HistoryIcon class="w-4 h-4" />
+            <HistoryIcon class="w-5 h-5" />
           </button>
           
-          <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-accent-amber to-accent-violet flex items-center justify-center shadow-glow-amber">
+          <div class="hidden sm:flex w-10 h-10 shrink-0 rounded-xl bg-gradient-to-tr from-accent-amber to-accent-violet items-center justify-center shadow-glow-amber">
             <SparklesIcon class="w-5 h-5 text-slate-950" />
           </div>
-          <div>
-            <h2 class="font-display font-bold text-lg text-text-primary tracking-tight">Asesor Financiero IA</h2>
+          <div class="min-w-0">
+            <h2 class="font-display font-bold text-base sm:text-lg text-text-primary tracking-tight truncate">Asesor Financiero IA</h2>
             <div class="flex items-center space-x-1.5 mt-0.5">
               <span class="w-2 h-2 rounded-full bg-accent-emerald animate-pulse"></span>
               <span class="text-[10px] text-text-secondary font-semibold uppercase tracking-wider">Activo & Conectado</span>
@@ -134,7 +141,7 @@
           </div>
         </div>
 
-        <div class="text-[10px] bg-slate-950/45 border border-white/5 px-3 py-1.5 rounded-lg text-text-secondary flex items-center gap-1.5">
+        <div class="hidden sm:flex shrink-0 text-[10px] bg-slate-950/45 border border-white/5 px-3 py-1.5 rounded-lg text-text-secondary items-center gap-1.5">
           <span class="w-1.5 h-1.5 rounded-full bg-accent-amber"></span>
           <span class="hidden sm:inline">Modo Agente con acceso a BD</span>
           <span class="sm:hidden">Agente IA</span>
@@ -144,12 +151,12 @@
       <!-- Message History Area -->
       <div 
         ref="messageAreaRef"
-        class="flex-1 overflow-y-auto py-6 space-y-4 px-2 scrollbar-thin scroll-smooth"
+        class="flex-1 min-h-0 overflow-y-auto overscroll-contain py-4 sm:py-6 space-y-4 px-1 sm:px-2 scrollbar-thin scroll-smooth"
       >
         <!-- Suggestions when no active chat or empty messages -->
         <div 
           v-if="!activeChatMessages || activeChatMessages.length === 0" 
-          class="flex flex-col items-center justify-center h-full text-center space-y-6 max-w-lg mx-auto py-12"
+          class="flex flex-col items-center justify-center min-h-full text-center space-y-6 max-w-lg mx-auto py-6 sm:py-12"
         >
           <div class="space-y-2">
             <h3 class="font-display font-bold text-xl text-text-primary">¿En qué puedo ayudarte hoy?</h3>
@@ -163,7 +170,7 @@
               v-for="chip in suggestionChips" 
               :key="chip"
               @click="sendSuggestion(chip)"
-              class="p-3.5 text-left rounded-xl bg-slate-950/45 hover:bg-slate-900 border border-white/5 hover:border-accent-amber/20 text-xs text-text-secondary hover:text-text-primary transition-all duration-200 cursor-pointer"
+              class="min-h-11 p-3.5 text-left rounded-xl bg-slate-950/45 hover:bg-slate-900 border border-white/5 hover:border-accent-amber/20 text-xs text-text-secondary hover:text-text-primary transition-all duration-200 cursor-pointer"
             >
               {{ chip }}
             </button>
@@ -179,7 +186,7 @@
         >
           <div 
             :class="[
-              'max-w-[80%] rounded-2xl p-4 text-sm border shadow-md space-y-1',
+              'max-w-[88%] sm:max-w-[80%] min-w-0 break-words rounded-2xl p-3.5 sm:p-4 text-sm border shadow-md space-y-1',
               msg.role === 'user' 
                 ? 'bg-gradient-to-tr from-slate-900 to-slate-950 border-white/5 text-text-primary rounded-tr-none' 
                 : 'bg-slate-950/45 border-white/5 text-text-secondary rounded-tl-none font-sans leading-relaxed'
@@ -214,26 +221,31 @@
           v-for="chip in contextChips" 
           :key="chip"
           @click="sendSuggestion(chip)"
-          class="whitespace-nowrap px-3.5 py-2 rounded-full bg-slate-900 border border-white/5 hover:border-accent-amber/25 text-[11px] text-text-secondary hover:text-text-primary transition-all cursor-pointer"
+          class="whitespace-nowrap min-h-10 px-3.5 py-2 rounded-full bg-slate-900 border border-white/5 hover:border-accent-amber/25 text-xs text-text-secondary hover:text-text-primary transition-all cursor-pointer"
         >
           {{ chip }}
         </button>
       </div>
 
       <!-- Input Bar -->
-      <div class="glass-panel rounded-2xl p-3 border border-white/5 flex items-end gap-3 shrink-0">
+      <div class="glass-panel rounded-2xl p-2 sm:p-3 border border-white/5 flex items-end gap-2 sm:gap-3 shrink-0">
         <textarea
+          ref="inputRef"
           v-model="inputMessage"
           :disabled="loading"
           rows="1"
-          class="flex-1 px-4 py-3 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary focus:border-accent-amber/40 focus:outline-hidden transition-all resize-none max-h-40"
+          aria-label="Mensaje para el asesor"
+          :enterkeyhint="isCoarsePointer ? 'enter' : 'send'"
+          class="flex-1 min-w-0 px-4 py-3 rounded-xl bg-slate-950 border border-white/5 text-base sm:text-sm text-text-primary focus:border-accent-amber/40 focus:outline-hidden transition-colors resize-none max-h-40 overflow-y-auto"
           placeholder="Pregúntame sobre tus gastos, metas o pídeme crear una cuenta..."
-          @keydown.enter.exact.prevent="sendMessage"
+          @input="autoResize"
+          @keydown.enter.exact="onEnterKey"
         ></textarea>
         <button 
           @click="sendMessage"
           :disabled="loading || !inputMessage.trim()"
-          class="p-3.5 rounded-xl bg-accent-amber hover:bg-accent-amber-hover text-slate-950 disabled:bg-slate-900 disabled:text-text-muted transition-all cursor-pointer"
+          aria-label="Enviar mensaje"
+          class="tap shrink-0 flex items-center justify-center p-3.5 rounded-xl bg-accent-amber hover:bg-accent-amber-hover text-slate-950 disabled:bg-slate-900 disabled:text-text-muted transition-all cursor-pointer"
         >
           <SendIcon class="w-4 h-4" />
         </button>
@@ -243,7 +255,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, nextTick, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, nextTick, computed, watch } from 'vue'
 import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useAccountsStore } from '@/stores/accountsStore'
@@ -286,6 +298,36 @@ const contextChips = [
   'Indexa mis transacciones ahora',
   'Crea una cuenta llamada Efectivo con saldo 50000 COP'
 ]
+
+const inputRef = ref<HTMLTextAreaElement | null>(null)
+
+// Touch keyboards: Enter inserts a newline and only the send button sends. Desktop keeps Enter-to-send.
+const isCoarsePointer = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
+
+const onEnterKey = (event: KeyboardEvent) => {
+  if (isCoarsePointer || event.isComposing) return
+  event.preventDefault()
+  sendMessage()
+}
+
+// Grow the textarea with its content up to its CSS max-height (max-h-40).
+const autoResize = () => {
+  const el = inputRef.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = `${el.scrollHeight}px`
+}
+watch(inputMessage, () => nextTick(autoResize))
+
+// Close the mobile history drawer with Esc.
+const onDrawerKeydown = (event: KeyboardEvent) => {
+  if (event.key === 'Escape') showHistoryDrawer.value = false
+}
+watch(showHistoryDrawer, (open) => {
+  if (open) document.addEventListener('keydown', onDrawerKeydown)
+  else document.removeEventListener('keydown', onDrawerKeydown)
+})
+onBeforeUnmount(() => document.removeEventListener('keydown', onDrawerKeydown))
 
 // Computed messages of active chat
 const activeChatMessages = computed(() => {
@@ -476,6 +518,30 @@ const renderMarkdown = (text: string): string => {
 .scrollbar-none {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+/* Fill exactly the visible area inside App <main> padding:
+   < lg: top 5rem + notch, bottom 5.5rem + home indicator (fixed header / bottom tab bar); lg: py-8. */
+.agent-shell {
+  height: calc(100vh - 10.5rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  height: calc(100dvh - 10.5rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  min-height: 16rem;
+}
+@media (width >= 64rem) {
+  .agent-shell {
+    height: calc(100vh - 4rem);
+    height: calc(100dvh - 4rem);
+  }
+}
+
+.markdown-content {
+  overflow-wrap: anywhere;
+}
+.markdown-content table,
+.markdown-content pre {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .markdown-content li {

@@ -2,7 +2,7 @@
   <div class="max-w-6xl mx-auto space-y-8">
     <!-- Header -->
     <div>
-      <h2 class="font-display font-bold text-3xl text-text-primary tracking-tight">Importador Inteligente con IA</h2>
+      <h2 class="font-display font-bold text-2xl sm:text-3xl text-text-primary tracking-tight">Importador Inteligente con IA</h2>
       <p class="text-text-secondary text-sm mt-1">Carga o pega el extracto de tus cuentas y deja que Gemini organice tus gastos.</p>
     </div>
 
@@ -15,10 +15,11 @@
           <p class="text-text-muted text-xs leading-relaxed">Selecciona a qué cuenta deseas registrar los movimientos extraídos por la IA.</p>
           
           <div class="space-y-1">
-            <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Cuenta Destino</label>
+            <label for="import-target-account" class="text-[11px] font-semibold text-text-secondary uppercase tracking-wider">Cuenta Destino</label>
             <select 
+              id="import-target-account"
               v-model="targetAccountId"
-              class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+              class="field"
             >
               <option value="" disabled>Selecciona una cuenta</option>
               <option v-for="acc in accountsStore.accounts" :key="acc.id" :value="acc.id">
@@ -28,13 +29,13 @@
           </div>
 
           <div class="border-t border-border/50 pt-4 space-y-2">
-            <div class="flex items-center justify-between text-xs">
+            <div class="flex flex-wrap items-center justify-between gap-x-2 text-xs">
               <span class="text-text-secondary">Método Activo:</span>
               <span class="font-semibold text-accent-emerald">
                 {{ settingsStore.useCustomKey ? 'API Key Personal' : 'API Key del Proyecto' }}
               </span>
             </div>
-            <p v-if="settingsStore.useCustomKey && !settingsStore.hasCustomKey" class="text-[10px] text-accent-rose font-medium">
+            <p v-if="settingsStore.useCustomKey && !settingsStore.hasCustomKey" class="text-[11px] text-accent-rose font-medium">
               ⚠️ Tienes activado el uso de API Key personal pero no la has configurado en los ajustes.
             </p>
           </div>
@@ -48,13 +49,14 @@
           
           <!-- Paste Text area -->
           <div class="space-y-2">
-            <label class="text-xs font-semibold text-text-secondary uppercase tracking-wider">Pega el texto de tu extracto</label>
+            <label for="import-statement" class="text-xs font-semibold text-text-secondary uppercase tracking-wider">Pega el texto de tu extracto</label>
             <textarea 
+              id="import-statement"
               v-model="statementText"
               rows="8"
               :readonly="!!pdfBase64"
               placeholder="Pega aquí el texto copiado de tu PDF, extracto bancario digital o correo de notificaciones..."
-              class="w-full px-4 py-3 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-emerald resize-y transition-all"
+              class="field resize-y transition-all"
               :class="{ 'opacity-60 cursor-not-allowed bg-slate-950/20': !!pdfBase64 }"
             ></textarea>
           </div>
@@ -62,7 +64,7 @@
           <!-- Divider -->
           <div class="flex items-center text-xs text-text-muted">
             <div class="flex-1 border-t border-border/40"></div>
-            <span class="px-3">O sube un archivo (Texto o PDF)</span>
+            <span class="px-3 text-center">O sube un archivo (Texto o PDF)</span>
             <div class="flex-1 border-t border-border/40"></div>
           </div>
 
@@ -72,10 +74,14 @@
             @dragleave.prevent="dragOver = false"
             @drop.prevent="handleFileDrop"
             :class="[
-              'border border-dashed rounded-2xl p-8 text-center transition-all duration-200 cursor-pointer',
+              'border border-dashed rounded-2xl p-6 sm:p-8 text-center transition-all duration-200 cursor-pointer',
               dragOver ? 'border-accent-emerald bg-accent-emerald/[0.02]' : 'border-border bg-slate-900/20 hover:bg-slate-900/40'
             ]"
             @click="fileInput?.click()"
+            @keydown.enter.prevent="fileInput?.click()"
+            @keydown.space.prevent="fileInput?.click()"
+            role="button"
+            tabindex="0"
           >
             <input 
               type="file" 
@@ -85,20 +91,21 @@
               @change="handleFileSelect"
             />
             <div class="flex flex-col items-center space-y-2">
-              <span class="text-xs text-text-secondary font-medium">Arrastra tu archivo .txt, .csv o .pdf aquí, o haz clic para buscar</span>
-              <span class="text-[10px] text-text-muted">Tamaño máximo 5MB</span>
+              <span class="hidden sm:inline text-xs text-text-secondary font-medium">Arrastra tu archivo .txt, .csv o .pdf aquí, o haz clic para buscar</span>
+              <span class="sm:hidden text-sm text-text-secondary font-medium">Toca para elegir un archivo (.txt, .csv o .pdf)</span>
+              <span class="text-[11px] text-text-muted">Tamaño máximo 5MB</span>
             </div>
           </div>
 
-          <div v-if="fileName" class="text-xs text-accent-emerald font-semibold flex items-center justify-between bg-slate-900/40 px-4 py-2.5 rounded-xl border border-white/5">
-            <div class="flex items-center space-x-2">
-              <span class="w-2 h-2 rounded-full bg-accent-emerald animate-pulse"></span>
-              <span>Archivo cargado: {{ fileName }}</span>
+          <div v-if="fileName" class="text-xs text-accent-emerald font-semibold flex items-center justify-between gap-2 bg-slate-900/40 pl-4 pr-1 py-1 rounded-xl border border-white/5">
+            <div class="min-w-0 flex items-center space-x-2">
+              <span class="shrink-0 w-2 h-2 rounded-full bg-accent-emerald animate-pulse"></span>
+              <span class="truncate">Archivo cargado: {{ fileName }}</span>
             </div>
             <button 
               type="button" 
               @click.stop="clearFile" 
-              class="text-[10px] uppercase font-bold tracking-wider text-text-muted hover:text-accent-rose transition-colors cursor-pointer"
+              class="tap shrink-0 px-3 rounded-lg text-xs uppercase font-bold tracking-wider text-text-muted hover:text-accent-rose transition-colors cursor-pointer"
             >
               Quitar
             </button>
@@ -113,7 +120,7 @@
           <button 
             @click="processWithIA"
             :disabled="loading || !targetAccountId || (!statementText.trim() && !fileName)"
-            class="w-full py-3.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm tracking-wide shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2"
+            class="w-full min-h-11 py-3.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm tracking-wide shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2"
           >
             <span v-if="loading" class="w-4 h-4 border-2 border-background border-t-transparent rounded-full animate-spin"></span>
             <span>{{ loading ? 'Analizando con Gemini 1.5...' : 'Procesar con Inteligencia Artificial' }}</span>
@@ -130,17 +137,17 @@
           <p class="text-text-secondary text-xs mt-1">Valida los detalles antes de guardarlos en tu cuenta. Modifica montos o categorías si es necesario.</p>
         </div>
         
-        <div class="flex space-x-3">
+        <div class="flex flex-col-reverse sm:flex-row gap-3">
           <button 
             @click="resetImport"
-            class="px-4 py-2 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all"
+            class="w-full sm:w-auto min-h-11 px-4 py-2 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all"
           >
             Volver a empezar
           </button>
           <button 
             @click="confirmBatchImport"
             :disabled="importingBatch || selectedTransactions.length === 0"
-            class="px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center space-x-2"
+            class="w-full sm:w-auto min-h-11 px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2"
           >
             <span v-if="importingBatch" class="w-3.5 h-3.5 border-2 border-background border-t-transparent rounded-full animate-spin"></span>
             <span>Importar Transacciones ({{ selectedTransactions.length }})</span>
@@ -235,37 +242,44 @@
           :key="index"
           class="glass-panel rounded-2xl p-4 border border-white/5 space-y-3"
         >
-          <div class="flex items-center justify-between">
-            <label class="flex items-center space-x-2 text-xs font-semibold text-text-secondary">
+          <div class="flex items-center justify-between gap-3">
+            <label class="min-h-11 flex-1 flex items-center gap-2.5 text-sm font-semibold text-text-secondary cursor-pointer">
               <input
                 type="checkbox"
                 v-model="tx.checked"
-                class="rounded bg-slate-800 border-border text-accent-emerald focus:ring-accent-emerald/20"
+                class="w-5 h-5 shrink-0 rounded bg-slate-800 border-border text-accent-emerald focus:ring-accent-emerald/20"
               />
               <span>Incluir</span>
             </label>
-            <input
-              type="number"
-              step="any"
-              v-model.number="tx.amount"
-              class="w-32 px-2 py-1.5 rounded-lg bg-slate-900/50 border border-border/70 text-sm text-right text-text-primary font-display font-semibold focus:outline-none focus:border-accent-emerald"
-            />
+            <div class="w-36 shrink-0">
+              <input
+                type="number"
+                inputmode="decimal"
+                step="any"
+                v-model.number="tx.amount"
+                aria-label="Monto"
+                class="field text-right font-display font-semibold"
+              />
+            </div>
           </div>
           <input
             type="text"
             v-model="tx.description"
             placeholder="Descripción"
-            class="w-full px-3 py-2 rounded-lg bg-slate-900/50 border border-border/70 text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+            aria-label="Descripción"
+            class="field"
           />
-          <div class="grid grid-cols-2 gap-2">
+          <div class="grid grid-cols-1 min-[400px]:grid-cols-2 gap-2">
             <input
               type="date"
               v-model="tx.date"
-              class="w-full px-2 py-2 rounded-lg bg-slate-900/50 border border-border/70 text-xs text-text-primary focus:outline-none focus:border-accent-emerald"
+              aria-label="Fecha"
+              class="field"
             />
             <select
               v-model="tx.categorySuggestion"
-              class="w-full px-2 py-2 rounded-lg bg-slate-900/50 border border-border/70 text-xs text-text-primary focus:outline-none focus:border-accent-emerald"
+              aria-label="Categoría"
+              class="field"
             >
               <option v-for="cat in transactionsStore.categories" :key="cat.id" :value="cat.name">
                 {{ cat.name }}
@@ -445,20 +459,3 @@ const resetImport = () => {
   pdfBase64.value = ''
 }
 </script>
-
-<style scoped>
-.animate-scale-up {
-  animation: scaleUp 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
-@keyframes scaleUp {
-  from {
-    opacity: 0;
-    transform: scale(0.96);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-</style>

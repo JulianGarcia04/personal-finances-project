@@ -2,7 +2,7 @@
   <div class="max-w-4xl mx-auto space-y-8">
     <!-- Header -->
     <div>
-      <h2 class="font-display font-bold text-3xl text-text-primary tracking-tight">Configuración</h2>
+      <h2 class="font-display font-bold text-2xl sm:text-3xl text-text-primary tracking-tight">Configuración</h2>
       <p class="text-text-secondary text-sm mt-1">Administra los módulos del sistema y tus llaves de inteligencia artificial.</p>
     </div>
 
@@ -20,21 +20,22 @@
       <div class="md:col-span-2 space-y-6">
         <!-- Main Toggle Card -->
         <div class="glass-panel rounded-2xl p-4 sm:p-6 space-y-6">
-          <div class="flex items-start justify-between">
-            <div class="space-y-1">
-              <h4 class="font-display font-medium text-text-primary">Importador de Extractos Bancarios</h4>
-              <p class="text-text-muted text-xs">Habilita o deshabilita la importación automatizada mediante IA.</p>
-            </div>
-            <label class="relative inline-flex items-center cursor-pointer">
+          <!-- Whole row toggles the switch (bigger tap target on mobile) -->
+          <label class="flex items-start justify-between gap-4 min-h-11 cursor-pointer">
+            <span class="min-w-0 space-y-1">
+              <span class="block font-display font-medium text-text-primary">Importador de Extractos Bancarios</span>
+              <span class="block text-text-muted text-xs">Habilita o deshabilita la importación automatizada mediante IA.</span>
+            </span>
+            <span class="relative inline-flex items-center shrink-0 min-h-11 -mt-2.5">
               <input 
                 type="checkbox" 
                 v-model="aiEnabled" 
                 @change="handleGeneralSettingsChange"
                 class="sr-only peer"
               >
-              <div class="w-11 h-6 bg-slate-800 rounded-full peer peer-focus:ring-2 peer-focus:ring-accent-emerald/20 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-slate-400 after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent-emerald peer-checked:after:bg-background"></div>
-            </label>
-          </div>
+              <div class="relative w-11 h-6 bg-slate-800 rounded-full peer peer-focus:ring-2 peer-focus:ring-accent-emerald/20 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-slate-400 after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent-emerald peer-checked:after:bg-background"></div>
+            </span>
+          </label>
 
           <!-- Sub-options if AI is enabled -->
           <div v-if="aiEnabled" class="pt-6 border-t border-border/50 space-y-6 animate-fade-in">
@@ -92,9 +93,9 @@
             </div>
 
             <!-- Custom Key Configuration Panel -->
-            <div v-if="useCustomKey" class="bg-slate-900/40 border border-border rounded-xl p-5 space-y-4">
-              <div class="flex items-center justify-between">
-                <div>
+            <div v-if="useCustomKey" class="bg-slate-900/40 border border-border rounded-xl p-4 sm:p-5 space-y-4">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="min-w-0">
                   <h5 class="text-sm font-semibold text-text-primary">Tu Gemini API Key</h5>
                   <p class="text-text-muted text-xs mt-0.5">Se guardará encriptada con AES-256 en Firestore.</p>
                 </div>
@@ -117,12 +118,14 @@
                   v-model="customKeyInput"
                   required
                   placeholder="AIzaSy..."
-                  class="flex-1 px-4 py-2.5 rounded-xl bg-slate-900/80 border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-emerald"
+                  autocomplete="off"
+                  aria-label="Gemini API Key"
+                  class="field flex-1"
                 />
                 <button 
                   type="submit"
                   :disabled="loadingKey"
-                  class="px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center space-x-2"
+                  class="min-h-11 px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2"
                 >
                   <span v-if="loadingKey" class="w-3.5 h-3.5 border-2 border-background border-t-transparent rounded-full animate-spin"></span>
                   <span>{{ settingsStore.hasCustomKey ? 'Actualizar' : 'Guardar Llave' }}</span>
@@ -157,12 +160,13 @@
                 v-model="newWorkspaceName"
                 required
                 placeholder="Nombre del Workspace (ej. Casa)"
-                class="flex-1 px-4 py-2.5 rounded-xl bg-slate-900/80 border border-border text-sm text-text-primary placeholder:text-text-muted focus:border-accent-emerald/40 focus:outline-hidden"
+                aria-label="Nombre del Workspace"
+                class="field flex-1"
               />
               <button 
                 type="submit"
                 :disabled="creatingWorkspace"
-                class="px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2"
+                class="min-h-11 px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2"
               >
                 <PlusIcon class="w-4 h-4" />
                 <span>Crear</span>
@@ -181,12 +185,16 @@
                 v-model="inviteEmail"
                 required
                 placeholder="correo@ejemplo.com"
-                class="flex-1 px-4 py-2.5 rounded-xl bg-slate-900/80 border border-border text-sm text-text-primary placeholder:text-text-muted focus:border-accent-emerald/40 focus:outline-hidden"
+                aria-label="Correo del miembro"
+                autocomplete="email"
+                autocapitalize="none"
+                inputmode="email"
+                class="field flex-1"
               />
               <button 
                 type="submit"
                 :disabled="invitingUser"
-                class="px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2"
+                class="min-h-11 px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2"
               >
                 <MailIcon class="w-4 h-4" />
                 <span>Invitar</span>
@@ -204,13 +212,15 @@
             <form @submit.prevent="handleUpdateLimit" class="flex flex-col sm:flex-row gap-3">
               <input 
                 type="number" 
+                inputmode="decimal"
                 v-model="expenseLimitInput"
                 placeholder="Ej. 1500000"
-                class="flex-1 px-4 py-2.5 rounded-xl bg-slate-900/80 border border-border text-sm text-text-primary placeholder:text-text-muted focus:border-accent-emerald/40 focus:outline-hidden"
+                aria-label="Límite de gastos"
+                class="field flex-1"
               />
               <button 
                 type="submit"
-                class="px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2"
+                class="min-h-11 px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2"
               >
                 <PlusIcon class="w-4 h-4" />
                 <span>Actualizar</span>
@@ -238,11 +248,12 @@
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <!-- Country Selector -->
             <div class="space-y-1.5">
-              <label class="block text-xs font-semibold text-text-secondary">País de Residencia</label>
+              <label for="settings-country" class="block text-xs font-semibold text-text-secondary">País de Residencia</label>
               <select 
+                id="settings-country"
                 v-model="country" 
                 @change="handleCountryChange"
-                class="w-full px-4 py-3 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary focus:border-accent-emerald/40 focus:outline-hidden transition-all font-semibold cursor-pointer"
+                class="field font-semibold cursor-pointer"
               >
                 <option value="CO">Colombia</option>
                 <option value="MX">México</option>
@@ -256,11 +267,12 @@
 
             <!-- Currency Selector -->
             <div class="space-y-1.5">
-              <label class="block text-xs font-semibold text-text-secondary">Moneda Principal</label>
+              <label for="settings-currency" class="block text-xs font-semibold text-text-secondary">Moneda Principal</label>
               <select 
+                id="settings-currency"
                 v-model="currency" 
                 @change="handleGeneralSettingsChange"
-                class="w-full px-4 py-3 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary focus:border-accent-emerald/40 focus:outline-hidden transition-all font-semibold cursor-pointer"
+                class="field font-semibold cursor-pointer"
               >
                 <option value="COP">COP ($)</option>
                 <option value="MXN">MXN ($)</option>
@@ -291,22 +303,24 @@
               <div
                 v-for="cur in foreignCurrencies"
                 :key="cur"
-                class="flex items-center gap-3"
+                class="flex items-center gap-2 sm:gap-3"
               >
-                <span class="text-sm font-semibold text-text-primary w-16 shrink-0">1 {{ cur }}</span>
+                <span class="text-sm font-semibold text-text-primary shrink-0 whitespace-nowrap">1 {{ cur }}</span>
                 <span class="text-text-muted text-sm shrink-0">=</span>
-                <div class="relative flex-1">
+                <div class="relative flex-1 min-w-0">
                   <input
                     type="number"
+                    inputmode="decimal"
                     step="any"
                     min="0"
                     :value="rateInputs[cur] ?? ''"
                     :placeholder="`Ej. tasa a ${currency}`"
-                    class="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary placeholder:text-text-muted focus:border-accent-emerald/40 focus:outline-hidden"
+                    :aria-label="`Tasa de 1 ${cur} en ${currency}`"
+                    class="field"
                     @change="(e) => saveExchangeRate(cur, (e.target as HTMLInputElement).value)"
                   />
                 </div>
-                <span class="text-sm font-semibold text-text-secondary w-16 shrink-0">{{ currency }}</span>
+                <span class="text-sm font-semibold text-text-secondary shrink-0">{{ currency }}</span>
               </div>
               <p v-if="ratesMsg" class="text-xs text-accent-emerald font-medium">{{ ratesMsg }}</p>
             </div>
@@ -336,22 +350,24 @@
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <!-- Name Input -->
               <div class="space-y-1.5">
-                <label class="block text-xs font-semibold text-text-secondary">Nombre de la Categoría</label>
+                <label for="settings-cat-name" class="block text-xs font-semibold text-text-secondary">Nombre de la Categoría</label>
                 <input 
+                  id="settings-cat-name"
                   type="text" 
                   v-model="newCatName"
                   required
                   placeholder="Ej. Mascotas, Gimnasio"
-                  class="w-full px-4 py-2.5 rounded-xl bg-slate-955 border border-white/5 text-sm text-text-primary placeholder:text-text-muted focus:border-accent-emerald/40 focus:outline-hidden"
+                  class="field"
                 />
               </div>
 
               <!-- Type Selector -->
               <div class="space-y-1.5">
-                <label class="block text-xs font-semibold text-text-secondary">Tipo de Movimiento</label>
+                <label for="settings-cat-type" class="block text-xs font-semibold text-text-secondary">Tipo de Movimiento</label>
                 <select 
+                  id="settings-cat-type"
                   v-model="newCatType" 
-                  class="w-full px-4 py-2.5 rounded-xl bg-slate-955 border border-white/5 text-sm text-text-primary focus:border-accent-emerald/40 focus:outline-hidden transition-all font-semibold cursor-pointer"
+                  class="field font-semibold cursor-pointer"
                 >
                   <option value="expense">Solo Gastos (Egreso)</option>
                   <option value="income">Solo Ingresos (Ingreso)</option>
@@ -363,20 +379,22 @@
             <!-- Color Palette Selector -->
             <div class="space-y-2">
               <label class="block text-xs font-semibold text-text-secondary">Color de la Categoría</label>
-              <div class="flex flex-wrap gap-2 items-center">
+              <div class="flex flex-wrap gap-3 items-center">
                 <button 
                   v-for="color in presetColors" 
                   :key="color"
                   type="button"
+                  :aria-label="`Color ${color}`"
+                  :aria-pressed="newCatColor === color"
                   @click="newCatColor = color"
                   :style="{ backgroundColor: color }"
                   :class="[
-                    'w-7 h-7 rounded-full transition-all border cursor-pointer',
+                    'w-9 h-9 rounded-full transition-all border cursor-pointer',
                     newCatColor === color ? 'border-white scale-110 shadow-lg' : 'border-transparent hover:scale-105'
                   ]"
                 ></button>
                 <!-- Custom Color Picker -->
-                <label class="relative w-7 h-7 rounded-full border border-white/10 flex items-center justify-center cursor-pointer overflow-hidden hover:scale-105 transition-all">
+                <label aria-label="Color personalizado" class="relative w-9 h-9 rounded-full border border-white/10 flex items-center justify-center cursor-pointer overflow-hidden hover:scale-105 transition-all">
                   <input 
                     type="color" 
                     v-model="newCatColor" 
@@ -387,28 +405,30 @@
                     :style="{ backgroundColor: newCatColor }"
                   ></span>
                 </label>
-                <span class="text-xs text-text-muted font-mono ml-2">{{ newCatColor }}</span>
+                <span class="text-xs text-text-muted font-mono">{{ newCatColor }}</span>
               </div>
             </div>
 
             <!-- Icon Selector -->
             <div class="space-y-2">
               <label class="block text-xs font-semibold text-text-secondary">Icono de la Categoría</label>
-              <div class="grid grid-cols-6 sm:grid-cols-7 gap-2 p-3 rounded-xl bg-slate-950/50 border border-white/5 max-h-48 overflow-y-auto custom-scrollbar">
+              <div class="grid grid-cols-5 min-[400px]:grid-cols-6 sm:grid-cols-7 gap-2 p-3 rounded-xl bg-slate-950/50 border border-white/5 max-h-48 overflow-y-auto custom-scrollbar">
                 <button 
                   v-for="icon in availableIcons" 
                   :key="icon.name"
                   type="button"
                   @click="newCatIcon = icon.name"
                   :title="icon.label"
+                  :aria-label="icon.label"
+                  :aria-pressed="newCatIcon === icon.name"
                   :class="[
-                    'p-2 rounded-lg flex items-center justify-center border transition-all cursor-pointer hover:bg-white/5',
+                    'min-h-11 p-2 rounded-lg flex items-center justify-center border transition-all cursor-pointer hover:bg-white/5',
                     newCatIcon === icon.name 
                       ? 'border-accent-emerald/40 bg-accent-emerald/10 text-accent-emerald' 
                       : 'border-transparent text-text-secondary hover:text-text-primary'
                   ]"
                 >
-                  <component :is="getIconComponent(icon.name)" class="w-4 h-4" />
+                  <component :is="getIconComponent(icon.name)" class="w-5 h-5 sm:w-4 sm:h-4" />
                 </button>
               </div>
             </div>
@@ -417,7 +437,7 @@
             <button 
               type="submit"
               :disabled="loadingCategory"
-              class="w-full py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2 transition-all"
+              class="w-full min-h-11 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2 transition-all"
             >
               <PlusIcon class="w-4 h-4" />
               <span>Crear Categoría</span>
@@ -431,15 +451,15 @@
               <span 
                 v-for="cat in transactionsStore.categories" 
                 :key="cat.id"
-                class="inline-flex items-center space-x-2 px-3 py-1.5 rounded-full text-xs font-semibold border border-white/5 bg-slate-900/40 text-text-primary"
+                class="max-w-full inline-flex items-center space-x-2 px-3 py-1.5 rounded-full text-xs font-semibold border border-white/5 bg-slate-900/40 text-text-primary"
               >
                 <!-- Dot for color -->
-                <span class="w-2.5 h-2.5 rounded-full" :style="{ backgroundColor: cat.color }"></span>
+                <span class="w-2.5 h-2.5 shrink-0 rounded-full" :style="{ backgroundColor: cat.color }"></span>
                 <!-- Icon -->
-                <component :is="getIconComponent(cat.icon)" class="w-3.5 h-3.5" :style="{ color: cat.color }" />
-                <span>{{ cat.name }}</span>
+                <component :is="getIconComponent(cat.icon)" class="w-3.5 h-3.5 shrink-0" :style="{ color: cat.color }" />
+                <span class="min-w-0 truncate">{{ cat.name }}</span>
                 <!-- Badge for Type -->
-                <span class="text-[9px] px-1.5 py-0.5 rounded-md bg-white/5 text-text-muted font-normal">
+                <span class="shrink-0 text-[10px] px-1.5 py-0.5 rounded-md bg-white/5 text-text-muted font-normal">
                   {{ cat.type === 'expense' ? 'Gasto' : cat.type === 'income' ? 'Ingreso' : 'Ambos' }}
                 </span>
                 <!-- Delete button (if custom) -->
@@ -447,10 +467,11 @@
                   v-if="!isDefaultCategory(cat.name)"
                   type="button"
                   @click="deleteCategory(cat.id)"
-                  class="p-0.5 rounded-md text-text-muted hover:text-accent-rose hover:bg-white/10 transition-all cursor-pointer ml-1"
+                  class="tap -my-2.5 -mr-2.5 shrink-0 flex items-center justify-center rounded-full text-text-muted hover:text-accent-rose hover:bg-white/10 transition-all cursor-pointer"
                   title="Eliminar categoría"
+                  :aria-label="`Eliminar categoría ${cat.name}`"
                 >
-                  <TrashIcon class="w-3 h-3" />
+                  <TrashIcon class="w-4 h-4" />
                 </button>
               </span>
             </div>

@@ -1,5 +1,5 @@
 <template>
-  <div class="min-h-screen flex items-center justify-center p-4 relative overflow-hidden moving-mesh">
+  <div class="min-h-screen min-h-dvh flex items-center justify-center px-4 pt-[calc(1rem+env(safe-area-inset-top))] pb-[calc(1rem+env(safe-area-inset-bottom))] relative overflow-hidden moving-mesh">
     <!-- Decortative Glowing Orbs -->
     <div class="absolute top-1/4 left-1/4 w-96 h-96 bg-accent-emerald/5 rounded-full blur-[100px] pointer-events-none"></div>
     <div class="absolute bottom-1/4 right-1/4 w-96 h-96 bg-accent-violet/5 rounded-full blur-[100px] pointer-events-none"></div>
@@ -11,7 +11,7 @@
         <div class="w-12 h-12 rounded-2xl bg-gradient-to-tr from-accent-emerald to-accent-violet flex items-center justify-center shadow-glow-emerald mb-4">
           <span class="font-display font-extrabold text-background text-xl">V</span>
         </div>
-        <h2 class="font-display font-bold text-3xl tracking-wide text-text-primary">
+        <h2 class="font-display font-bold text-2xl sm:text-3xl tracking-wide text-text-primary">
           {{ isRegister ? 'Crear una Cuenta' : 'Bienvenido a Vault' }}
         </h2>
         <p class="text-text-secondary text-sm mt-2">
@@ -28,8 +28,9 @@
             v-model="name"
             type="text" 
             required
+            autocomplete="name"
             placeholder="John Doe"
-            class="w-full px-4 py-3 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-emerald transition-colors"
+            class="field transition-colors"
           />
         </div>
 
@@ -40,8 +41,13 @@
             v-model="email"
             type="email" 
             required
+            autocomplete="email"
+            autocapitalize="none"
+            autocorrect="off"
+            spellcheck="false"
+            inputmode="email"
             placeholder="correo@ejemplo.com"
-            class="w-full px-4 py-3 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-emerald transition-colors"
+            class="field transition-colors"
           />
         </div>
 
@@ -52,8 +58,9 @@
             v-model="password"
             type="password" 
             required
+            :autocomplete="isRegister ? 'new-password' : 'current-password'"
             placeholder="••••••••"
-            class="w-full px-4 py-3 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-emerald transition-colors"
+            class="field transition-colors"
           />
         </div>
 
@@ -66,7 +73,7 @@
         <button 
           type="submit"
           :disabled="loading"
-          class="w-full py-3.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm tracking-wide shadow-glow-emerald hover:shadow-lg transition-all duration-200 flex items-center justify-center space-x-2 cursor-pointer disabled:opacity-50"
+          class="w-full min-h-11 py-3.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm tracking-wide shadow-glow-emerald hover:shadow-lg transition-all duration-200 flex items-center justify-center space-x-2 cursor-pointer disabled:opacity-50"
         >
           <span v-if="loading" class="w-4 h-4 border-2 border-background border-t-transparent rounded-full animate-spin"></span>
           <span>{{ isRegister ? 'Registrarse' : 'Ingresar a la Bóveda' }}</span>
@@ -79,8 +86,9 @@
           {{ isRegister ? '¿Ya tienes una cuenta?' : '¿No tienes una cuenta?' }}
         </span>
         <button 
+          type="button"
           @click="toggleMode" 
-          class="ml-1 text-accent-emerald hover:text-accent-emerald-hover font-semibold transition-colors focus:outline-none"
+          class="ml-1 py-2 px-1 min-h-11 text-accent-emerald hover:text-accent-emerald-hover font-semibold transition-colors focus:outline-none"
         >
           {{ isRegister ? 'Inicia Sesión' : 'Regístrate Gratis' }}
         </button>
