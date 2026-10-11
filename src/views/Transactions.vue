@@ -3,12 +3,12 @@
     <!-- Header -->
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
       <div>
-        <h2 class="font-display font-bold text-3xl text-text-primary tracking-tight">Historial de Transacciones</h2>
+        <h2 class="font-display font-bold text-2xl sm:text-3xl text-text-primary tracking-tight">Historial de Transacciones</h2>
         <p class="text-text-secondary text-sm mt-1">Registra movimientos o filtra tu historial financiero completo.</p>
       </div>
       <button 
         @click="showAddModal = true"
-        class="flex items-center justify-center space-x-2 px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer transition-all duration-200"
+        class="flex items-center justify-center space-x-2 min-h-11 px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer transition-all duration-200"
       >
         <PlusIcon class="w-4 h-4" />
         <span>Nueva Transacción</span>
@@ -22,8 +22,8 @@
       </div>
       <div class="min-w-0">
         <p class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Préstamos pendientes por cobrar</p>
-        <p class="font-display font-bold text-lg text-text-primary">
-          <span v-for="(amt, curr) in pendingLoansByCurrency" :key="curr" class="mr-4">
+        <p class="font-display font-bold text-lg text-text-primary flex flex-wrap gap-x-4 tabular-nums">
+          <span v-for="(amt, curr) in pendingLoansByCurrency" :key="curr">
             {{ formatCurrency(amt, String(curr)) }}
           </span>
         </p>
@@ -31,24 +31,38 @@
     </div>
 
     <!-- Filters Pane -->
-    <div class="glass-panel rounded-2xl p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
-      <!-- Search Input -->
-      <div class="space-y-1">
-        <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Buscar</label>
-        <input
-          v-model="filters.search"
-          type="text"
-          placeholder="Descripción o notas..."
-          class="w-full px-4 py-2 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-emerald"
-        />
+    <div class="glass-panel rounded-2xl p-4 sm:p-5 grid grid-cols-2 lg:grid-cols-6 gap-3 sm:gap-4">
+      <!-- Search Input (+ mobile filters toggle) -->
+      <div class="space-y-1 col-span-2 sm:col-span-1 min-w-0">
+        <label for="tx-filter-search" class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Buscar</label>
+        <div class="flex gap-2">
+          <input
+            id="tx-filter-search"
+            v-model="filters.search"
+            type="text"
+            enterkeyhint="search"
+            placeholder="Descripción o notas..."
+            class="field min-w-0"
+          />
+          <button
+            type="button"
+            @click="showMobileFilters = !showMobileFilters"
+            :aria-expanded="showMobileFilters"
+            aria-controls="tx-mobile-filters"
+            :class="['sm:hidden shrink-0 min-h-11 px-3 flex items-center gap-1.5 rounded-xl border text-sm font-semibold transition-all', showMobileFilters || activeFilterCount > 0 ? 'border-accent-emerald/40 bg-accent-emerald/10 text-accent-emerald' : 'border-border text-text-secondary active:bg-white/5']"
+          >
+            <SlidersHorizontalIcon class="w-4 h-4" />
+            <span>Filtros<template v-if="activeFilterCount > 0"> ({{ activeFilterCount }})</template></span>
+          </button>
+        </div>
       </div>
 
       <!-- Account Filter -->
-      <div class="space-y-1">
+      <div id="tx-mobile-filters" :class="['space-y-1 col-span-2 sm:col-span-1 min-w-0', showMobileFilters ? '' : 'hidden sm:block']">
         <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Cuenta</label>
         <select 
           v-model="filters.accountId"
-          class="w-full px-3 py-2 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+          class="field min-w-0"
         >
           <option value="">Todas las cuentas</option>
           <option v-for="acc in accountsStore.accounts" :key="acc.id" :value="acc.id">
@@ -58,11 +72,11 @@
       </div>
 
       <!-- Category Filter -->
-      <div class="space-y-1">
+      <div :class="['space-y-1 col-span-2 sm:col-span-1 min-w-0', showMobileFilters ? '' : 'hidden sm:block']">
         <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Categoría</label>
         <select 
           v-model="filters.categoryId"
-          class="w-full px-3 py-2 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+          class="field min-w-0"
         >
           <option value="">Todas las categorías</option>
           <option v-for="cat in transactionsStore.categories" :key="cat.id" :value="cat.id">
@@ -72,11 +86,11 @@
       </div>
 
       <!-- Type Filter -->
-      <div class="space-y-1">
+      <div :class="['space-y-1 col-span-2 sm:col-span-1 min-w-0', showMobileFilters ? '' : 'hidden sm:block']">
         <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Tipo</label>
         <select
           v-model="filters.type"
-          class="w-full px-3 py-2 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+          class="field min-w-0"
         >
           <option value="">Todos los tipos</option>
           <option value="income">Ingreso</option>
@@ -88,22 +102,22 @@
       </div>
 
       <!-- Date From Filter -->
-      <div class="space-y-1">
+      <div :class="['space-y-1 min-w-0', showMobileFilters ? '' : 'hidden sm:block']">
         <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Desde</label>
         <input
           v-model="filters.dateFrom"
           type="date"
-          class="w-full px-3 py-2 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+          class="field min-w-0"
         />
       </div>
 
       <!-- Date To Filter -->
-      <div class="space-y-1">
+      <div :class="['space-y-1 min-w-0', showMobileFilters ? '' : 'hidden sm:block']">
         <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Hasta</label>
         <input
           v-model="filters.dateTo"
           type="date"
-          class="w-full px-3 py-2 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+          class="field min-w-0"
         />
       </div>
     </div>
@@ -198,7 +212,7 @@
                   </a>
                   <button 
                     @click="openEditModal(tx)"
-                    class="opacity-0 group-hover:opacity-100 p-2 rounded-lg text-text-muted hover:text-accent-emerald hover:bg-white/5 transition-all"
+                    class="hover-device:opacity-0 hover-device:group-hover:opacity-100 hover-device:group-focus-within:opacity-100 focus-visible:opacity-100 p-2 rounded-lg text-text-muted hover:text-accent-emerald hover:bg-white/5 transition-all"
                     title="Editar Transacción"
                   >
                     <PencilIcon class="w-4 h-4" />
@@ -206,7 +220,7 @@
                   <button
                     v-if="transactionsStore.reversibleSettlementIds.includes(tx.id)"
                     @click="openSettlementReversal(tx)"
-                    class="opacity-0 group-hover:opacity-100 p-2 rounded-lg text-accent-amber hover:bg-accent-amber/10 transition-all"
+                    class="hover-device:opacity-0 hover-device:group-hover:opacity-100 hover-device:group-focus-within:opacity-100 focus-visible:opacity-100 p-2 rounded-lg text-accent-amber hover:bg-accent-amber/10 transition-all"
                     title="Revertir liquidación · solo corrige la contabilidad de Vault"
                     aria-label="Revertir liquidación en Vault"
                   >
@@ -214,7 +228,7 @@
                   </button>
                   <button 
                     @click="handleDelete(tx.id)"
-                    class="opacity-0 group-hover:opacity-100 p-2 rounded-lg text-text-muted hover:text-accent-rose hover:bg-white/5 transition-all"
+                    class="hover-device:opacity-0 hover-device:group-hover:opacity-100 hover-device:group-focus-within:opacity-100 focus-visible:opacity-100 p-2 rounded-lg text-text-muted hover:text-accent-rose hover:bg-white/5 transition-all"
                     title="Eliminar Transacción"
                   >
                     <TrashIcon class="w-4 h-4" />
@@ -230,37 +244,46 @@
           </tbody>
         </table>
       </div>
-      
-      <!-- Batch Actions Bar -->
-      <div 
-        v-if="selectedTxIds.length > 0" 
-        class="fixed bottom-8 left-1/2 -translate-x-1/2 z-40 glass-panel rounded-full px-5 py-2.5 shadow-2xl flex items-center space-x-5 border border-white/20 animate-fade-in bg-slate-900/95 backdrop-blur-xl"
+    </div>
+
+    <!-- Batch Actions Bar (teleported so it is visible for mobile cards too and not trapped by the glass panel's backdrop-filter) -->
+    <Teleport to="body">
+      <div
+        v-if="selectedTxIds.length > 0"
+        role="region"
+        aria-label="Acciones de selección"
+        class="fixed z-40 left-1/2 -translate-x-1/2 bottom-[calc(5rem+env(safe-area-inset-bottom))] lg:bottom-6 w-[calc(100%-1.5rem)] sm:w-auto sm:max-w-[calc(100%-3rem)] glass-panel rounded-2xl sm:rounded-full pl-4 pr-1.5 py-1.5 sm:pl-5 sm:pr-2 shadow-2xl flex items-center gap-3 sm:gap-5 border border-white/20 animate-fade-in bg-slate-900/95 backdrop-blur-xl"
       >
-        <div class="flex items-center space-x-2">
-          <span class="bg-accent-emerald text-background text-xs font-bold px-2 py-0.5 rounded-full">{{ selectedTxIds.length }}</span>
+        <div class="flex items-center gap-2 shrink-0">
+          <span class="bg-accent-emerald text-background text-xs font-bold px-2 py-0.5 rounded-full tabular-nums">{{ selectedTxIds.length }}</span>
           <span class="text-xs font-semibold text-text-primary hidden sm:inline">Seleccionados</span>
         </div>
-        
-        <div class="h-5 w-px bg-border/50"></div>
-        
-        <div class="flex flex-col text-[10px] sm:text-xs space-y-0.5 whitespace-nowrap">
-          <div v-for="(totals, curr) in selectionSummary" :key="curr" class="flex space-x-3">
+
+        <div class="h-5 w-px bg-border/50 shrink-0"></div>
+
+        <div class="flex-1 min-w-0 flex flex-col text-[11px] sm:text-xs gap-0.5 tabular-nums">
+          <div v-for="(totals, curr) in selectionSummary" :key="curr" class="flex flex-wrap gap-x-3">
             <span v-if="totals.income > 0" class="text-accent-emerald">Ingresos: +{{ formatCurrency(totals.income, curr) }}</span>
             <span v-if="totals.expense > 0" class="text-accent-rose">Gastos: -{{ formatCurrency(totals.expense, curr) }}</span>
             <span v-if="totals.transfer > 0" class="text-text-secondary">Transferencias: {{ formatCurrency(totals.transfer, curr) }}</span>
           </div>
         </div>
 
-        <div class="h-5 w-px bg-border/50"></div>
+        <div class="h-5 w-px bg-border/50 shrink-0"></div>
 
-        <button @click="handleBatchDelete" class="p-1.5 text-text-muted hover:text-accent-rose hover:bg-white/5 rounded-lg transition-colors" title="Eliminar Seleccionados">
-          <TrashIcon class="w-4 h-4" />
-        </button>
+        <div class="flex items-center shrink-0">
+          <button @click="handleBatchDelete" class="tap flex items-center justify-center text-text-muted hover:text-accent-rose hover:bg-white/5 active:bg-white/10 rounded-full transition-colors" title="Eliminar Seleccionados" aria-label="Eliminar seleccionados">
+            <TrashIcon class="w-4 h-4" />
+          </button>
+          <button @click="selectedTxIds = []" class="tap flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-white/5 active:bg-white/10 rounded-full transition-colors" title="Quitar selección" aria-label="Quitar selección">
+            <XIcon class="w-4 h-4" />
+          </button>
+        </div>
       </div>
-    </div>
+    </Teleport>
 
     <!-- Transactions Cards (mobile) -->
-    <div class="md:hidden space-y-3 pb-16">
+    <div class="md:hidden space-y-3 pb-24">
       <div
         v-for="tx in displayedTransactions"
         :key="tx.id"
@@ -268,12 +291,15 @@
       >
         <div class="flex items-start justify-between gap-3">
           <div class="flex items-start gap-3 min-w-0">
-            <input
-              type="checkbox"
-              v-model="selectedTxIds"
-              :value="tx.id"
-              class="mt-1 rounded border-border bg-slate-900/50 text-accent-emerald focus:ring-accent-emerald cursor-pointer shrink-0"
-            />
+            <label class="-m-3.5 p-3.5 shrink-0 flex cursor-pointer">
+              <input
+                type="checkbox"
+                v-model="selectedTxIds"
+                :value="tx.id"
+                :aria-label="`Seleccionar ${tx.description}`"
+                class="mt-1 rounded border-border bg-slate-900/50 text-accent-emerald focus:ring-accent-emerald cursor-pointer"
+              />
+            </label>
             <div class="min-w-0">
               <p class="text-sm font-medium text-text-primary break-words">{{ tx.description }}</p>
               <p v-if="tx.notes" class="text-[11px] text-text-muted mt-0.5 whitespace-pre-wrap break-words">{{ tx.notes }}</p>
@@ -290,38 +316,40 @@
             <span v-if="displayOf(tx).route" class="block text-[10px] text-text-muted mt-0.5">{{ displayOf(tx).route }}</span>
           </p>
         </div>
-        <div class="flex items-center justify-between pl-8">
+        <div class="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 pl-7">
           <span
             v-if="getCategory(tx.categoryId)"
-            class="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-semibold"
+            class="inline-flex min-w-0 max-w-full items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold"
             :style="{ backgroundColor: (getCategory(tx.categoryId)?.color || '#94a3b8') + '15', color: getCategory(tx.categoryId)?.color || '#94a3b8' }"
           >
-            <component :is="getCategoryIcon(getCategory(tx.categoryId)?.icon || 'HelpCircle')" class="w-3.5 h-3.5" />
-            <span>{{ getCategory(tx.categoryId)?.name }}</span>
+            <component :is="getCategoryIcon(getCategory(tx.categoryId)?.icon || 'HelpCircle')" class="w-3.5 h-3.5 shrink-0" />
+            <span class="truncate">{{ getCategory(tx.categoryId)?.name }}</span>
           </span>
           <span v-else class="text-text-muted text-xs">-</span>
-          <div class="flex items-center space-x-1">
+          <div class="flex items-center ml-auto -mr-2">
             <a
               v-if="tx.receiptUrl"
               :href="tx.receiptUrl"
               target="_blank"
               rel="noopener noreferrer"
-              class="p-2 rounded-lg text-text-muted hover:text-accent-emerald hover:bg-white/5 transition-all inline-block"
+              class="tap inline-flex items-center justify-center rounded-lg text-text-muted hover:text-accent-emerald hover:bg-white/5 active:bg-white/10 transition-all"
               title="Ver Comprobante"
+              aria-label="Ver comprobante"
             >
               <PaperclipIcon class="w-4 h-4" />
             </a>
             <button
               @click="openEditModal(tx)"
-              class="p-2 rounded-lg text-text-muted hover:text-accent-emerald hover:bg-white/5 transition-all"
+              class="tap flex items-center justify-center rounded-lg text-text-muted hover:text-accent-emerald hover:bg-white/5 active:bg-white/10 transition-all"
               title="Editar Transacción"
+              aria-label="Editar transacción"
             >
               <PencilIcon class="w-4 h-4" />
             </button>
             <button
               v-if="transactionsStore.reversibleSettlementIds.includes(tx.id)"
               @click="openSettlementReversal(tx)"
-              class="p-2 rounded-lg text-accent-amber hover:bg-accent-amber/10 transition-all"
+              class="tap flex items-center justify-center rounded-lg text-accent-amber hover:bg-accent-amber/10 active:bg-accent-amber/10 transition-all"
               title="Revertir liquidación · solo corrige la contabilidad de Vault"
               aria-label="Revertir liquidación en Vault"
             >
@@ -329,8 +357,9 @@
             </button>
             <button
               @click="handleDelete(tx.id)"
-              class="p-2 rounded-lg text-text-muted hover:text-accent-rose hover:bg-white/5 transition-all"
+              class="tap flex items-center justify-center rounded-lg text-text-muted hover:text-accent-rose hover:bg-white/5 active:bg-white/10 transition-all"
               title="Eliminar Transacción"
+              aria-label="Eliminar transacción"
             >
               <TrashIcon class="w-4 h-4" />
             </button>
@@ -346,50 +375,37 @@
     <div v-if="filteredCount > visibleCount" class="flex justify-center">
       <button
         @click="visibleCount += PAGE_SIZE"
-        class="px-5 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all"
+        class="min-h-11 px-5 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all"
       >
         Cargar más ({{ filteredCount - visibleCount }} restantes)
       </button>
     </div>
 
     <!-- Add Transaction Modal -->
-    <div 
-      v-if="showAddModal" 
-      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs"
-    >
-      <div class="w-full max-w-md glass-panel rounded-3xl p-4 sm:p-6 md:p-8 shadow-2xl relative border border-white/10 animate-scale-up max-h-[90vh] overflow-y-auto custom-scrollbar">
-        <!-- Close Button -->
-        <button 
-          @click="closeAddModal"
-          class="absolute top-4 right-4 p-2 rounded-lg text-text-secondary hover:text-text-primary hover:bg-white/5 transition-all"
-        >
-          <XIcon class="w-5 h-5" />
-        </button>
+    <BaseSheet :open="showAddModal" title="Nueva Transacción" @close="closeAddModal">
+        <p class="text-text-secondary text-xs mb-5">Registra un movimiento manual en tus cuentas.</p>
 
-        <h3 class="font-display font-bold text-2xl text-text-primary mb-2">Nueva Transacción</h3>
-        <p class="text-text-secondary text-xs mb-6">Registra un movimiento manual en tus cuentas.</p>
-
-        <form @submit.prevent="saveTransaction" class="space-y-4">
+        <form id="add-tx-form" @submit.prevent="saveTransaction" class="space-y-4">
           <!-- Type Toggle -->
           <div class="grid grid-cols-3 gap-2 p-1 rounded-xl bg-slate-900/80 border border-border">
             <button
               type="button"
               @click="newTx.type = 'expense'"
-              :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', newTx.type === 'expense' ? 'bg-accent-rose/10 text-accent-rose border border-accent-rose/20' : 'text-text-secondary hover:text-text-primary']"
+              :class="['min-h-11 px-1 py-2 rounded-lg text-xs font-semibold leading-tight transition-all cursor-pointer', newTx.type === 'expense' ? 'bg-accent-rose/10 text-accent-rose border border-accent-rose/20' : 'text-text-secondary hover:text-text-primary']"
             >
               Gasto
             </button>
             <button
               type="button"
               @click="newTx.type = 'income'"
-              :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', newTx.type === 'income' ? 'bg-accent-emerald/10 text-accent-emerald border border-accent-emerald/20' : 'text-text-secondary hover:text-text-primary']"
+              :class="['min-h-11 px-1 py-2 rounded-lg text-xs font-semibold leading-tight transition-all cursor-pointer', newTx.type === 'income' ? 'bg-accent-emerald/10 text-accent-emerald border border-accent-emerald/20' : 'text-text-secondary hover:text-text-primary']"
             >
               Ingreso
             </button>
             <button
               type="button"
               @click="newTx.type = 'transfer'"
-              :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', newTx.type === 'transfer' ? 'bg-accent-amber/10 text-accent-amber border border-accent-amber/20' : 'text-text-secondary hover:text-text-primary']"
+              :class="['min-h-11 px-1 py-2 rounded-lg text-xs font-semibold leading-tight transition-all cursor-pointer', newTx.type === 'transfer' ? 'bg-accent-amber/10 text-accent-amber border border-accent-amber/20' : 'text-text-secondary hover:text-text-primary']"
             >
               Transferencia
             </button>
@@ -397,7 +413,7 @@
               type="button"
               @click="newTx.type = 'loan'"
               title="Dinero que le presto a alguien (sale de la cuenta, no cuenta como gasto)"
-              :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', newTx.type === 'loan' ? 'bg-accent-violet/10 text-accent-violet border border-accent-violet/20' : 'text-text-secondary hover:text-text-primary']"
+              :class="['min-h-11 px-1 py-2 rounded-lg text-xs font-semibold leading-tight transition-all cursor-pointer', newTx.type === 'loan' ? 'bg-accent-violet/10 text-accent-violet border border-accent-violet/20' : 'text-text-secondary hover:text-text-primary']"
             >
               Préstamo
             </button>
@@ -405,7 +421,7 @@
               type="button"
               @click="newTx.type = 'loan_payment'"
               title="Me pagaron un préstamo (entra a la cuenta, no cuenta como ingreso)"
-              :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', newTx.type === 'loan_payment' ? 'bg-accent-violet/10 text-accent-violet border border-accent-violet/20' : 'text-text-secondary hover:text-text-primary']"
+              :class="['min-h-11 px-1 py-2 rounded-lg text-xs font-semibold leading-tight transition-all cursor-pointer', newTx.type === 'loan_payment' ? 'bg-accent-violet/10 text-accent-violet border border-accent-violet/20' : 'text-text-secondary hover:text-text-primary']"
             >
               Pago Préstamo
             </button>
@@ -420,7 +436,7 @@
               <select 
                 v-model="newTx.accountId"
                 required
-                class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                class="field"
               >
                 <option value="" disabled>Selecciona cuenta</option>
                 <option v-for="acc in availableNewSourceAccounts" :key="acc.id" :value="acc.id">
@@ -435,7 +451,7 @@
               <select 
                 v-model="newTx.toAccountId"
                 required
-                class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                class="field"
               >
                 <option value="" disabled>Selecciona cuenta</option>
                 <option v-for="acc in availableDestinationAccounts" :key="acc.id" :value="acc.id">
@@ -450,7 +466,7 @@
               <select
                 v-model="newTx.categoryId"
                 required
-                class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                class="field"
               >
                 <option value="" disabled>Selecciona categoría</option>
                 <option v-for="cat in availableCategories" :key="cat.id" :value="cat.id">
@@ -477,11 +493,12 @@
               <input 
                 v-model.number="newTx.amount" 
                 type="number" 
+                inputmode="decimal"
                 step="any"
                 required
                 min="0.01"
                 placeholder="0.00"
-                class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                class="field"
               />
             </div>
 
@@ -491,7 +508,7 @@
                 v-model="newTx.date" 
                 type="date" 
                 required
-                class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                class="field"
               />
             </div>
           </div>
@@ -502,11 +519,12 @@
               <input
                 v-model.number="newTx.installments"
                 type="number"
+                inputmode="numeric"
                 min="1"
                 max="60"
                 step="1"
                 required
-                class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-accent-amber/20 text-sm text-text-primary focus:outline-none focus:border-accent-amber"
+                class="w-full min-h-11 px-3 py-2 rounded-xl bg-slate-900/50 border border-accent-amber/20 text-base sm:text-sm text-text-primary focus:outline-none focus:border-accent-amber"
               />
             </div>
             <p class="text-[10px] text-text-muted">El saldo registra la compra completa; los KPIs la repartirán mes a mes.</p>
@@ -519,7 +537,7 @@
               type="text"
               required
               placeholder="Ej. Compra de mercado, Pago de salario"
-              class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+              class="field"
             />
           </div>
 
@@ -530,7 +548,7 @@
               rows="2"
               maxlength="500"
               placeholder="Ej. Factura #123, pagado con puntos, reembolsable..."
-              class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-emerald resize-none"
+              class="field resize-none"
             ></textarea>
           </div>
 
@@ -539,7 +557,7 @@
             <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Registrado por</label>
             <select
               v-model="newTx.userId"
-              class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+              class="field"
             >
               <option value="">Yo</option>
               <option v-for="profile in workspacesStore.activeWorkspaceProfiles" :key="profile.uid" :value="profile.uid">
@@ -551,12 +569,12 @@
           <!-- Receipt upload -->
           <div class="space-y-1">
             <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider block">Comprobante (Opcional)</label>
-            <div class="flex items-center space-x-3">
+            <div class="flex items-center gap-3 min-w-0">
               <label 
-                class="flex items-center justify-center space-x-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 text-xs font-semibold text-text-secondary hover:text-text-primary cursor-pointer transition-all duration-200"
+                class="flex min-w-0 min-h-11 items-center justify-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 text-xs font-semibold text-text-secondary hover:text-text-primary cursor-pointer transition-all duration-200"
               >
-                <PaperclipIcon class="w-3.5 h-3.5" />
-                <span>{{ uploadingReceipt ? 'Subiendo...' : selectedFileName || 'Adjuntar comprobante' }}</span>
+                <PaperclipIcon class="w-3.5 h-3.5 shrink-0" />
+                <span class="truncate min-w-0">{{ uploadingReceipt ? 'Subiendo...' : selectedFileName || 'Adjuntar comprobante' }}</span>
                 <input 
                   type="file" 
                   ref="receiptInput"
@@ -570,7 +588,7 @@
                 v-if="uploadedReceiptUrl"
                 type="button"
                 @click="clearReceipt"
-                class="text-xs text-accent-rose font-semibold hover:underline cursor-pointer"
+                class="shrink-0 min-h-11 px-2 text-xs text-accent-rose font-semibold hover:underline cursor-pointer"
               >
                 Eliminar
               </button>
@@ -581,98 +599,84 @@
             </div>
             <p v-if="receiptError" class="text-[10px] text-accent-rose font-semibold mt-0.5">{{ receiptError }}</p>
           </div>
+        </form>
 
-          <!-- Buttons -->
-          <div class="flex space-x-3 pt-4">
-            <button 
-              type="button" 
+        <template #footer>
+          <div class="flex gap-3">
+            <button
+              type="button"
               @click="closeAddModal"
-              class="w-1/2 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all"
+              class="flex-1 min-h-11 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all"
             >
               Cancelar
             </button>
-            <button 
-              type="submit" 
+            <button
+              type="submit"
+              form="add-tx-form"
               :disabled="loading"
-              class="w-1/2 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50"
+              class="flex-1 min-h-11 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50"
             >
               <span>Registrar</span>
             </button>
           </div>
-        </form>
-      </div>
-    </div>
+        </template>
+    </BaseSheet>
 
     <!-- Settlement reversal confirmation -->
-    <div
-      v-if="settlementToReverse"
-      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs"
-      @click.self="settlementToReverse = null"
+    <BaseSheet
+      :open="!!settlementToReverse"
+      size="lg"
+      panel-class="border-accent-amber/20"
+      @close="closeSettlementReversal"
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="settlement-reversal-title"
-        class="w-full max-w-lg glass-panel rounded-3xl p-5 sm:p-7 shadow-2xl border border-accent-amber/20 animate-scale-up"
-      >
-        <div class="flex items-start gap-3 mb-5">
+      <template #header>
+        <div class="flex items-start gap-3">
           <div class="p-2.5 rounded-xl bg-accent-amber/10 text-accent-amber shrink-0">
             <RotateCcwIcon class="w-5 h-5" />
           </div>
-          <div>
-            <h3 id="settlement-reversal-title" class="font-display font-bold text-xl text-text-primary">Revertir liquidación en Vault</h3>
-            <p class="text-text-secondary text-xs mt-1">{{ settlementToReverse.description }}</p>
+          <div class="min-w-0">
+            <h3 class="font-display font-bold text-lg sm:text-xl text-text-primary">Revertir liquidación en Vault</h3>
+            <p class="text-text-secondary text-xs mt-1 break-words">{{ settlementToReverse?.description }}</p>
           </div>
         </div>
+      </template>
 
-        <div class="rounded-2xl border border-accent-amber/20 bg-accent-amber/[0.05] p-4 space-y-3 text-sm text-text-secondary">
-          <p>Se crearán movimientos compensatorios en Vault para restaurar las proyecciones de las cuentas. <strong class="text-text-primary">{{ formatCurrency(Math.abs(settlementToReverse.amount), settlementToReverse.currency || getAccountCurrency(settlementToReverse.accountId)) }}</strong> volverá a quedar pendiente en la cuenta puente.</p>
-          <p class="font-semibold text-accent-amber">Esto es únicamente una corrección contable de Vault. No deshace ni devuelve el movimiento bancario real y no inicia ningún movimiento de dinero.</p>
-          <p>Después puedes registrar por separado la liquidación ya realizada con las cuentas correctas.</p>
-        </div>
+      <div v-if="settlementToReverse" class="rounded-2xl border border-accent-amber/20 bg-accent-amber/[0.05] p-4 space-y-3 text-sm text-text-secondary">
+        <p>Se crearán movimientos compensatorios en Vault para restaurar las proyecciones de las cuentas. <strong class="text-text-primary tabular-nums">{{ formatCurrency(Math.abs(settlementToReverse.amount), settlementToReverse.currency || getAccountCurrency(settlementToReverse.accountId)) }}</strong> volverá a quedar pendiente en la cuenta puente.</p>
+        <p class="font-semibold text-accent-amber">Esto es únicamente una corrección contable de Vault. No deshace ni devuelve el movimiento bancario real y no inicia ningún movimiento de dinero.</p>
+        <p>Después puedes registrar por separado la liquidación ya realizada con las cuentas correctas.</p>
+      </div>
 
-        <div class="flex gap-3 pt-5">
+      <template #footer>
+        <div class="flex gap-3">
           <button
             type="button"
             @click="settlementToReverse = null"
             :disabled="reversingSettlement"
-            class="w-1/2 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all disabled:opacity-50"
+            class="flex-1 min-h-11 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all disabled:opacity-50"
           >Cancelar</button>
           <button
             type="button"
             @click="confirmSettlementReversal"
             :disabled="reversingSettlement"
-            class="w-1/2 py-2.5 rounded-xl bg-accent-amber hover:bg-accent-amber/90 text-background font-display font-semibold text-sm transition-all disabled:opacity-50"
+            class="flex-1 min-h-11 py-2.5 rounded-xl bg-accent-amber hover:bg-accent-amber/90 text-background font-display font-semibold text-sm transition-all disabled:opacity-50"
           >{{ reversingSettlement ? 'Revirtiendo...' : 'Confirmar corrección' }}</button>
         </div>
-      </div>
-    </div>
+      </template>
+    </BaseSheet>
 
     <!-- Edit Transaction Modal -->
-    <div 
-      v-if="showEditModal" 
-      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs"
-    >
-      <div class="w-full max-w-md glass-panel rounded-3xl p-4 sm:p-6 md:p-8 shadow-2xl relative border border-white/10 animate-scale-up max-h-[90vh] overflow-y-auto custom-scrollbar">
-        <!-- Close Button -->
-        <button 
-          @click="closeEditModal"
-          class="absolute top-4 right-4 p-2 rounded-lg text-text-secondary hover:text-text-primary hover:bg-white/5 transition-all"
-        >
-          <XIcon class="w-5 h-5" />
-        </button>
+    <BaseSheet :open="showEditModal" title="Editar Transacción" @close="closeEditModal">
+        <p class="text-text-secondary text-xs mb-5">Modifica los detalles de este movimiento.</p>
 
-        <h3 class="font-display font-bold text-2xl text-text-primary mb-2">Editar Transacción</h3>
-        <p class="text-text-secondary text-xs mb-6">Modifica los detalles de este movimiento.</p>
-
-        <form @submit.prevent="saveEditedTransaction" class="space-y-4">
+        <form id="edit-tx-form" @submit.prevent="saveEditedTransaction" class="space-y-4">
           <!-- Type Toggle -->
           <div class="grid grid-cols-3 gap-2 p-1 rounded-xl bg-slate-900/80 border border-border">
             <button
               type="button"
               :disabled="isEditingOpeningAllocation"
               @click="editTx.type = 'expense'"
-              :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', editTx.type === 'expense' ? 'bg-accent-rose/10 text-accent-rose border border-accent-rose/20' : 'text-text-secondary hover:text-text-primary']"
+              :class="['min-h-11 px-1 py-2 rounded-lg text-xs font-semibold leading-tight transition-all cursor-pointer', editTx.type === 'expense' ? 'bg-accent-rose/10 text-accent-rose border border-accent-rose/20' : 'text-text-secondary hover:text-text-primary']"
             >
               Gasto
             </button>
@@ -680,7 +684,7 @@
               type="button"
               :disabled="isEditingOpeningAllocation"
               @click="editTx.type = 'income'"
-              :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', editTx.type === 'income' ? 'bg-accent-emerald/10 text-accent-emerald border border-accent-emerald/20' : 'text-text-secondary hover:text-text-primary']"
+              :class="['min-h-11 px-1 py-2 rounded-lg text-xs font-semibold leading-tight transition-all cursor-pointer', editTx.type === 'income' ? 'bg-accent-emerald/10 text-accent-emerald border border-accent-emerald/20' : 'text-text-secondary hover:text-text-primary']"
             >
               Ingreso
             </button>
@@ -688,7 +692,7 @@
               type="button"
               :disabled="isEditingOpeningAllocation"
               @click="editTx.type = 'transfer'"
-              :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', editTx.type === 'transfer' ? 'bg-accent-amber/10 text-accent-amber border border-accent-amber/20' : 'text-text-secondary hover:text-text-primary']"
+              :class="['min-h-11 px-1 py-2 rounded-lg text-xs font-semibold leading-tight transition-all cursor-pointer', editTx.type === 'transfer' ? 'bg-accent-amber/10 text-accent-amber border border-accent-amber/20' : 'text-text-secondary hover:text-text-primary']"
             >
               Transferencia
             </button>
@@ -697,7 +701,7 @@
               :disabled="isEditingOpeningAllocation"
               @click="editTx.type = 'loan'"
               title="Dinero que le presto a alguien (sale de la cuenta, no cuenta como gasto)"
-              :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', editTx.type === 'loan' ? 'bg-accent-violet/10 text-accent-violet border border-accent-violet/20' : 'text-text-secondary hover:text-text-primary']"
+              :class="['min-h-11 px-1 py-2 rounded-lg text-xs font-semibold leading-tight transition-all cursor-pointer', editTx.type === 'loan' ? 'bg-accent-violet/10 text-accent-violet border border-accent-violet/20' : 'text-text-secondary hover:text-text-primary']"
             >
               Préstamo
             </button>
@@ -706,7 +710,7 @@
               :disabled="isEditingOpeningAllocation"
               @click="editTx.type = 'loan_payment'"
               title="Me pagaron un préstamo (entra a la cuenta, no cuenta como ingreso)"
-              :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', editTx.type === 'loan_payment' ? 'bg-accent-violet/10 text-accent-violet border border-accent-violet/20' : 'text-text-secondary hover:text-text-primary']"
+              :class="['min-h-11 px-1 py-2 rounded-lg text-xs font-semibold leading-tight transition-all cursor-pointer', editTx.type === 'loan_payment' ? 'bg-accent-violet/10 text-accent-violet border border-accent-violet/20' : 'text-text-secondary hover:text-text-primary']"
             >
               Pago Préstamo
             </button>
@@ -725,7 +729,7 @@
                 v-model="editTx.accountId"
                 required
                 :disabled="isEditingOpeningAllocation"
-                class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                class="field"
               >
                 <option value="" disabled>Selecciona cuenta</option>
                 <option v-for="acc in availableEditSourceAccounts" :key="acc.id" :value="acc.id">
@@ -741,7 +745,7 @@
                 v-model="editTx.toAccountId"
                 required
                 :disabled="isEditingOpeningAllocation"
-                class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                class="field"
               >
                 <option value="" disabled>Selecciona cuenta</option>
                 <option v-for="acc in availableEditDestinationAccounts" :key="acc.id" :value="acc.id">
@@ -756,7 +760,7 @@
               <select
                 v-model="editTx.categoryId"
                 required
-                class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                class="field"
               >
                 <option value="" disabled>Selecciona categoría</option>
                 <option v-for="cat in availableEditCategories" :key="cat.id" :value="cat.id">
@@ -783,11 +787,12 @@
               <input 
                 v-model.number="editTx.amount" 
                 type="number" 
+                inputmode="decimal"
                 step="any"
                 required
                 min="0.01"
                 placeholder="0.00"
-                class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                class="field"
               />
             </div>
 
@@ -797,7 +802,7 @@
                 v-model="editTx.date" 
                 type="date" 
                 required
-                class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                class="field"
               />
             </div>
           </div>
@@ -808,11 +813,12 @@
               <input
                 v-model.number="editTx.installments"
                 type="number"
+                inputmode="numeric"
                 min="1"
                 max="60"
                 step="1"
                 required
-                class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-accent-amber/20 text-sm text-text-primary focus:outline-none focus:border-accent-amber"
+                class="w-full min-h-11 px-3 py-2 rounded-xl bg-slate-900/50 border border-accent-amber/20 text-base sm:text-sm text-text-primary focus:outline-none focus:border-accent-amber"
               />
             </div>
             <p class="text-[10px] text-text-muted">El monto mostrado sigue siendo el total de la compra.</p>
@@ -825,7 +831,7 @@
               type="text"
               required
               placeholder="Ej. Compra de mercado, Pago de salario"
-              class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+              class="field"
             />
           </div>
 
@@ -836,7 +842,7 @@
               rows="2"
               maxlength="500"
               placeholder="Ej. Factura #123, pagado con puntos, reembolsable..."
-              class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-emerald resize-none"
+              class="field resize-none"
             ></textarea>
           </div>
 
@@ -845,7 +851,7 @@
             <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Registrado por</label>
             <select
               v-model="editTx.userId"
-              class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+              class="field"
             >
               <option value="">Yo</option>
               <option v-for="profile in workspacesStore.activeWorkspaceProfiles" :key="profile.uid" :value="profile.uid">
@@ -857,12 +863,12 @@
           <!-- Receipt upload -->
           <div class="space-y-1">
             <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider block">Comprobante (Opcional)</label>
-            <div class="flex items-center space-x-3">
+            <div class="flex items-center gap-3 min-w-0">
               <label 
-                class="flex items-center justify-center space-x-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 text-xs font-semibold text-text-secondary hover:text-text-primary cursor-pointer transition-all duration-200"
+                class="flex min-w-0 min-h-11 items-center justify-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 text-xs font-semibold text-text-secondary hover:text-text-primary cursor-pointer transition-all duration-200"
               >
-                <PaperclipIcon class="w-3.5 h-3.5" />
-                <span>{{ editUploadingReceipt ? 'Subiendo...' : editSelectedFileName || 'Adjuntar comprobante' }}</span>
+                <PaperclipIcon class="w-3.5 h-3.5 shrink-0" />
+                <span class="truncate min-w-0">{{ editUploadingReceipt ? 'Subiendo...' : editSelectedFileName || 'Adjuntar comprobante' }}</span>
                 <input 
                   type="file" 
                   ref="editReceiptInput"
@@ -876,7 +882,7 @@
                 v-if="editUploadedReceiptUrl"
                 type="button"
                 @click="clearEditReceipt"
-                class="text-xs text-accent-rose font-semibold hover:underline cursor-pointer"
+                class="shrink-0 min-h-11 px-2 text-xs text-accent-rose font-semibold hover:underline cursor-pointer"
               >
                 Eliminar
               </button>
@@ -887,27 +893,28 @@
             </div>
             <p v-if="editReceiptError" class="text-[10px] text-accent-rose font-semibold mt-0.5">{{ editReceiptError }}</p>
           </div>
+        </form>
 
-          <!-- Buttons -->
-          <div class="flex space-x-3 pt-4">
-            <button 
-              type="button" 
+        <template #footer>
+          <div class="flex gap-3">
+            <button
+              type="button"
               @click="closeEditModal"
-              class="w-1/2 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all"
+              class="flex-1 min-h-11 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all"
             >
               Cancelar
             </button>
-            <button 
-              type="submit" 
+            <button
+              type="submit"
+              form="edit-tx-form"
               :disabled="loading || editUploadingReceipt"
-              class="w-1/2 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50"
+              class="flex-1 min-h-11 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50"
             >
               <span>Guardar</span>
             </button>
           </div>
-        </form>
-      </div>
-    </div>
+        </template>
+    </BaseSheet>
   </div>
 </template>
 
@@ -933,8 +940,10 @@ import {
   ShoppingBag, Home, Gift, Coffee, Plane, DollarSign, PiggyBank, Smartphone,
   Activity, Scissors, BookOpen, Wrench, Shield,
   HandCoins as HandCoinsIcon,
-  RotateCcw as RotateCcwIcon
+  RotateCcw as RotateCcwIcon,
+  SlidersHorizontal as SlidersHorizontalIcon
 } from 'lucide-vue-next'
+import BaseSheet from '@/components/ui/BaseSheet.vue'
 
 const accountsStore = useAccountsStore()
 const transactionsStore = useTransactionsStore()
@@ -948,6 +957,9 @@ const loading = ref(false)
 const pocketTransferSelection = ref(false)
 const settlementToReverse = ref<Transaction | null>(null)
 const reversingSettlement = ref(false)
+const closeSettlementReversal = () => {
+  if (!reversingSettlement.value) settlementToReverse.value = null
+}
 
 // Ponytail: Batch selection state and computed
 const selectedTxIds = ref<string[]>([])
@@ -997,6 +1009,12 @@ const filters = reactive({
   dateFrom: '',
   dateTo: ''
 })
+
+// Mobile-only: collapse secondary filters behind a toggle (desktop always shows them).
+const showMobileFilters = ref(false)
+const activeFilterCount = computed(() =>
+  [filters.accountId, filters.categoryId, filters.type, filters.dateFrom, filters.dateTo].filter(Boolean).length
+)
 
 // ponytail: paginación client-side, los datos ya están todos cargados
 const PAGE_SIZE = 50
@@ -1519,23 +1537,10 @@ const clearReceipt = () => {
 </script>
 
 <style scoped>
-.animate-scale-up {
-  animation: scaleUp 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
 .animate-fade-in {
   animation: fadeIn 0.2s ease-out forwards;
 }
 
-@keyframes scaleUp {
-  from {
-    opacity: 0;
-    transform: scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
