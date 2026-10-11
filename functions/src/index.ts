@@ -2,16 +2,27 @@ import { onRequest } from "firebase-functions/v2/https";
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import * as admin from "firebase-admin";
 import * as crypto from "crypto";
-import dotenv from "dotenv";
 import cors from "cors";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { genkit } from "genkit";
 import { googleAI } from "@genkit-ai/google-genai";
 import { z } from "zod";
 import { createWorkspaceAccount, mutateWorkspaceTransaction } from "./pockets";
+import {
+  apiKeyBodySchema,
+  chatBodySchema,
+  expenseAmountForMonth,
+  expensePeriod,
+  HttpError,
+  inviteBodySchema,
+  parseBody,
+  parseStatementBodySchema,
+  sendError,
+  timeZoneForCountry,
+  verifyBearerToken
+} from "./http";
 export { importPocketStatement } from "./pocketImports";
 
-dotenv.config();
 const corsHandler = cors({ origin: true });
 admin.initializeApp();
 
@@ -21,19 +32,9 @@ const GEMINI_MODEL = "gemini-2.5-flash";
 const EMBEDDING_MODEL = "gemini-embedding-2";
 const LEGACY_EMBEDDING_DIM = 768; // text-embedding-004, apagado en enero 2026
 
-function expenseAmountForMonth(data: admin.firestore.DocumentData, year: number, month: number): number {
-  if (data.type !== "expense") return 0;
-  const transactionDate = data.date?.toDate ? data.date.toDate() : new Date(data.date);
-  if (Number.isNaN(transactionDate.getTime())) return 0;
-
-  const installments = Number.isInteger(data.installments) && data.installments > 0 ? data.installments : 1;
-  const monthIndex = year * 12 + month - (transactionDate.getFullYear() * 12 + transactionDate.getMonth());
-  if (monthIndex < 0 || monthIndex >= installments) return 0;
-
-  const totalCents = Math.round(Math.abs(Number(data.amount) || 0) * 100);
-  const baseCents = Math.floor(totalCents / installments);
-  const remainderCents = totalCents % installments;
-  return (baseCents + (monthIndex < remainderCents ? 1 : 0)) / 100;
+// Firebase loads functions/.env natively, so no dotenv bootstrap is needed.
+function authenticate(authorization: string | undefined): Promise<string> {
+  return verifyBearerToken(authorization, (token) => admin.auth().verifyIdToken(token));
 }
 
 function getDefaultGeminiApiKey(): string | undefined {
@@ -87,21 +88,9 @@ export const saveUserApiKey = onRequest({cors: true}, async (req, res) => {
         return;
       }
 
-      // Validar Auth
-      const authHeader = req.headers.authorization;
-      if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        res.status(401).json({ error: "No autorizado. Token de autenticación ausente." });
-        return;
-      }
-      const token = authHeader.split("Bearer ")[1];
-      const decodedToken = await admin.auth().verifyIdToken(token);
-      const userId = decodedToken.uid;
+      const userId = await authenticate(req.headers.authorization);
 
-      const { apiKey } = req.body;
-      if (!apiKey) {
-        res.status(400).json({ error: "API Key es requerida" });
-        return;
-      }
+      const { apiKey } = parseBody(apiKeyBodySchema, req.body);
 
       // Encriptar y Guardar
       const { encryptedData, iv } = encrypt(apiKey);
@@ -113,9 +102,8 @@ export const saveUserApiKey = onRequest({cors: true}, async (req, res) => {
       });
 
       res.status(200).json({ success: true, message: "API Key guardada y encriptada exitosamente." });
-    } catch (error: any) {
-      console.error("Error en saveUserApiKey:", error);
-      res.status(500).json({ error: error.message });
+    } catch (error) {
+      sendError(res, error, "saveUserApiKey");
     }
   });
 });
@@ -206,21 +194,9 @@ export const parseStatement = onRequest({cors: true}, async (req, res) => {
         return;
       }
 
-      // Validar Auth
-      const authHeader = req.headers.authorization;
-      if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        res.status(401).json({ error: "No autorizado. Token de autenticación ausente." });
-        return;
-      }
-      const token = authHeader.split("Bearer ")[1];
-      const decodedToken = await admin.auth().verifyIdToken(token);
-      const userId = decodedToken.uid;
+      const userId = await authenticate(req.headers.authorization);
 
-      const { text, pdfBase64, useDefaultKey } = req.body;
-      if (!text && !pdfBase64) {
-        res.status(400).json({ error: "El texto del extracto o el PDF en base64 es requerido." });
-        return;
-      }
+      const { text, pdfBase64, useDefaultKey } = parseBody(parseStatementBodySchema, req.body);
 
       let activeApiKey: string | undefined = undefined;
 
@@ -248,9 +224,8 @@ export const parseStatement = onRequest({cors: true}, async (req, res) => {
       const parsedTransactions = await runParseStatementFlow({ text, pdfBase64 }, activeApiKey);
       res.status(200).json(parsedTransactions);
 
-    } catch (error: any) {
-      console.error("Error en parseStatement Flow:", error);
-      res.status(500).json({ error: error.message });
+    } catch (error) {
+      sendError(res, error, "parseStatement");
     }
   });
 });
@@ -325,27 +300,15 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       return;
     }
 
-    // Validar Auth
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      res.status(401).json({ error: "No autorizado. Token de autenticación ausente." });
-      return;
-    }
-    const token = authHeader.split("Bearer ")[1];
-    const decodedToken = await admin.auth().verifyIdToken(token);
-    const userId = decodedToken.uid;
-
-    const { messages, useDefaultKey } = req.body;
-    if (!messages || !Array.isArray(messages)) {
-      res.status(400).json({ error: "El historial de mensajes (messages) es requerido." });
-      return;
-    }
+    const userId = await authenticate(req.headers.authorization);
+    const { messages, useDefaultKey } = parseBody(chatBodySchema, req.body);
 
     // Obtener configuraciones de país y moneda del usuario
     const userDoc = await db.collection("users").doc(userId).get();
     const userData = userDoc.exists ? userDoc.data() : null;
     const userCountry = userData?.country || "CO";
     const userCurrency = userData?.currency || "COP";
+    const userTimeZone = timeZoneForCountry(userCountry);
     // El agente opera sobre el workspace activo del usuario (mismo scope que el frontend).
     const activeWorkspaceId = (userData?.activeWorkspaceId as string) || null;
     if (!activeWorkspaceId) {
@@ -364,7 +327,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
     // Obtener API Key activa
     let activeApiKey: string | undefined = undefined;
     if (useDefaultKey) {
-      activeApiKey = process.env.GOOGLE_GENAI_API_KEY;
+      activeApiKey = getDefaultGeminiApiKey();
       if (!activeApiKey) {
         res.status(500).json({ error: "La API Key por defecto no está configurada." });
         return;
@@ -456,7 +419,8 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
         if (type) {
           queryRef = queryRef.where('type', '==', type);
         }
-        const snapshot = await queryRef.orderBy('date', 'desc').limit(limit || 30).get();
+        const cappedLimit = Math.min(Math.max(Math.floor(limit ?? 30), 1), 100);
+        const snapshot = await queryRef.orderBy('date', 'desc').limit(cappedLimit).get();
         const transactions: any[] = [];
         snapshot.forEach(docSnap => {
           const data = docSnap.data();
@@ -724,33 +688,36 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
         outputSchema: z.any(),
       },
       async ({ months }) => {
-        const monthsBack = Math.min(Math.max(months || 3, 1), 12);
-        const now = new Date();
-        const firstMonth = new Date(now.getFullYear(), now.getMonth() - monthsBack + 1, 1);
-        const periodMonths = Array.from({ length: monthsBack }, (_, index) => ({
-          year: firstMonth.getFullYear(),
-          month: firstMonth.getMonth() + index
-        }));
-
-        const snapshot = await db.collection('transactions')
+        const monthsBack = Math.min(Math.max(Math.floor(months ?? 3), 1), 12);
+        const period = expensePeriod(new Date(), monthsBack, userTimeZone);
+        const expenses = db.collection('transactions')
           .where('workspaceId', '==', activeWorkspaceId)
-          .where('type', '==', 'expense')
-          .orderBy('date', 'desc')
-          .get();
+          .where('type', '==', 'expense');
 
-        // Nombres de categorías del workspace activo (no de toda la colección)
-        const catsSnapshot = await db.collection('categories').where('workspaceId', '==', activeWorkspaceId).get();
+        // Rows dated inside the period, plus older installment purchases whose
+        // later installments may still fall inside it.
+        const [inPeriodSnapshot, installmentSnapshot, catsSnapshot] = await Promise.all([
+          expenses.where('date', '>=', admin.firestore.Timestamp.fromDate(period.start)).orderBy('date', 'desc').get(),
+          expenses.where('installments', '>', 1).get(),
+          // Nombres de categorías del workspace activo (no de toda la colección)
+          db.collection('categories').where('workspaceId', '==', activeWorkspaceId).get()
+        ]);
         const catNames: Record<string, string> = {};
         catsSnapshot.forEach(docSnap => { catNames[docSnap.id] = docSnap.data().name || 'Sin nombre'; });
 
+        const rows = new Map<string, admin.firestore.DocumentData>();
+        [...inPeriodSnapshot.docs, ...installmentSnapshot.docs].forEach(docSnap => rows.set(docSnap.id, docSnap.data()));
+
         const totals: Record<string, { total: number; count: number }> = {};
-        snapshot.forEach(docSnap => {
-          const data = docSnap.data();
+        rows.forEach(data => {
+          const spent = period.months.reduce(
+            (sum, { year, month }) => sum + expenseAmountForMonth(data, year, month, userTimeZone),
+            0
+          );
+          if (spent <= 0) return;
           const key = data.categoryId || 'sin-categoria';
           if (!totals[key]) totals[key] = { total: 0, count: 0 };
-          periodMonths.forEach(({ year, month }) => {
-            totals[key].total += expenseAmountForMonth(data, year, month);
-          });
+          totals[key].total += spent;
           totals[key].count += 1;
         });
 
@@ -781,15 +748,30 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
         const wsRef = db.collection('workspaces').doc(activeWorkspaceId);
         const wsDoc = await wsRef.get();
         if (!wsDoc.exists) throw new Error("El workspace no existe.");
+        if (budgets.length === 0) return { success: true, savedBudgets: 0, message: "No había presupuestos para guardar." };
 
-        const current = wsDoc.data()?.categoryBudgets || {};
-        const updated = { ...current };
-        budgets.forEach(b => {
-          if (b.monthlyLimit > 0) updated[b.categoryId] = Number(b.monthlyLimit);
-          else delete updated[b.categoryId];
+        // Every category must belong to the active workspace.
+        const categoryIds = [...new Set(budgets.map(b => b.categoryId))];
+        const categoryDocs = await db.getAll(...categoryIds.map(id => db.collection('categories').doc(id)));
+        const unknown = categoryDocs
+          .filter(docSnap => !docSnap.exists || docSnap.data()?.workspaceId !== activeWorkspaceId)
+          .map(docSnap => docSnap.id);
+        if (unknown.length > 0) {
+          throw new Error(`Categorías no encontradas en el workspace activo: ${unknown.join(', ')}.`);
+        }
+
+        // Field-level writes leave other categories' budgets (edited concurrently from the app) untouched.
+        // Last entry wins when the model repeats a category (duplicate field paths are rejected).
+        const limits = new Map(budgets.map(b => [b.categoryId, Number(b.monthlyLimit)]));
+        const fieldUpdates: unknown[] = [];
+        limits.forEach((limit, categoryId) => {
+          fieldUpdates.push(
+            new admin.firestore.FieldPath('categoryBudgets', categoryId),
+            Number.isFinite(limit) && limit > 0 ? limit : admin.firestore.FieldValue.delete()
+          );
         });
-
-        await wsRef.update({ categoryBudgets: updated });
+        const [firstField, firstValue, ...rest] = fieldUpdates;
+        await wsRef.update(firstField as admin.firestore.FieldPath, firstValue, ...rest);
         return { success: true, savedBudgets: budgets.length, message: "Presupuestos guardados en el workspace activo." };
       }
     );
@@ -838,9 +820,9 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       4. **Indexación:** Si la búsqueda semántica no trae resultados para transacciones de las cuales el usuario está seguro que existen, llámala función "indexTransactions" para generar los embeddings faltantes en segundo plano.
     `;
 
-    // Mapear historial al formato compatible con Genkit
-    const conversationHistory = messages.slice(0, -1).map((h: any) => ({
-      role: (h.role === 'assistant' ? 'model' : 'user') as 'model' | 'user',
+    // Mapear historial al formato compatible con Genkit (roles ya normalizados por el schema)
+    const conversationHistory = messages.slice(0, -1).map((h) => ({
+      role: h.role,
       content: [{ text: h.content }]
     }));
 
@@ -870,9 +852,8 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
 
     res.status(200).json({ response: response.text });
 
-  } catch (error: any) {
-    console.error("Error en chatWithAgent Flow:", error);
-    res.status(500).json({ error: error.message });
+  } catch (error) {
+    sendError(res, error, "chatWithAgent");
   }
 });
 
@@ -885,25 +866,8 @@ export const inviteToWorkspace = onRequest({cors: true}, async (req, res) => {
         return;
       }
 
-      const authHeader = req.headers.authorization;
-      if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        res.status(401).json({ error: "No autorizado." });
-        return;
-      }
-      const token = authHeader.split("Bearer ")[1];
-      const decodedToken = await admin.auth().verifyIdToken(token);
-      const requesterId = decodedToken.uid;
-
-      const { workspaceId, email } = req.body;
-      if (!workspaceId || !email) {
-        res.status(400).json({ error: "workspaceId y email son requeridos." });
-        return;
-      }
-
-      if (typeof workspaceId !== "string" || typeof email !== "string") {
-        res.status(400).json({ error: "workspaceId y email son requeridos." });
-        return;
-      }
+      const requesterId = await authenticate(req.headers.authorization);
+      const { workspaceId, email } = parseBody(inviteBodySchema, req.body);
 
       // Only the workspace owner may invite.
       const wsRef = db.collection("workspaces").doc(workspaceId);
@@ -921,7 +885,7 @@ export const inviteToWorkspace = onRequest({cors: true}, async (req, res) => {
 
       let inviteeId: string;
       try {
-        inviteeId = (await admin.auth().getUserByEmail(email.trim())).uid;
+        inviteeId = (await admin.auth().getUserByEmail(email)).uid;
       } catch (err: any) {
         if (err.code === "auth/user-not-found" || err.code === "auth/invalid-email") {
           res.status(200).json(genericResponse);
@@ -934,7 +898,7 @@ export const inviteToWorkspace = onRequest({cors: true}, async (req, res) => {
       await db.runTransaction(async (transaction) => {
         const current = await transaction.get(wsRef);
         if (!current.exists || current.data()?.ownerId !== requesterId) {
-          throw new Error("WORKSPACE_OWNERSHIP_CHANGED");
+          throw new HttpError(403, "Solo el propietario del workspace puede invitar usuarios.");
         }
         transaction.update(wsRef, {
           members: admin.firestore.FieldValue.arrayUnion(inviteeId)
@@ -946,13 +910,8 @@ export const inviteToWorkspace = onRequest({cors: true}, async (req, res) => {
 
       res.status(200).json(genericResponse);
 
-    } catch (error: any) {
-      if (error?.message === "WORKSPACE_OWNERSHIP_CHANGED") {
-        res.status(403).json({ error: "Solo el propietario del workspace puede invitar usuarios." });
-        return;
-      }
-      console.error("Error en inviteToWorkspace:", error);
-      res.status(500).json({ error: error.message });
+    } catch (error) {
+      sendError(res, error, "inviteToWorkspace");
     }
   });
 });

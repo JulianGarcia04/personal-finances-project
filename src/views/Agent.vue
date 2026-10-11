@@ -233,6 +233,7 @@
           ref="inputRef"
           v-model="inputMessage"
           :disabled="loading"
+          :maxlength="MAX_USER_MESSAGE_CHARS"
           rows="1"
           aria-label="Mensaje para el asesor"
           :enterkeyhint="isCoarsePointer ? 'enter' : 'send'"
@@ -278,6 +279,22 @@ const accountsStore = useAccountsStore()
 const transactionsStore = useTransactionsStore()
 const goalsStore = useGoalsStore()
 const chatsStore = useChatsStore()
+
+// Request limits mirrored from functions/src/http.ts (server: 50 messages,
+// 4000 chars per user message, 16000 per assistant message).
+const MAX_HISTORY_MESSAGES = 40
+const MAX_USER_MESSAGE_CHARS = 4000
+const MAX_ASSISTANT_MESSAGE_CHARS = 8000
+
+// Sends only the recent history, starting at a user turn, with each message clipped to the server limits.
+const toBackendMessages = (messages: { role: string; content: string }[]) => {
+  const recent = messages.slice(-MAX_HISTORY_MESSAGES)
+  const firstUser = recent.findIndex(m => m.role === 'user')
+  return recent.slice(Math.max(firstUser, 0)).map(m => ({
+    role: m.role,
+    content: m.content.slice(0, m.role === 'user' ? MAX_USER_MESSAGE_CHARS : MAX_ASSISTANT_MESSAGE_CHARS)
+  }))
+}
 
 // State
 const inputMessage = ref('')
@@ -424,10 +441,7 @@ const sendMessage = async () => {
     const url = getFunctionUrl('chatWithAgent')
 
     // Formatear los mensajes para el backend (eliminando el campo createdAt para que coincida con lo esperado por Genkit)
-    const backendMessages = activeChatMessages.value.map(m => ({
-      role: m.role,
-      content: m.content
-    }))
+    const backendMessages = toBackendMessages(activeChatMessages.value)
 
     const response = await fetch(url, {
       method: 'POST',
