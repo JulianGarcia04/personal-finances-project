@@ -75,6 +75,7 @@ Not executed; each step needs explicit user authorization. Project `vault-41b34`
 5. Backfill dry-run: `pnpm --filter functions build && GEMINI_API_KEY=<key> node scripts/backfill-embeddings.mjs --project vault-41b34` (ADC via `gcloud auth application-default login`).
 6. Backfill apply (after reviewing the dry-run counts): `GEMINI_API_KEY=<key> node scripts/backfill-embeddings.mjs --project vault-41b34 --apply` (optionally `--limit 50` first).
 7. Optional TTL policies: `gcloud firestore fields ttls update expiresAt --collection-group=usageQuotas --enable-ttl --project vault-41b34`; `statementImports` markers have no expiry field yet (add one before a TTL policy, or keep them as permanent idempotency records).
+- 2026-10-11 DEPLOYED to vault-41b34 (user authorized) from `fix/backend-audit` f2d419f: firestore rules+indexes+storage rules; functions on Node 22 (syncTransactionEmbedding created, onTransactionCreated deleted, 5 updated); hosting. Backfill `--apply`: scanned 534, embedded 494 (40 mirrors skipped), legacy `embedding` fields stripped 197, failed 0. Post-check dry-run: upToDate 494, needsEmbedding 0, legacyFields 0, orphans 0. Trigger: 197 invocations all HTTP 204, no WARNING/ERROR logs in the last hour.
 
 ## Next step
-T8 App Check (waiting on the reCAPTCHA key) and explicit deploy authorization for the checklist above. PR slicing strategy to confirm before any PR.
+T8 App Check (waiting on the reCAPTCHA key). Optional TTL policy on `usageQuotas.expiresAt`. PR slicing strategy to confirm before any PR (branch not pushed; production now runs this branch).
