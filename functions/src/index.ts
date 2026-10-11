@@ -15,8 +15,6 @@ import { createWorkspaceAccount, mutateWorkspaceTransaction } from "./pockets";
 import {
   apiKeyBodySchema,
   chatBodySchema,
-  expenseAmountForMonth,
-  expensePeriod,
   HttpError,
   inviteBodySchema,
   parseBody,
@@ -37,6 +35,7 @@ import {
   signedAmount,
   toLeanTransaction
 } from "./agentTools";
+import { buildBudgetStatus, resolvePeriod, previousPeriod, summarize, SummaryTransaction } from "./agentQueries";
 import { ApiKeyDecryptError, decryptApiKey, encryptApiKey, getEncryptionSecret, MissingEncryptionSecretError } from "./crypto";
 import { assertStatementSize, consumeDefaultKeyQuota, QuotaKind } from "./quota";
 import {
@@ -699,55 +698,120 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       }
     );
 
-    const getExpensesByCategoryTool = defineAgentTool(
-      'getExpensesByCategory',
-      'Gastos agrupados por categoría (total, cantidad y promedio mensual) de los últimos N meses calendario, contando el mes en curso hasta hoy (months=1 = el mes en curso hasta la fecha). Las cuotas se reparten por mes. La salida incluye period {start, end}. Úsalo SIEMPRE antes de proponer presupuestos mensuales por categoría.',
-      z.object({
-        months: z.number().optional().describe('Cantidad de meses calendario a analizar, incluido el mes en curso (por defecto 3, máximo 12)'),
-      }),
-      async ({ months }) => {
-        const monthsBack = Math.min(Math.max(Math.floor(months ?? 3), 1), 12);
-        const now = new Date();
-        const period = expensePeriod(now, monthsBack, userTimeZone);
-        const expenses = db.collection('transactions')
-          .where('workspaceId', '==', activeWorkspaceId)
-          .where('type', '==', 'expense');
+    // One range query plus older installment purchases whose later shares may fall
+    // inside the range; aggregation itself is pure (agentQueries.ts).
+    const loadSummaryRows = async (start: Date, endExclusive: Date): Promise<SummaryTransaction[]> => {
+      const transactions = db.collection('transactions').where('workspaceId', '==', activeWorkspaceId);
+      const [inRange, installmentPurchases] = await Promise.all([
+        transactions
+          .where('date', '>=', Timestamp.fromDate(start))
+          .where('date', '<', Timestamp.fromDate(endExclusive))
+          .orderBy('date', 'desc')
+          .get(),
+        transactions.where('type', '==', 'expense').where('installments', '>', 1).get()
+      ]);
+      const rows = new Map<string, SummaryTransaction>();
+      [...inRange.docs, ...installmentPurchases.docs].forEach(docSnap => {
+        const data = docSnap.data();
+        rows.set(docSnap.id, {
+          ...data,
+          id: docSnap.id,
+          type: String(data.type ?? ''),
+          amount: Number(data.amount) || 0,
+          date: data.date?.toDate ? data.date.toDate() : new Date(data.date)
+        });
+      });
+      return [...rows.values()];
+    };
+    const workspaceSettings = activeWorkspaceDoc.data() ?? {};
+    const exchangeRates = (workspaceSettings.exchangeRates ?? {}) as Record<string, number>;
 
-        // Rows dated inside the period, plus older installment purchases whose
-        // later installments may still fall inside it.
-        const [inPeriodSnapshot, installmentSnapshot, names] = await Promise.all([
-          expenses.where('date', '>=', Timestamp.fromDate(period.start)).orderBy('date', 'desc').get(),
-          expenses.where('installments', '>', 1).get(),
+    const getFinancialSummaryTool = defineAgentTool(
+      'getFinancialSummary',
+      `Resumen financiero de un periodo con la misma lógica del panel de control: ingresos, gastos, neto y tasa de ahorro en la moneda principal (${workspaceCurrency}), convertidos con las tasas del workspace, cuotas repartidas por mes y sin transferencias ni préstamos. Úsalo SIEMPRE para totales, resúmenes, "¿cuánto gasté…?", gastos por categoría/cuenta/mes/día, comparaciones con el periodo anterior y promedios mensuales (lastCompleteMonths). Define el periodo con preset, con startDate/endDate o con lastCompleteMonths (solo una forma; por defecto el mes en curso). La salida trae period {start, end, label}, totals, groups, topExpenses, comparison y notes.`,
+      z.object({
+        preset: z.enum(['today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month', 'this_year', 'last_year']).optional()
+          .describe('Periodo relativo en la zona horaria del usuario (semanas de lunes a domingo; meses y años calendario completos).'),
+        startDate: dateParam('Fecha inicial del periodo personalizado'),
+        endDate: dateParam('Fecha final del periodo personalizado (por defecto hoy)'),
+        lastCompleteMonths: z.number().int().min(1).max(12).optional()
+          .describe('Últimos N meses calendario COMPLETOS, sin el mes en curso. Devuelve averages y monthlyAverageExpenses por grupo; úsalo para promedios y presupuestos.'),
+        groupBy: z.enum(['category', 'account', 'month', 'day', 'none']).optional().describe('Agrupación de los resultados (por defecto none).'),
+        type: z.enum(['expense', 'income', 'all']).optional().describe('Solo gastos, solo ingresos o ambos (por defecto all).'),
+        accountId: z.string().optional().describe('Filtra por el ID de una cuenta (de listAccounts).'),
+        categoryId: z.string().optional().describe('Filtra por el ID de una categoría (de listCategories).'),
+        compareWithPrevious: z.boolean().optional().describe('Compara con el periodo anterior (mes/año/semana anterior o rango previo de igual duración).'),
+        topN: z.number().int().min(0).max(20).optional().describe('Cantidad de gastos más grandes a devolver (por defecto 5, máximo 20).'),
+      }),
+      async (input) => {
+        const now = new Date();
+        const period = resolvePeriod(input, now, userTimeZone);
+        const start = input.compareWithPrevious ? previousPeriod(period, userTimeZone).startInstant : period.startInstant;
+        const [rows, names] = await Promise.all([loadSummaryRows(start, period.endExclusive), loadNames()]);
+        return summarize(rows, {
+          ...input,
+          period,
+          now,
+          timeZone: userTimeZone,
+          primaryCurrency: workspaceCurrency,
+          exchangeRates,
+          names
+        });
+      }
+    );
+
+    const getWorkspaceSettingsTool = defineAgentTool(
+      'getWorkspaceSettings',
+      'Configuración financiera del workspace: moneda principal, tasas de cambio, límite de gasto mensual, ingreso declarado y reparto 50/30/20, asignaciones a metas y presupuestos por categoría con el gasto real del mes en curso (gastado, restante y % usado). Úsalo para preguntas de presupuestos, límites, tasas o "¿cómo voy este mes?".',
+      z.object({}),
+      async () => {
+        const now = new Date();
+        const period = resolvePeriod({ preset: 'this_month' }, now, userTimeZone);
+        // Fresh read: saveCategoryBudgets may have changed it earlier in this chat.
+        const [workspaceSnap, goalsSnap, rows, names] = await Promise.all([
+          db.collection('workspaces').doc(activeWorkspaceId).get(),
+          db.collection('goals').where('workspaceId', '==', activeWorkspaceId).get(),
+          loadSummaryRows(period.startInstant, period.endExclusive),
           loadNames()
         ]);
-
-        const rows = new Map<string, admin.firestore.DocumentData>();
-        [...inPeriodSnapshot.docs, ...installmentSnapshot.docs].forEach(docSnap => rows.set(docSnap.id, docSnap.data()));
-
-        const totals: Record<string, { total: number; count: number }> = {};
-        rows.forEach(data => {
-          const spent = period.months.reduce(
-            (sum, { year, month }) => sum + expenseAmountForMonth(data, year, month, userTimeZone),
-            0
-          );
-          if (spent <= 0) return;
-          const key = data.categoryId || 'sin-categoria';
-          if (!totals[key]) totals[key] = { total: 0, count: 0 };
-          totals[key].total += spent;
-          totals[key].count += 1;
+        const ws = workspaceSnap.data() ?? {};
+        const rates = (ws.exchangeRates ?? {}) as Record<string, number>;
+        const month = summarize(rows, {
+          period, now, timeZone: userTimeZone, primaryCurrency: workspaceCurrency, exchangeRates: rates, names,
+          groupBy: 'category', topN: 0
         });
-
-        const categories = Object.entries(totals).map(([categoryId, agg]) => ({
-          categoryId,
-          categoryName: names.categories.get(categoryId) || (categoryId === 'sin-categoria' ? 'Sin categoría' : 'Desconocida'),
-          totalSpent: Math.round(agg.total),
-          transactionCount: agg.count,
-          monthlyAverage: Math.round(agg.total / monthsBack)
-        })).sort((a, b) => b.totalSpent - a.totalSpent);
+        const budgets = buildBudgetStatus({
+          categoryBudgets: (ws.categoryBudgets ?? {}) as Record<string, number>,
+          expenseLimit: ws.expenseLimit,
+          summary: month,
+          names
+        });
+        const budgetIncome = Number(ws.budgetIncome) || 0;
+        // Defaults as in src/stores/goalsStore.ts loadBudgetSettings.
+        const split = {
+          needs: ws.budgetNeedsPercent !== undefined ? Number(ws.budgetNeedsPercent) : 50,
+          wants: ws.budgetWantsPercent !== undefined ? Number(ws.budgetWantsPercent) : 30,
+          savings: ws.budgetSavingsPercent !== undefined ? Number(ws.budgetSavingsPercent) : 20
+        };
+        const goalNames = new Map(goalsSnap.docs.map(docSnap => [docSnap.id, String(docSnap.data().name || 'Meta')]));
         return {
-          period: { start: zonedDateKey(period.start, userTimeZone), end: zonedDateKey(now, userTimeZone) },
-          months: monthsBack,
-          categories
+          currency: workspaceCurrency,
+          exchangeRates: rates,
+          budgetIncome,
+          budgetSplit: Object.fromEntries(Object.entries(split).map(([key, percent]) => [
+            key, { percent, amount: Math.round(budgetIncome * percent) / 100 }
+          ])),
+          goalAllocations: Object.entries((ws.budgetAllocations ?? {}) as Record<string, number>).map(([goalId, amount]) => ({
+            goalId, goalName: goalNames.get(goalId) ?? 'Meta desconocida', amount: Number(amount) || 0
+          })),
+          currentMonth: {
+            period: month.period,
+            totals: month.totals,
+            expenseLimit: budgets.expenseLimit,
+            categoryBudgets: budgets.categories,
+            categoryBudgetTotals: budgets.totals
+          },
+          notes: month.notes
         };
       }
     );
@@ -757,7 +821,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       'Guarda el presupuesto mensual recurrente por categoría (límite de gasto mensual) en la moneda principal del workspace. Sin confirmed: true solo valida y devuelve un resumen para pedir confirmación.',
       z.object({
         budgets: z.array(z.object({
-          categoryId: z.string().min(1).describe('El ID de la categoría (obtenido de listCategories o getExpensesByCategory)'),
+          categoryId: z.string().min(1).describe('El ID de la categoría (obtenido de listCategories o getFinancialSummary con groupBy category)'),
           monthlyLimit: z.number().min(0).describe('Límite mensual de gasto para esta categoría (0 para eliminar el presupuesto)'),
         })).describe('Lista de presupuestos por categoría a guardar'),
         confirmed: confirmedParam,
@@ -835,11 +899,18 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       - Registrar préstamos: si el usuario presta dinero a alguien, usa type "loan"; cuando se lo pagan, usa type "loan_payment". Los préstamos no cuentan como gasto ni como ingreso en los KPIs.
       - Listar, crear y actualizar el monto ahorrado de objetivos de ahorro (goals).
       - Buscar transacciones semánticamente (semanticSearchTransactions).
-      - Analizar gastos por categoría de los últimos meses (getExpensesByCategory) y guardar presupuestos mensuales por categoría (saveCategoryBudgets).
+      - Consultar resúmenes y totales por periodo (getFinancialSummary), la configuración y presupuestos del workspace (getWorkspaceSettings) y guardar presupuestos mensuales por categoría (saveCategoryBudgets).
       - No registres gastos en cuentas puente: los gastos compartidos se registran desde la app.
 
+      QUÉ HERRAMIENTA USAR:
+      - Totales, resúmenes, "¿cuánto gasté/gané…?", gastos por categoría/cuenta/mes/día, comparaciones y promedios → getFinancialSummary. NUNCA sumes tú mismo los resultados de listTransactions para dar totales: listTransactions es solo para mostrar movimientos concretos.
+      - Buscar movimientos por concepto o descripción ("Netflix", "ropa", "el arriendo") → semanticSearchTransactions (para el total de un concepto, suma solo las coincidencias relevantes e indica que es aproximado).
+      - Presupuestos, límite de gasto, tasas de cambio, ingreso declarado, "¿cómo voy este mes?" → getWorkspaceSettings.
+      - Saldos y cupos de tarjetas → listAccounts.
+      - Los montos de getFinancialSummary y getWorkspaceSettings ya vienen convertidos a ${workspaceCurrency}; menciona las notes relevantes (por ejemplo tasas de cambio faltantes).
+
       FLUJO PARA PRESUPUESTOS POR CATEGORÍA:
-      - Cuando el usuario pida crear o ajustar presupuestos, PRIMERO llama a getExpensesByCategory (3-6 meses) para identificar sus categorías más recurrentes y cuánto gasta en promedio en cada una.
+      - Cuando el usuario pida crear o ajustar presupuestos, PRIMERO llama a getWorkspaceSettings (presupuestos actuales) y a getFinancialSummary con lastCompleteMonths 3 (o hasta 6), groupBy "category" y type "expense" para conocer el promedio mensual real (monthlyAverageExpenses) de cada categoría, calculado solo con meses completos. El key de cada grupo es el categoryId.
       - Propón límites mensuales realistas basados en los promedios reales (redondeados, con un pequeño margen o recorte según el objetivo del usuario).
       - Presenta la propuesta y pide confirmación. SOLO después de que el usuario confirme explícitamente, llama a saveCategoryBudgets con confirmed: true.
 
@@ -882,7 +953,8 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
         createGoalTool,
         updateGoalAmountTool,
         semanticSearchTransactionsTool,
-        getExpensesByCategoryTool,
+        getFinancialSummaryTool,
+        getWorkspaceSettingsTool,
         saveCategoryBudgetsTool
       ]
     });
