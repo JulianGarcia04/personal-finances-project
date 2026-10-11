@@ -92,16 +92,6 @@
             <span>Pago: <strong class="text-text-secondary">{{ account.paymentDueDay ? `día ${account.paymentDueDay}` : '—' }}</strong></span>
           </div>
 
-          <button
-            v-if="canCreatePocket(account)"
-            type="button"
-            @click="openPocketModal(account)"
-            :aria-label="`Agregar bolsillo a ${account.name}`"
-            class="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-accent-emerald/10 border border-accent-emerald/25 text-accent-emerald hover:bg-accent-emerald/15 text-xs font-semibold transition-colors"
-          >
-            <SavingsIcon class="w-3.5 h-3.5" />
-            <span>Agregar bolsillo</span>
-          </button>
           <div v-if="account.type === 'credit' && (account.statementClosingDay || account.paymentDueDay)" class="flex flex-col gap-0.5 text-[10px] text-text-muted mt-1.5">
             <span v-if="account.statementClosingDay">{{ closingDaysUntil(account) === 0 ? 'Corte hoy' : `Corte en ${closingDaysUntil(account)} días` }}</span>
             <span v-if="account.paymentDueDay">{{ dueDaysUntil(account) === 0 ? 'Vence hoy' : `Vence en ${dueDaysUntil(account)} días` }}</span>
@@ -110,8 +100,8 @@
         </div>
 
         <!-- Card Bottom Details -->
-        <div :class="['pt-3 flex items-end justify-between mt-4', account.mirror ? 'mirror-perforation' : 'border-t border-border/50']">
-          <div>
+        <div :class="['pt-4 flex items-end justify-between gap-3 mt-5', account.mirror ? 'mirror-perforation' : 'border-t border-white/5']">
+          <div class="min-w-0">
             <span class="text-[10px] text-text-muted font-medium block">{{ balanceLabel(account) }}</span>
             <span :class="['font-display font-bold text-xl mt-1 block', balanceToneClass(account)]">
               {{ formatCurrency(account.mirror ? Math.abs(account.balance) : account.balance, account.currency) }}
@@ -142,6 +132,18 @@
             </div>
             <span class="text-[9px] text-text-muted block mt-0.5">{{ creditUtilization(account) }}% usado</span>
           </div>
+
+          <button
+            v-else-if="canCreatePocket(account)"
+            type="button"
+            @click="openPocketModal(account)"
+            :aria-label="`Agregar bolsillo a ${account.name}`"
+            class="shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl bg-accent-emerald/10 border border-accent-emerald/25 text-accent-emerald hover:bg-accent-emerald/15 hover:border-accent-emerald/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-emerald text-xs font-display font-semibold transition-all"
+            title="Separar parte del saldo en un bolsillo"
+          >
+            <SavingsIcon class="w-3.5 h-3.5" />
+            <span>Bolsillo</span>
+          </button>
         </div>
         </div>
 
