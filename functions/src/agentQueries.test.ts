@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildBudgetStatus,
+  computeNetWorth,
   convertToPrimary,
   monthlyAverages,
   resolvePeriod,
@@ -215,4 +216,28 @@ test("buildBudgetStatus compares category budgets and the expense limit with the
   assert.deepEqual(status.totals, { budget: 500_000, spent: 490_000, percentUsed: 80 });
   assert.deepEqual(status.expenseLimit, { limit: 400_000, spent: 490_020, remaining: -90_020, percentUsed: 123, exceeded: true });
   assert.equal(buildBudgetStatus({ categoryBudgets: {}, expenseLimit: 0, summary: month, names: NAMES }).expenseLimit, null);
+});
+
+test("computeNetWorth sums every account per currency and converts each currency total like the dashboard", () => {
+  const worth = computeNetWorth([
+    { id: "bank", name: "Banco", type: "checking", balance: 2_000_000, currency: "COP" },
+    { id: "pocket", name: "Bolsillo", type: "savings", balance: 500_000, currency: "COP", pocketOf: "Banco" },
+    { id: "card", name: "Visa", type: "credit", balance: -300_000, currency: "COP" },
+    { id: "bridge", name: "Puente", type: "checking", balance: -60_000, currency: "COP", bridge: true },
+    { id: "usd", name: "Cuenta USD", type: "savings", balance: 1_000.5, currency: "USD" },
+    { id: "eur", name: "Euros", type: "cash", balance: 10, currency: "EUR" },
+    // Missing currency counts as USD (accountsStore netWorthByCurrency).
+    { id: "legacy", name: "Vieja", type: "cash", balance: 1, currency: null }
+  ], "COP", RATES);
+  assert.equal(worth.totals.netWorth, 2_140_000 + 1_001.5 * 4000 + 10);
+  assert.deepEqual(worth.totals.byCurrency, [
+    { currency: "COP", balance: 2_140_000, rate: 1, inPrimary: 2_140_000 },
+    { currency: "USD", balance: 1_001.5, rate: 4000, inPrimary: 4_006_000 },
+    { currency: "EUR", balance: 10, rate: null, inPrimary: 10 }
+  ]);
+  assert.equal(worth.accounts.find(a => a.id === "usd")?.balanceInPrimary, 4_002_000);
+  assert.equal(worth.accounts.find(a => a.id === "card")?.balanceInPrimary, -300_000);
+  assert.equal(worth.accounts.find(a => a.id === "pocket")?.pocketOf, "Banco");
+  assert.ok(worth.notes.some(note => note.includes("EUR") && note.includes("1:1")));
+  assert.ok(!worth.notes.some(note => note.includes("USD") && note.includes("1:1")));
 });

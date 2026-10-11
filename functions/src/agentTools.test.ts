@@ -13,6 +13,7 @@ import {
   signedAmount,
   toLeanTransaction
 } from "./agentTools";
+import { resolvePrimaryCurrency } from "./agentContext";
 import { HttpError, zonedDateKey } from "./http";
 
 const BOGOTA = "America/Bogota";
@@ -172,4 +173,11 @@ test("relaxJsonSchema keeps types, enums, required and descriptions but drops bo
       items: { type: "array", items: { type: "object", properties: { v: { type: "number" } } } }
     }
   });
+});
+
+test("resolvePrimaryCurrency uses the dashboard source: users.currency with a COP fallback", () => {
+  assert.equal(resolvePrimaryCurrency({ currency: "USD" }), "USD");
+  assert.equal(resolvePrimaryCurrency({ currency: "" }), "COP");
+  assert.equal(resolvePrimaryCurrency(null), "COP");
+  assert.match(buildAgentContextBlock({ now: new Date("2026-10-11T15:00:00-05:00"), timeZone: "America/Bogota", currency: "USD" }), /Moneda principal del usuario \(la del panel de control\): USD/);
 });

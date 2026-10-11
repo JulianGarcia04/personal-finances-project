@@ -4,14 +4,13 @@ import "./options";
 import { onRequest } from "firebase-functions/v2/https";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import * as admin from "firebase-admin";
-import { FieldPath, FieldValue, Timestamp } from "firebase-admin/firestore";
+import { FieldValue } from "firebase-admin/firestore";
 import cors from "cors";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { genkit } from "genkit";
 import { toJsonSchema } from "genkit/schema";
 import { googleAI } from "@genkit-ai/google-genai";
 import { z } from "zod";
-import { createWorkspaceAccount, mutateWorkspaceTransaction } from "./pockets";
 import {
   apiKeyBodySchema,
   chatBodySchema,
@@ -21,34 +20,18 @@ import {
   parseStatementBodySchema,
   sendError,
   timeZoneForCountry,
-  verifyBearerToken,
-  zonedDateKey
+  verifyBearerToken
 } from "./http";
-import {
-  AgentToolError,
-  buildAgentContextBlock,
-  localDayRange,
-  NameMaps,
-  parseLocalDate,
-  relaxJsonSchema,
-  safeTool,
-  signedAmount,
-  toLeanTransaction
-} from "./agentTools";
-import { buildBudgetStatus, resolvePeriod, previousPeriod, summarize, SummaryTransaction } from "./agentQueries";
+import { buildAgentContextBlock, relaxJsonSchema } from "./agentTools";
+import { buildAgentTools, resolvePrimaryCurrency } from "./agentContext";
 import { ApiKeyDecryptError, decryptApiKey, encryptApiKey, getEncryptionSecret, MissingEncryptionSecretError } from "./crypto";
 import { assertStatementSize, consumeDefaultKeyQuota, QuotaKind } from "./quota";
 import {
-  cosineSimilarity,
   createGeminiEmbedder,
   createNameResolver,
-  EMBEDDINGS_COLLECTION,
-  isEmbeddable,
   isEventTooOld,
   PermanentEmbeddingError,
-  queryEmbeddingInput,
-  syncTransactionEmbedding as syncEmbedding,
-  toVectorArray
+  syncTransactionEmbedding as syncEmbedding
 } from "./embeddings";
 export { importPocketStatement } from "./pocketImports";
 
@@ -309,7 +292,6 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
     const userDoc = await db.collection("users").doc(userId).get();
     const userData = userDoc.exists ? userDoc.data() : null;
     const userCountry = userData?.country || "CO";
-    const userCurrency = userData?.currency || "COP";
     const userTimeZone = timeZoneForCountry(userCountry);
     // El agente opera sobre el workspace activo del usuario (mismo scope que el frontend).
     const activeWorkspaceId = (userData?.activeWorkspaceId as string) || null;
@@ -332,542 +314,27 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
     const ai = genkit({
       plugins: [googleAI({ apiKey: activeApiKey })],
     });
-    const workspaceCurrency = String(activeWorkspaceDoc.data()?.currency || userCurrency).toUpperCase();
+    // Same primary currency as the dashboard (users.currency, fallback COP).
+    const primaryCurrency = resolvePrimaryCurrency(userData);
 
-    // Every tool runs through safeTool: bounds are validated inside the handler and any
-    // failure reaches the model as `{ error }` instead of failing the whole chat.
-    const defineAgentTool = <S extends z.ZodTypeAny>(
-      name: string,
-      description: string,
-      inputSchema: S,
-      fn: (input: z.output<S>) => Promise<unknown>
-    ) => ai.defineTool(
+    // Tool bodies live in agentContext.ts (testable without Genkit); each one already
+    // runs through safeTool, so failures reach the model as `{ error }`. The model sees a
+    // bound-free JSON schema because Genkit throws on schema-invalid tool input.
+    const tools = buildAgentTools(db, {
+      workspaceId: activeWorkspaceId,
+      userId,
+      timeZone: userTimeZone,
+      primaryCurrency,
+      embedQuery: (input) => createGeminiEmbedder(activeApiKey)(input)
+    }).map(tool => ai.defineTool(
       {
-        name,
-        description,
-        inputJsonSchema: relaxJsonSchema(toJsonSchema({ schema: inputSchema })) as any,
+        name: tool.name,
+        description: tool.description,
+        inputJsonSchema: relaxJsonSchema(toJsonSchema({ schema: tool.inputSchema })) as any,
         outputSchema: z.any(),
       },
-      safeTool(name, inputSchema, fn)
-    );
-
-    // Account and category names, loaded once per request (invalidated by createAccount).
-    let namesPromise: Promise<NameMaps> | null = null;
-    const loadNames = (): Promise<NameMaps> => {
-      namesPromise ??= (async () => {
-        const [accounts, workspaceCategories, globalCategories] = await Promise.all([
-          db.collection('accounts').where('workspaceId', '==', activeWorkspaceId).get(),
-          db.collection('categories').where('workspaceId', '==', activeWorkspaceId).get(),
-          db.collection('categories').where('workspaceId', '==', null).get()
-        ]);
-        const categories = new Map<string, string>();
-        [...globalCategories.docs, ...workspaceCategories.docs].forEach(docSnap => {
-          categories.set(docSnap.id, docSnap.data().name || 'Sin nombre');
-        });
-        return {
-          accounts: new Map(accounts.docs.map(docSnap => [docSnap.id, String(docSnap.data().name || 'Sin nombre')])),
-          categories
-        };
-      })();
-      return namesPromise;
-    };
-    const lean = async (docs: { id: string; data: admin.firestore.DocumentData }[]) => {
-      const names = await loadNames();
-      return docs.map(({ id, data }) => toLeanTransaction(id, data, names, userTimeZone));
-    };
-    const movementTypes = ['income', 'expense', 'transfer', 'loan', 'loan_payment'] as const;
-    const dateParam = (what: string) => z.string().optional()
-      .describe(`${what} en formato YYYY-MM-DD (día local del usuario, inclusivo). Resuelve "hoy", "ayer", "este mes"... con el CONTEXTO ACTUAL.`);
-    const confirmedParam = z.boolean().optional()
-      .describe('Solo true si el usuario confirmó explícitamente esta acción en su último mensaje. Sin confirmación, la herramienta devuelve un resumen para pedirla.');
-
-    const listAccountsTool = defineAgentTool(
-      'listAccounts',
-      'Obtiene las cuentas financieras del workspace con su saldo, moneda y tipo (incluye cupo disponible de tarjetas, bolsillos y cuentas puente).',
-      z.object({}),
-      async () => {
-        const snapshot = await db.collection('accounts').where('workspaceId', '==', activeWorkspaceId).get();
-        const byId = new Map(snapshot.docs.map(docSnap => [docSnap.id, docSnap.data()]));
-        return snapshot.docs.map(docSnap => {
-          const data = docSnap.data();
-          const balance = Number(data.balance) || 0;
-          const account: Record<string, unknown> = { id: docSnap.id, name: data.name, type: data.type, balance, currency: data.currency };
-          if (data.type === 'credit') {
-            const limit = Number(data.limit) || 0;
-            Object.assign(account, {
-              limit,
-              availableCredit: limit + balance,
-              statementClosingDay: data.statementClosingDay ?? null,
-              paymentDueDay: data.paymentDueDay ?? null
-            });
-          }
-          if (data.parentAccountId) account.pocketOf = byId.get(data.parentAccountId)?.name ?? data.parentAccountId;
-          if (data.mirror) account.bridge = true;
-          return account;
-        });
-      }
-    );
-
-    const createAccountTool = defineAgentTool(
-      'createAccount',
-      'Crea una nueva cuenta bancaria, de ahorros, tarjeta de crédito o efectivo, o un bolsillo dentro de una cuenta bancaria.',
-      z.object({
-        name: z.string().trim().min(1).describe('El nombre de la cuenta (ej. "Banco Principal")'),
-        type: z.enum(['checking', 'savings', 'credit', 'cash']).describe('El tipo de cuenta'),
-        balance: z.number().describe('El saldo inicial de la cuenta (en tarjetas de crédito, negativo si ya hay deuda)'),
-        limit: z.number().min(0).optional().describe('El límite de crédito en caso de tarjetas de crédito (0 por defecto)'),
-        currency: z.string().trim().length(3).describe('Código de moneda de 3 caracteres (ej. "COP", "USD", "EUR")'),
-        statementClosingDay: z.number().int().min(1).max(31).optional().describe('Día mensual de corte de la tarjeta (1-31)'),
-        paymentDueDay: z.number().int().min(1).max(31).optional().describe('Día mensual límite de pago de la tarjeta (1-31)'),
-        parentAccountId: z.string().min(1).optional().describe('ID de una cuenta bancaria para crear un bolsillo de ahorros'),
-      }),
-      async ({ name, type, balance, limit, currency, statementClosingDay, paymentDueDay, parentAccountId }) => {
-        const created = await createWorkspaceAccount(db, {
-          workspaceId: activeWorkspaceId,
-          userId,
-          name,
-          type,
-          balance: Number(balance),
-          limit,
-          currency,
-          statementClosingDay,
-          paymentDueDay,
-          parentAccountId
-        });
-        namesPromise = null;
-        const { id, type: createdType, balance: createdBalance, currency: createdCurrency } = created as Record<string, unknown>;
-        return { success: true, id, name: created.name, type: createdType, balance: createdBalance, currency: createdCurrency };
-      }
-    );
-
-    const listTransactionsTool = defineAgentTool(
-      'listTransactions',
-      'Lista transacciones del workspace (más recientes primero), con filtros opcionales por cuenta, tipo y rango de fechas. Con accountId incluye también las transferencias que llegan a esa cuenta. Los montos conservan su signo (gastos negativos).',
-      z.object({
-        accountId: z.string().min(1).optional().describe('Filtrar por el ID de una cuenta (origen o destino de transferencias)'),
-        type: z.enum(movementTypes).optional().describe('Filtrar por tipo (ingreso, egreso, transferencia, préstamo dado o pago de préstamo recibido)'),
-        startDate: dateParam('Fecha inicial'),
-        endDate: dateParam('Fecha final'),
-        limit: z.number().optional().describe('Límite de resultados a retornar (por defecto 30, máximo 100)'),
-      }),
-      async ({ accountId, type, startDate, endDate, limit }) => {
-        const cappedLimit = Math.min(Math.max(Math.floor(limit ?? 30), 1), 100);
-        const range = localDayRange(startDate, endDate, userTimeZone);
-        const transactions = db.collection('transactions');
-        const bounded = (queryRef: admin.firestore.Query) => {
-          if (range.start) queryRef = queryRef.where('date', '>=', Timestamp.fromDate(range.start));
-          if (range.endExclusive) queryRef = queryRef.where('date', '<', Timestamp.fromDate(range.endExclusive));
-          return queryRef.orderBy('date', 'desc').limit(cappedLimit).get();
-        };
-
-        let outgoing: admin.firestore.Query = transactions.where('workspaceId', '==', activeWorkspaceId);
-        if (accountId) outgoing = outgoing.where('accountId', '==', accountId);
-        if (type) outgoing = outgoing.where('type', '==', type);
-        const queries = [bounded(outgoing)];
-        // Only transfers carry toAccountId, so incoming rows matter unless another type is requested.
-        if (accountId && (!type || type === 'transfer')) {
-          queries.push(bounded(transactions.where('workspaceId', '==', activeWorkspaceId).where('toAccountId', '==', accountId)));
-        }
-
-        const rows = new Map<string, admin.firestore.DocumentData>();
-        (await Promise.all(queries)).forEach(snapshot => snapshot.forEach(docSnap => rows.set(docSnap.id, docSnap.data())));
-        const sorted = [...rows.entries()]
-          .sort(([, a], [, b]) => (b.date?.toMillis?.() ?? 0) - (a.date?.toMillis?.() ?? 0))
-          .slice(0, cappedLimit);
-        return {
-          period: { start: startDate ?? null, end: endDate ?? null },
-          count: sorted.length,
-          mayHaveMore: sorted.length === cappedLimit,
-          transactions: await lean(sorted.map(([id, data]) => ({ id, data })))
-        };
-      }
-    );
-
-    const createTransactionTool = defineAgentTool(
-      'createTransaction',
-      'Registra un movimiento de dinero (ingreso, gasto, transferencia interna entre cuentas, préstamo dado a alguien o pago de préstamo recibido). Actualiza automáticamente el saldo de las cuentas.',
-      z.object({
-        accountId: z.string().min(1).describe('El ID de la cuenta de origen'),
-        amount: z.number().describe('El monto en valor absoluto (siempre positivo). El servidor aplica el signo según el tipo.'),
-        description: z.string().trim().min(1).describe('La descripción detallada de la transacción'),
-        categoryId: z.string().optional().describe('El ID de la categoría (vacío para transferencias y préstamos)'),
-        type: z.enum(movementTypes).describe('El tipo de movimiento'),
-        toAccountId: z.string().optional().describe('El ID de la cuenta destino (requerido únicamente para transferencias)'),
-        date: dateParam('Fecha del movimiento (por defecto hoy)'),
-        installments: z.number().int().min(1).max(60).optional().describe('Número de cuotas (1-60) para una compra en tarjeta de crédito'),
-      }),
-      async ({ accountId, amount, description, categoryId, type, toAccountId, date, installments }) => {
-        if (toAccountId && type !== 'transfer') {
-          throw new AgentToolError("La cuenta destino solo se permite para transferencias.");
-        }
-        const signed = signedAmount(amount, type);
-        const movementDate = date ? parseLocalDate(date, userTimeZone) : new Date();
-        const accountSnap = await db.collection('accounts').doc(accountId).get();
-        const account = accountSnap.data();
-        if (!accountSnap.exists || account?.workspaceId !== activeWorkspaceId) {
-          throw new AgentToolError("La cuenta origen no existe en el workspace activo. Usa listAccounts para obtener el ID correcto.");
-        }
-        if (type === 'expense' && account?.mirror) {
-          throw new AgentToolError("Esa es una cuenta puente (gasto compartido). Registra los gastos compartidos desde la app para que se reflejen también en el otro workspace.");
-        }
-        const { id } = await mutateWorkspaceTransaction(db, {
-          kind: 'created',
-          userId,
-          workspaceId: activeWorkspaceId,
-          movement: {
-            accountId,
-            amount: signed,
-            description,
-            categoryId,
-            type,
-            toAccountId: toAccountId || null,
-            date: movementDate,
-            installments
-          }
-        });
-        return {
-          success: true,
-          id,
-          amount: signed,
-          date: zonedDateKey(movementDate, userTimeZone),
-          message: "Transacción agregada y saldos actualizados."
-        };
-      }
-    );
-
-    const deleteTransactionTool = defineAgentTool(
-      'deleteTransaction',
-      'Elimina una transacción existente y revierte automáticamente su impacto en los saldos. Sin confirmed: true solo devuelve un resumen para pedir confirmación.',
-      z.object({
-        transactionId: z.string().min(1).describe('El ID de la transacción a eliminar'),
-        confirmed: confirmedParam,
-      }),
-      async ({ transactionId, confirmed }) => {
-        if (confirmed !== true) {
-          const docSnap = await db.collection('transactions').doc(transactionId).get();
-          const data = docSnap.data();
-          if (!docSnap.exists || !data || data.workspaceId !== activeWorkspaceId) {
-            throw new AgentToolError("La transacción no existe en el workspace activo.");
-          }
-          const [summary] = await lean([{ id: docSnap.id, data }]);
-          return { needsConfirmation: true, summary, message: "Muestra este resumen y pide confirmación explícita antes de eliminar." };
-        }
-        await mutateWorkspaceTransaction(db, {
-          kind: 'deleted',
-          transactionId,
-          userId,
-          workspaceId: activeWorkspaceId
-        });
-        return { success: true, message: "Transacción eliminada y saldos restaurados." };
-      }
-    );
-
-    const listCategoriesTool = defineAgentTool(
-      'listCategories',
-      'Obtiene las categorías de gastos e ingresos configuradas en el workspace.',
-      z.object({}),
-      async () => {
-        // Mismo scope que el frontend: categorías del workspace activo (las globales
-        // con workspaceId null no se usan; consultarlas aquí es lo que duplicaba).
-        const snapshot = await db.collection('categories').where('workspaceId', '==', activeWorkspaceId).get();
-        return snapshot.docs.map(docSnap => ({ id: docSnap.id, name: docSnap.data().name, type: docSnap.data().type }));
-      }
-    );
-
-    const listGoalsTool = defineAgentTool(
-      'listGoals',
-      'Obtiene la lista de todos los objetivos o metas de ahorro del workspace.',
-      z.object({}),
-      async () => {
-        const snapshot = await db.collection('goals').where('workspaceId', '==', activeWorkspaceId).get();
-        return snapshot.docs.map(docSnap => {
-          const data = docSnap.data();
-          const targetDate = data.targetDate?.toDate ? data.targetDate.toDate() : null;
-          return {
-            id: docSnap.id,
-            name: data.name,
-            targetAmount: data.targetAmount,
-            currentAmount: data.currentAmount,
-            currency: data.currency,
-            targetDate: targetDate ? zonedDateKey(targetDate, userTimeZone) : null
-          };
-        });
-      }
-    );
-
-    const createGoalTool = defineAgentTool(
-      'createGoal',
-      'Crea un nuevo objetivo o meta de ahorro (por ejemplo: "Comprar carro" o "Vacaciones").',
-      z.object({
-        name: z.string().trim().min(1).describe('El nombre descriptivo de la meta'),
-        targetAmount: z.number().positive().describe('Monto objetivo de ahorro (positivo)'),
-        currentAmount: z.number().min(0).optional().describe('Monto inicial ya ahorrado (por defecto 0)'),
-        currency: z.string().trim().length(3).describe('Código de moneda de 3 caracteres (ej. "COP", "USD")'),
-        targetDate: z.string().describe('Fecha estimada de cumplimiento en formato YYYY-MM-DD (día local del usuario)'),
-      }),
-      async ({ name, targetAmount, currentAmount, currency, targetDate }) => {
-        const parsedDate = parseLocalDate(targetDate, userTimeZone);
-        const newGoalRef = db.collection('goals').doc();
-        const newGoal = {
-          workspaceId: activeWorkspaceId,
-          userId,
-          name,
-          targetAmount: Number(targetAmount),
-          currentAmount: Number(currentAmount || 0),
-          currency: currency.toUpperCase(),
-          targetDate: Timestamp.fromDate(parsedDate),
-          createdAt: FieldValue.serverTimestamp()
-        };
-        await newGoalRef.set(newGoal);
-        return {
-          success: true,
-          id: newGoalRef.id,
-          name,
-          targetAmount: newGoal.targetAmount,
-          currentAmount: newGoal.currentAmount,
-          currency: newGoal.currency,
-          targetDate: zonedDateKey(parsedDate, userTimeZone)
-        };
-      }
-    );
-
-    const updateGoalAmountTool = defineAgentTool(
-      'updateGoalAmount',
-      'Actualiza el monto ahorrado acumulado de una meta (envía el nuevo total, no el aporte).',
-      z.object({
-        goalId: z.string().min(1).describe('El ID del objetivo/meta de ahorro'),
-        currentAmount: z.number().min(0).describe('El nuevo saldo acumulado de la meta'),
-      }),
-      async ({ goalId, currentAmount }) => {
-        const goalRef = db.collection('goals').doc(goalId);
-        const goalDoc = await goalRef.get();
-        if (!goalDoc.exists || goalDoc.data()?.workspaceId !== activeWorkspaceId) {
-          throw new AgentToolError("La meta de ahorro no existe en el workspace activo.");
-        }
-        await goalRef.update({
-          currentAmount: Number(currentAmount)
-        });
-        return { success: true, message: `Meta de ahorro actualizada a ${currentAmount}.` };
-      }
-    );
-
-    const semanticSearchTransactionsTool = defineAgentTool(
-      'semanticSearchTransactions',
-      'Busca transacciones por significado (embeddings). Útil para preguntas libres como "¿Cuándo fue la última vez que compré ropa?" o "¿Cuánto gasté en el regalo?". No sirve para totales de un periodo.',
-      z.object({
-        query: z.string().trim().min(1).describe('El término o concepto semántico a buscar'),
-        limit: z.number().optional().describe('Cantidad máxima de resultados (por defecto 5, máximo 20)'),
-      }),
-      async ({ query: queryText, limit }) => {
-        let ranked: { id: string; similarity: number }[];
-        try {
-          const queryVector = await createGeminiEmbedder(activeApiKey)(queryEmbeddingInput(queryText));
-          // 3072 dims exceed Firestore's 2048-dim vector limit (values and indexes), so rank in memory over
-          // this workspace's server-only embeddings (only the vector field is read).
-          const snapshot = await db.collection(EMBEDDINGS_COLLECTION)
-            .where('workspaceId', '==', activeWorkspaceId)
-            .select('embedding')
-            .get();
-          ranked = [];
-          snapshot.forEach(docSnap => {
-            const vector = toVectorArray(docSnap.get('embedding'));
-            if (vector && vector.length === queryVector.length) {
-              ranked.push({ id: docSnap.id, similarity: cosineSimilarity(queryVector, vector) });
-            }
-          });
-        } catch (err) {
-          console.error("Error en búsqueda semántica:", err);
-          throw new AgentToolError("No se pudo completar la búsqueda semántica. Intenta con listTransactions y un rango de fechas.");
-        }
-        ranked.sort((a, b) => b.similarity - a.similarity);
-
-        const max = Math.min(Math.max(Math.trunc(limit || 5), 1), 20);
-        const top = ranked.slice(0, max * 2); // headroom for deleted/mirror rows
-        if (top.length === 0) return { matches: [] };
-        const snapshots = await db.getAll(...top.map(match => db.collection('transactions').doc(match.id)));
-        const kept: { id: string; data: admin.firestore.DocumentData; similarity: number }[] = [];
-        snapshots.forEach((docSnap, index) => {
-          const data = docSnap.data();
-          if (!data || data.workspaceId !== activeWorkspaceId || !isEmbeddable(data) || kept.length >= max) return;
-          kept.push({ id: docSnap.id, data, similarity: top[index].similarity });
-        });
-        const rows = await lean(kept);
-        return {
-          matches: rows.map((row, index) => ({ ...row, similarity: Math.round(kept[index].similarity * 1000) / 1000 }))
-        };
-      }
-    );
-
-    // One range query plus older installment purchases whose later shares may fall
-    // inside the range; aggregation itself is pure (agentQueries.ts).
-    const loadSummaryRows = async (start: Date, endExclusive: Date): Promise<SummaryTransaction[]> => {
-      const transactions = db.collection('transactions').where('workspaceId', '==', activeWorkspaceId);
-      const [inRange, installmentPurchases] = await Promise.all([
-        transactions
-          .where('date', '>=', Timestamp.fromDate(start))
-          .where('date', '<', Timestamp.fromDate(endExclusive))
-          .orderBy('date', 'desc')
-          .get(),
-        transactions.where('type', '==', 'expense').where('installments', '>', 1).get()
-      ]);
-      const rows = new Map<string, SummaryTransaction>();
-      [...inRange.docs, ...installmentPurchases.docs].forEach(docSnap => {
-        const data = docSnap.data();
-        rows.set(docSnap.id, {
-          ...data,
-          id: docSnap.id,
-          type: String(data.type ?? ''),
-          amount: Number(data.amount) || 0,
-          date: data.date?.toDate ? data.date.toDate() : new Date(data.date)
-        });
-      });
-      return [...rows.values()];
-    };
-    const workspaceSettings = activeWorkspaceDoc.data() ?? {};
-    const exchangeRates = (workspaceSettings.exchangeRates ?? {}) as Record<string, number>;
-
-    const getFinancialSummaryTool = defineAgentTool(
-      'getFinancialSummary',
-      `Resumen financiero de un periodo con la misma lógica del panel de control: ingresos, gastos, neto y tasa de ahorro en la moneda principal (${workspaceCurrency}), convertidos con las tasas del workspace, cuotas repartidas por mes y sin transferencias ni préstamos. Úsalo SIEMPRE para totales, resúmenes, "¿cuánto gasté…?", gastos por categoría/cuenta/mes/día, comparaciones con el periodo anterior y promedios mensuales (lastCompleteMonths). Define el periodo con preset, con startDate/endDate o con lastCompleteMonths (solo una forma; por defecto el mes en curso). La salida trae period {start, end, label}, totals, groups, topExpenses, comparison y notes.`,
-      z.object({
-        preset: z.enum(['today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month', 'this_year', 'last_year']).optional()
-          .describe('Periodo relativo en la zona horaria del usuario (semanas de lunes a domingo; meses y años calendario completos).'),
-        startDate: dateParam('Fecha inicial del periodo personalizado'),
-        endDate: dateParam('Fecha final del periodo personalizado (por defecto hoy)'),
-        lastCompleteMonths: z.number().int().min(1).max(12).optional()
-          .describe('Últimos N meses calendario COMPLETOS, sin el mes en curso. Devuelve averages y monthlyAverageExpenses por grupo; úsalo para promedios y presupuestos.'),
-        groupBy: z.enum(['category', 'account', 'month', 'day', 'none']).optional().describe('Agrupación de los resultados (por defecto none).'),
-        type: z.enum(['expense', 'income', 'all']).optional().describe('Solo gastos, solo ingresos o ambos (por defecto all).'),
-        accountId: z.string().optional().describe('Filtra por el ID de una cuenta (de listAccounts).'),
-        categoryId: z.string().optional().describe('Filtra por el ID de una categoría (de listCategories).'),
-        compareWithPrevious: z.boolean().optional().describe('Compara con el periodo anterior (mes/año/semana anterior o rango previo de igual duración).'),
-        topN: z.number().int().min(0).max(20).optional().describe('Cantidad de gastos más grandes a devolver (por defecto 5, máximo 20).'),
-      }),
-      async (input) => {
-        const now = new Date();
-        const period = resolvePeriod(input, now, userTimeZone);
-        const start = input.compareWithPrevious ? previousPeriod(period, userTimeZone).startInstant : period.startInstant;
-        const [rows, names] = await Promise.all([loadSummaryRows(start, period.endExclusive), loadNames()]);
-        return summarize(rows, {
-          ...input,
-          period,
-          now,
-          timeZone: userTimeZone,
-          primaryCurrency: workspaceCurrency,
-          exchangeRates,
-          names
-        });
-      }
-    );
-
-    const getWorkspaceSettingsTool = defineAgentTool(
-      'getWorkspaceSettings',
-      'Configuración financiera del workspace: moneda principal, tasas de cambio, límite de gasto mensual, ingreso declarado y reparto 50/30/20, asignaciones a metas y presupuestos por categoría con el gasto real del mes en curso (gastado, restante y % usado). Úsalo para preguntas de presupuestos, límites, tasas o "¿cómo voy este mes?".',
-      z.object({}),
-      async () => {
-        const now = new Date();
-        const period = resolvePeriod({ preset: 'this_month' }, now, userTimeZone);
-        // Fresh read: saveCategoryBudgets may have changed it earlier in this chat.
-        const [workspaceSnap, goalsSnap, rows, names] = await Promise.all([
-          db.collection('workspaces').doc(activeWorkspaceId).get(),
-          db.collection('goals').where('workspaceId', '==', activeWorkspaceId).get(),
-          loadSummaryRows(period.startInstant, period.endExclusive),
-          loadNames()
-        ]);
-        const ws = workspaceSnap.data() ?? {};
-        const rates = (ws.exchangeRates ?? {}) as Record<string, number>;
-        const month = summarize(rows, {
-          period, now, timeZone: userTimeZone, primaryCurrency: workspaceCurrency, exchangeRates: rates, names,
-          groupBy: 'category', topN: 0
-        });
-        const budgets = buildBudgetStatus({
-          categoryBudgets: (ws.categoryBudgets ?? {}) as Record<string, number>,
-          expenseLimit: ws.expenseLimit,
-          summary: month,
-          names
-        });
-        const budgetIncome = Number(ws.budgetIncome) || 0;
-        // Defaults as in src/stores/goalsStore.ts loadBudgetSettings.
-        const split = {
-          needs: ws.budgetNeedsPercent !== undefined ? Number(ws.budgetNeedsPercent) : 50,
-          wants: ws.budgetWantsPercent !== undefined ? Number(ws.budgetWantsPercent) : 30,
-          savings: ws.budgetSavingsPercent !== undefined ? Number(ws.budgetSavingsPercent) : 20
-        };
-        const goalNames = new Map(goalsSnap.docs.map(docSnap => [docSnap.id, String(docSnap.data().name || 'Meta')]));
-        return {
-          currency: workspaceCurrency,
-          exchangeRates: rates,
-          budgetIncome,
-          budgetSplit: Object.fromEntries(Object.entries(split).map(([key, percent]) => [
-            key, { percent, amount: Math.round(budgetIncome * percent) / 100 }
-          ])),
-          goalAllocations: Object.entries((ws.budgetAllocations ?? {}) as Record<string, number>).map(([goalId, amount]) => ({
-            goalId, goalName: goalNames.get(goalId) ?? 'Meta desconocida', amount: Number(amount) || 0
-          })),
-          currentMonth: {
-            period: month.period,
-            totals: month.totals,
-            expenseLimit: budgets.expenseLimit,
-            categoryBudgets: budgets.categories,
-            categoryBudgetTotals: budgets.totals
-          },
-          notes: month.notes
-        };
-      }
-    );
-
-    const saveCategoryBudgetsTool = defineAgentTool(
-      'saveCategoryBudgets',
-      'Guarda el presupuesto mensual recurrente por categoría (límite de gasto mensual) en la moneda principal del workspace. Sin confirmed: true solo valida y devuelve un resumen para pedir confirmación.',
-      z.object({
-        budgets: z.array(z.object({
-          categoryId: z.string().min(1).describe('El ID de la categoría (obtenido de listCategories o getFinancialSummary con groupBy category)'),
-          monthlyLimit: z.number().min(0).describe('Límite mensual de gasto para esta categoría (0 para eliminar el presupuesto)'),
-        })).describe('Lista de presupuestos por categoría a guardar'),
-        confirmed: confirmedParam,
-      }),
-      async ({ budgets, confirmed }) => {
-        const wsRef = db.collection('workspaces').doc(activeWorkspaceId);
-        if (budgets.length === 0) return { success: true, savedBudgets: 0, message: "No había presupuestos para guardar." };
-
-        // Every category must belong to the active workspace.
-        const categoryIds = [...new Set(budgets.map(b => b.categoryId))];
-        const categoryDocs = await db.getAll(...categoryIds.map(id => db.collection('categories').doc(id)));
-        const unknown = categoryDocs
-          .filter(docSnap => !docSnap.exists || docSnap.data()?.workspaceId !== activeWorkspaceId)
-          .map(docSnap => docSnap.id);
-        if (unknown.length > 0) {
-          throw new AgentToolError(`Categorías no encontradas en el workspace activo: ${unknown.join(', ')}.`);
-        }
-
-        // Last entry wins when the model repeats a category (duplicate field paths are rejected).
-        const limits = new Map(budgets.map(b => [b.categoryId, Number(b.monthlyLimit)]));
-        if (confirmed !== true) {
-          const categoryNames = new Map(categoryDocs.map(docSnap => [docSnap.id, docSnap.data()?.name || 'Sin nombre']));
-          return {
-            needsConfirmation: true,
-            summary: [...limits].map(([categoryId, monthlyLimit]) => ({
-              categoryName: categoryNames.get(categoryId),
-              monthlyLimit,
-              currency: workspaceCurrency
-            })),
-            message: "Muestra esta propuesta y pide confirmación explícita antes de guardar."
-          };
-        }
-
-        // Field-level writes leave other categories' budgets (edited concurrently from the app) untouched.
-        const fieldUpdates: unknown[] = [];
-        limits.forEach((limit, categoryId) => {
-          fieldUpdates.push(
-            new FieldPath('categoryBudgets', categoryId),
-            Number.isFinite(limit) && limit > 0 ? limit : FieldValue.delete()
-          );
-        });
-        const [firstField, firstValue, ...rest] = fieldUpdates;
-        await wsRef.update(firstField as FieldPath, firstValue, ...rest);
-        return { success: true, savedBudgets: limits.size, message: "Presupuestos guardados en el workspace activo." };
-      }
-    );
+      tool.run
+    ));
 
     // Mapear código de país a información fiscal detallada
     const taxContexts: Record<string, string> = {
@@ -885,11 +352,11 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
     const systemInstruction = `
       Eres un asesor y contador financiero personal inteligente e integrado en la aplicación Vault.
       Tu objetivo es ayudar al usuario a administrar sus finanzas de manera óptima, proponer planes de ahorro, guiar en la elaboración de presupuestos y resolver dudas sobre sus transacciones y cuentas.
-      ${buildAgentContextBlock({ now: new Date(), timeZone: userTimeZone, currency: workspaceCurrency })}
+      ${buildAgentContextBlock({ now: new Date(), timeZone: userTimeZone, currency: primaryCurrency })}
       CONTEXTO GEOGRÁFICO Y FISCAL DEL USUARIO:
       - ${selectedTaxContext}
       - Debes adaptar tu terminología, consejos de ahorro fiscal y reglas impositivas a este país. Cuando el usuario pregunte por impuestos, deducciones o regulaciones, debes referirte específicamente a las entidades y reglas mencionadas anteriormente.
-      - Las cifras sin moneda explícita se entienden en la moneda principal del workspace: ${workspaceCurrency}.
+      - Las cifras sin moneda explícita se entienden en la moneda principal del usuario: ${primaryCurrency}.
 
       Tienes acceso a la base de datos a través de tus herramientas (tools).
       Todas las operaciones corresponden al workspace activo del usuario.
@@ -906,8 +373,8 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       - Totales, resúmenes, "¿cuánto gasté/gané…?", gastos por categoría/cuenta/mes/día, comparaciones y promedios → getFinancialSummary. NUNCA sumes tú mismo los resultados de listTransactions para dar totales: listTransactions es solo para mostrar movimientos concretos.
       - Buscar movimientos por concepto o descripción ("Netflix", "ropa", "el arriendo") → semanticSearchTransactions (para el total de un concepto, suma solo las coincidencias relevantes e indica que es aproximado).
       - Presupuestos, límite de gasto, tasas de cambio, ingreso declarado, "¿cómo voy este mes?" → getWorkspaceSettings.
-      - Saldos y cupos de tarjetas → listAccounts.
-      - Los montos de getFinancialSummary y getWorkspaceSettings ya vienen convertidos a ${workspaceCurrency}; menciona las notes relevantes (por ejemplo tasas de cambio faltantes).
+      - Saldos, cupos de tarjetas y patrimonio neto → listAccounts: usa totals.netWorth (ya convertido a ${primaryCurrency}, igual que el panel de control) y balanceInPrimary por cuenta; nunca conviertas monedas a mano.
+      - Los montos de getFinancialSummary, getWorkspaceSettings y los totales de listAccounts ya vienen convertidos a ${primaryCurrency}; menciona las notes relevantes (por ejemplo tasas de cambio faltantes).
 
       FLUJO PARA PRESUPUESTOS POR CATEGORÍA:
       - Cuando el usuario pida crear o ajustar presupuestos, PRIMERO llama a getWorkspaceSettings (presupuestos actuales) y a getFinancialSummary con lastCompleteMonths 3 (o hasta 6), groupBy "category" y type "expense" para conocer el promedio mensual real (monthlyAverageExpenses) de cada categoría, calculado solo con meses completos. El key de cada grupo es el categoryId.
@@ -942,23 +409,18 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       messages: conversationHistory,
       maxTurns: 8,
       config: { temperature: 0.3 },
-      tools: [
-        listAccountsTool,
-        createAccountTool,
-        listTransactionsTool,
-        createTransactionTool,
-        deleteTransactionTool,
-        listCategoriesTool,
-        listGoalsTool,
-        createGoalTool,
-        updateGoalAmountTool,
-        semanticSearchTransactionsTool,
-        getFinancialSummaryTool,
-        getWorkspaceSettingsTool,
-        saveCategoryBudgetsTool
-      ]
+      tools
     });
 
+    // Opt-in tool trace for scripts/agent-eval.mjs: only inside the Functions emulator,
+    // never in production.
+    if (process.env.FUNCTIONS_EMULATOR === "true" && req.body?.debugTrace === true) {
+      const toolCalls = response.messages.flatMap(message => message.content
+        .filter(part => part.toolRequest)
+        .map(part => ({ name: part.toolRequest!.name, input: part.toolRequest!.input ?? null })));
+      res.status(200).json({ response: response.text, debugTrace: { toolCalls } });
+      return;
+    }
     res.status(200).json({ response: response.text });
 
   } catch (error) {

@@ -100,7 +100,7 @@ export function buildAgentContextBlock({ now, timeZone, currency }: { now: Date;
       CONTEXTO ACTUAL (úsalo para toda referencia temporal):
       - Hoy es ${d.weekday} ${d.today}. Zona horaria del usuario: ${timeZone}. Mes en curso: ${d.monthName}.
       - Rangos ya resueltos (YYYY-MM-DD, inclusivos): hoy ${d.today}; ayer ${d.yesterday}; esta semana (lunes a domingo) ${d.thisWeek.start} a ${d.thisWeek.end}; este mes ${d.thisMonth.start} a ${d.thisMonth.end}; mes pasado ${d.lastMonth.start} a ${d.lastMonth.end}; este año ${d.thisYear.start} a ${d.thisYear.end}.
-      - Moneda principal del workspace: ${currency}. Cada cuenta y transacción tiene su propia moneda; no sumes montos de monedas distintas como si fueran la misma.
+      - Moneda principal del usuario (la del panel de control): ${currency}. Cada cuenta y transacción tiene su propia moneda; no sumes montos de monedas distintas como si fueran la misma.
 
       CONVENCIONES DE LOS DATOS:
       - En las transacciones guardadas, los gastos (expense) y préstamos dados (loan) tienen monto negativo; ingresos (income), pagos de préstamo recibidos (loan_payment) y transferencias (transfer) tienen monto positivo. Las transferencias y los préstamos no son gasto ni ingreso.

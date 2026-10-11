@@ -508,3 +508,64 @@ export function buildBudgetStatus({ categoryBudgets, expenseLimit, summary, name
       : null
   };
 }
+
+// --- Net worth -----------------------------------------------------------------
+
+export interface NetWorthAccount {
+  id: string;
+  name?: string | null;
+  type?: string | null;
+  balance: number;
+  currency?: string | null;
+  [key: string]: unknown;
+}
+
+export interface NetWorth {
+  accounts: (NetWorthAccount & { balanceInPrimary: number })[];
+  totals: {
+    currency: string;
+    netWorth: number;
+    byCurrency: { currency: string; balance: number; rate: number | null; inPrimary: number }[];
+  };
+  notes: string[];
+}
+
+/**
+ * Net worth exactly like the dashboard KPI: every account balance (pockets,
+ * credit cards with negative debt, bridge accounts with negative "owed") is
+ * summed per currency (missing currency → 'USD', accountsStore.ts
+ * netWorthByCurrency L35-43) and each currency total is converted with
+ * convertToPrimary (Dashboard.vue netWorthValue L448-451).
+ */
+export function computeNetWorth(
+  accounts: NetWorthAccount[],
+  primaryCurrency: string,
+  rates: Record<string, number>
+): NetWorth {
+  const byCurrency = new Map<string, number>();
+  const missing = new Set<string>();
+  const rows = accounts.map(account => {
+    const balance = Number(account.balance) || 0;
+    const currency = account.currency || "USD";
+    byCurrency.set(currency, (byCurrency.get(currency) ?? 0) + balance);
+    const { value } = convertToPrimary(balance, currency, primaryCurrency, rates);
+    return { ...account, balance, balanceInPrimary: round2(value) };
+  });
+  let netWorth = 0;
+  const currencies = [...byCurrency.entries()].map(([currency, balance]) => {
+    const { value, missingRate } = convertToPrimary(balance, currency, primaryCurrency, rates);
+    if (missingRate) missing.add(currency);
+    netWorth += value;
+    return {
+      currency,
+      balance: round2(balance),
+      rate: currency === primaryCurrency ? 1 : missingRate ? null : Number(rates[currency]),
+      inPrimary: round2(value)
+    };
+  });
+  const notes = ["Patrimonio neto = suma de los saldos de todas las cuentas (bolsillos incluidos; deudas de tarjetas y cuentas puente restan), igual que el panel de control."];
+  missing.forEach(code => {
+    notes.push(`Tasa de cambio faltante para ${code}: se usó 1:1. Configúrala en Objetivos & Presupuesto para totales exactos.`);
+  });
+  return { accounts: rows, totals: { currency: primaryCurrency, netWorth: round2(netWorth), byCurrency: currencies }, notes };
+}

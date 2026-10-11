@@ -62,9 +62,9 @@ Permite subir archivos de texto (`.txt`, `.csv`) o pegar fragmentos de texto de 
 Permite establecer metas financieras personalizadas (ej. ahorrar para un carro o un viaje) y asignar fondos de manera atómica descontándolos de cuentas bancarias reales. Incluye un planificador de presupuestos interactivo basado en la regla 50/30/20, soportado por gráficos de distribución en tiempo real con Chart.js.
 
 ### 6. Asesor Financiero IA (Modo Agente Chatbot)
-Un chatbot integrado e interactivo (pestaña "Asesor IA") impulsado por Genkit y Gemini 1.5 Flash.
+Un chatbot integrado e interactivo (pestaña "Asesor IA") impulsado por Genkit y Gemini 2.5 Flash (`gemini-2.5-flash`).
 * **Acceso a la Base de Datos:** A través de Genkit Tools seguras, el Agente puede consultar, crear y modificar cuentas, transacciones y objetivos de ahorro en tiempo real a nombre del usuario.
-* **Búsqueda Semántica Vectorial:** Integra el modelo `text-embedding-004` para indexar y buscar transacciones mediante lenguaje natural (ej. "¿cuánto gasté en ropa el mes pasado?"), calculando similitud coseno en memoria de la Cloud Function.
+* **Búsqueda Semántica Vectorial:** Integra el modelo `gemini-embedding-2` (vectores en la colección server-only `transactionEmbeddings`, sincronizados por un trigger) para buscar transacciones mediante lenguaje natural (ej. "¿cuánto gasté en ropa el mes pasado?"), calculando similitud coseno en memoria de la Cloud Function.
 * **Contextualización Tributaria y Regional:** Lee el país y moneda configurados por el usuario para adaptar su vocabulario y aplicar reglas impositivas locales de manera dinámica (ej. impuesto de 4x1000/DIAN en Colombia, SAT/ISR en México, IRPF/Modelo 100 en España, IRS/401(k) en EE.UU., etc.). Permite la configuración regional en la pantalla de Ajustes.
 
 ---
