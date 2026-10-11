@@ -98,7 +98,10 @@ watch(
       previouslyFocused = document.activeElement as HTMLElement | null
       document.addEventListener('keydown', onKeydown)
       await nextTick()
-      panelRef.value?.focus({ preventScroll: true })
+      // Respect a caller that already moved focus into the sheet (e.g. autofocusing the first field).
+      if (!panelRef.value?.contains(document.activeElement)) {
+        panelRef.value?.focus({ preventScroll: true })
+      }
     } else {
       document.removeEventListener('keydown', onKeydown)
       previouslyFocused?.focus?.({ preventScroll: true })

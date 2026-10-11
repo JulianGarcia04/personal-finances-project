@@ -3,12 +3,12 @@
     <!-- Header -->
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
       <div>
-        <h2 class="font-display font-bold text-3xl text-text-primary tracking-tight">Cuentas Financieras</h2>
+        <h2 class="font-display font-bold text-2xl sm:text-3xl text-text-primary tracking-tight">Cuentas Financieras</h2>
         <p class="text-text-secondary text-sm mt-1">Registra tus cuentas bancarias, tarjetas de crédito y efectivo.</p>
       </div>
       <button 
         @click="openNewAccountModal"
-        class="flex items-center justify-center space-x-2 px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer transition-all duration-200"
+        class="flex items-center justify-center space-x-2 min-h-11 px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer transition-all duration-200"
       >
         <PlusIcon class="w-4 h-4" />
         <span>Agregar Cuenta</span>
@@ -16,7 +16,7 @@
     </div>
 
     <!-- Summary of net worth by currency -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
+    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 sm:gap-6">
       <div 
         v-for="(total, cur) in accountsStore.netWorthByCurrency" 
         :key="cur"
@@ -24,7 +24,7 @@
       >
         <div class="absolute top-0 right-0 w-32 h-32 bg-accent-emerald/5 rounded-full blur-2xl pointer-events-none"></div>
         <span class="text-xs font-semibold text-text-secondary uppercase tracking-widest">Patrimonio Neto ({{ cur }})</span>
-        <h3 :class="['font-display font-bold text-3xl mt-2', total >= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
+        <h3 :class="['font-display font-bold text-2xl sm:text-3xl mt-2 tabular-nums break-words', total >= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
           {{ formatCurrency(total, cur) }}
         </h3>
       </div>
@@ -34,8 +34,8 @@
     </div>
 
     <!-- Accounts Cards Grid -->
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-      <div v-for="group in accountGroups" :key="group.account.id" class="space-y-3">
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+      <div v-for="group in accountGroups" :key="group.account.id" class="space-y-3 min-w-0">
         <div
           v-for="account in [group.account]"
           :key="account.id"
@@ -54,11 +54,11 @@
               />
             </div>
             
-            <div class="flex items-center space-x-1">
+            <div class="flex items-center -mr-2 -mt-1">
               <button
                 @click="openEditModal(account)"
                 :aria-label="`Editar cuenta ${account.name}`"
-                class="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-emerald p-2 rounded-lg text-text-muted hover:text-accent-emerald hover:bg-white/5 transition-all"
+                class="tap flex items-center justify-center hover-device:opacity-0 hover-device:group-hover:opacity-100 hover-device:group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-emerald rounded-lg active:bg-white/10 text-text-muted hover:text-accent-emerald hover:bg-white/5 transition-all"
                 title="Editar Cuenta"
               >
                 <PencilIcon class="w-4 h-4" />
@@ -66,7 +66,7 @@
               <button
                 @click="handleDelete(account.id, account.name)"
                 :aria-label="`Eliminar cuenta ${account.name}`"
-                class="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-rose p-2 rounded-lg text-text-muted hover:text-accent-rose hover:bg-white/5 transition-all"
+                class="tap flex items-center justify-center hover-device:opacity-0 hover-device:group-hover:opacity-100 hover-device:group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-rose rounded-lg active:bg-white/10 text-text-muted hover:text-accent-rose hover:bg-white/5 transition-all"
                 title="Eliminar Cuenta"
               >
                 <TrashIcon class="w-4 h-4" />
@@ -75,8 +75,8 @@
           </div>
 
           <h4 class="font-display font-bold text-lg text-text-primary mt-4 truncate">{{ account.name }}</h4>
-          <p v-if="group.isOrphan" class="text-[11px] text-accent-amber mt-1" role="note">
-            Bolsillo sin grupo. Conserva este identificador: {{ account.id }}
+          <p v-if="group.isOrphan" class="text-[11px] text-accent-amber mt-1 break-words" role="note">
+            Bolsillo sin grupo. Conserva este identificador: <span class="break-all">{{ account.id }}</span>
           </p>
           <p
             v-if="account.mirror"
@@ -87,23 +87,23 @@
             <span class="truncate">Puente → {{ mirrorWorkspaceName(account) }}</span>
           </p>
           <p v-else class="text-xs text-text-secondary uppercase tracking-wide mt-1">{{ formatType(account.type) }}</p>
-          <div v-if="account.type === 'credit'" class="flex items-center gap-3 text-[10px] text-text-muted mt-3">
+          <div v-if="account.type === 'credit'" class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-text-muted mt-3">
             <span>Corte: <strong class="text-text-secondary">{{ account.statementClosingDay ? `día ${account.statementClosingDay}` : '—' }}</strong></span>
             <span>Pago: <strong class="text-text-secondary">{{ account.paymentDueDay ? `día ${account.paymentDueDay}` : '—' }}</strong></span>
           </div>
 
-          <div v-if="account.type === 'credit' && (account.statementClosingDay || account.paymentDueDay)" class="flex flex-col gap-0.5 text-[10px] text-text-muted mt-1.5">
+          <div v-if="account.type === 'credit' && (account.statementClosingDay || account.paymentDueDay)" class="flex flex-col gap-0.5 text-[11px] text-text-muted mt-1.5">
             <span v-if="account.statementClosingDay">{{ closingDaysUntil(account) === 0 ? 'Corte hoy' : `Corte en ${closingDaysUntil(account)} días` }}</span>
             <span v-if="account.paymentDueDay">{{ dueDaysUntil(account) === 0 ? 'Vence hoy' : `Vence en ${dueDaysUntil(account)} días` }}</span>
-            <span v-if="account.statementClosingDay">A pagar este corte: <strong class="text-text-secondary">{{ formatCurrency(cycleChargeAmount(account), account.currency) }}</strong></span>
+            <span v-if="account.statementClosingDay">A pagar este corte: <strong class="text-text-secondary tabular-nums">{{ formatCurrency(cycleChargeAmount(account), account.currency) }}</strong></span>
           </div>
         </div>
 
         <!-- Card Bottom Details -->
         <div :class="['pt-4 flex items-end justify-between gap-3 mt-5', account.mirror ? 'mirror-perforation' : 'border-t border-white/5']">
           <div class="min-w-0">
-            <span class="text-[10px] text-text-muted font-medium block">{{ balanceLabel(account) }}</span>
-            <span :class="['font-display font-bold text-xl mt-1 block', balanceToneClass(account)]">
+            <span class="text-[11px] text-text-muted font-medium block">{{ balanceLabel(account) }}</span>
+            <span :class="['font-display font-bold text-xl mt-1 block tabular-nums break-words', balanceToneClass(account)]">
               {{ formatCurrency(account.mirror ? Math.abs(account.balance) : account.balance, account.currency) }}
             </span>
           </div>
@@ -112,16 +112,16 @@
           <button
             v-if="account.mirror && account.balance < 0"
             @click="openSettleModal(account)"
-            class="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-accent-violet/10 border border-accent-violet/30 text-accent-violet hover:bg-accent-violet/20 hover:border-accent-violet/50 text-xs font-display font-semibold cursor-pointer transition-all"
+            class="shrink-0 flex items-center gap-1.5 min-h-11 px-3 py-2 rounded-xl bg-accent-violet/10 border border-accent-violet/30 text-accent-violet hover:bg-accent-violet/20 hover:border-accent-violet/50 text-xs font-display font-semibold cursor-pointer transition-all"
             title="Pasar la plata y saldar la deuda en los dos workspaces"
           >
             <SettleIcon class="w-3.5 h-3.5" />
             <span>Liquidar</span>
           </button>
 
-          <div v-else-if="account.type === 'credit' && account.limit > 0" class="text-right">
-            <span class="text-[10px] text-text-muted font-medium block">CUPO DISPONIBLE</span>
-            <span class="text-xs text-text-secondary font-semibold mt-1 block">
+          <div v-else-if="account.type === 'credit' && account.limit > 0" class="text-right shrink-0">
+            <span class="text-[11px] text-text-muted font-medium block">CUPO DISPONIBLE</span>
+            <span class="text-xs text-text-secondary font-semibold mt-1 block tabular-nums">
               {{ formatCurrency(Math.max(0, account.limit + account.balance), account.currency) }}
             </span>
             <div class="w-24 ml-auto mt-1.5 h-1.5 rounded-full bg-slate-800 overflow-hidden" :title="`Utilización: ${creditUtilization(account)}%`">
@@ -130,7 +130,7 @@
                 :style="{ width: Math.min(100, creditUtilization(account)) + '%' }"
               ></div>
             </div>
-            <span class="text-[9px] text-text-muted block mt-0.5">{{ creditUtilization(account) }}% usado</span>
+            <span class="text-[11px] text-text-muted block mt-0.5 tabular-nums">{{ creditUtilization(account) }}% usado</span>
           </div>
 
           <button
@@ -138,7 +138,7 @@
             type="button"
             @click="openPocketModal(account)"
             :aria-label="`Agregar bolsillo a ${account.name}`"
-            class="shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl bg-accent-emerald/10 border border-accent-emerald/25 text-accent-emerald hover:bg-accent-emerald/15 hover:border-accent-emerald/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-emerald text-xs font-display font-semibold transition-all"
+            class="shrink-0 flex items-center gap-1.5 min-h-11 px-3 py-2 rounded-xl bg-accent-emerald/10 border border-accent-emerald/25 text-accent-emerald hover:bg-accent-emerald/15 hover:border-accent-emerald/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-emerald text-xs font-display font-semibold transition-all"
             title="Separar parte del saldo en un bolsillo"
           >
             <SavingsIcon class="w-3.5 h-3.5" />
@@ -148,21 +148,21 @@
         </div>
 
         <div v-if="!group.isOrphan && group.pockets.length" class="rounded-2xl border border-accent-emerald/15 bg-slate-950/35 p-3 sm:p-4 space-y-3">
-          <div class="grid grid-cols-3 gap-2 border-b border-white/5 pb-3 text-center">
-            <div>
-              <p class="text-[9px] sm:text-[10px] text-text-muted uppercase tracking-wide">Disponible</p>
-              <p class="text-xs sm:text-sm font-semibold text-text-primary">{{ formatCurrency(accountPocketTotals(group.account.id).availableBalance, group.account.currency) }}</p>
+          <div class="grid grid-cols-1 min-[400px]:grid-cols-3 gap-2 border-b border-white/5 pb-3 min-[400px]:text-center">
+            <div class="min-w-0 flex items-baseline justify-between gap-3 min-[400px]:block">
+              <p class="text-[11px] text-text-muted uppercase tracking-wide">Disponible</p>
+              <p class="text-xs sm:text-sm font-semibold text-text-primary tabular-nums break-words">{{ formatCurrency(accountPocketTotals(group.account.id).availableBalance, group.account.currency) }}</p>
             </div>
-            <div>
-              <p class="text-[9px] sm:text-[10px] text-text-muted uppercase tracking-wide">En bolsillos</p>
-              <p class="text-xs sm:text-sm font-semibold text-accent-emerald">{{ formatCurrency(accountPocketTotals(group.account.id).pocketBalance, group.account.currency) }}</p>
+            <div class="min-w-0 flex items-baseline justify-between gap-3 min-[400px]:block">
+              <p class="text-[11px] text-text-muted uppercase tracking-wide">En bolsillos</p>
+              <p class="text-xs sm:text-sm font-semibold text-accent-emerald tabular-nums break-words">{{ formatCurrency(accountPocketTotals(group.account.id).pocketBalance, group.account.currency) }}</p>
             </div>
-            <div>
-              <p class="text-[9px] sm:text-[10px] text-text-muted uppercase tracking-wide">Total del banco</p>
-              <p class="text-xs sm:text-sm font-semibold text-text-primary">{{ formatCurrency(accountPocketTotals(group.account.id).totalBalance, group.account.currency) }}</p>
+            <div class="min-w-0 flex items-baseline justify-between gap-3 min-[400px]:block">
+              <p class="text-[11px] text-text-muted uppercase tracking-wide">Total del banco</p>
+              <p class="text-xs sm:text-sm font-semibold text-text-primary tabular-nums break-words">{{ formatCurrency(accountPocketTotals(group.account.id).totalBalance, group.account.currency) }}</p>
             </div>
           </div>
-          <p class="text-[10px] text-text-muted leading-relaxed">
+          <p class="text-[11px] text-text-muted leading-relaxed">
             El patrimonio neto ya suma el saldo disponible y cada bolsillo una sola vez.
           </p>
           <div
@@ -172,35 +172,35 @@
           >
             <div class="min-w-0">
               <p class="text-xs font-semibold text-text-primary truncate">{{ getAccountDisplayLabel(pocket, accountsStore.accounts) }}</p>
-              <p class="text-[10px] text-text-muted mt-1">Ahorros · {{ pocket.currency }} · ID {{ pocket.id }}</p>
-              <p class="text-sm font-display font-semibold text-accent-emerald mt-1">{{ formatCurrency(pocket.balance, pocket.currency) }}</p>
+              <p class="text-[11px] text-text-muted mt-1 break-all">Ahorros · {{ pocket.currency }} · ID {{ pocket.id }}</p>
+              <p class="text-sm font-display font-semibold text-accent-emerald mt-1 tabular-nums break-words">{{ formatCurrency(pocket.balance, pocket.currency) }}</p>
             </div>
             <div class="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 @click="openPocketMovement(group.account, pocket, 'fund')"
                 :aria-label="`Agregar dinero a ${pocket.name}`"
-                class="px-2.5 py-2 rounded-lg border border-accent-emerald/20 text-accent-emerald hover:bg-accent-emerald/10 text-[11px] font-semibold transition-colors"
+                class="min-h-11 px-3 py-2 rounded-lg border border-accent-emerald/20 text-accent-emerald hover:bg-accent-emerald/10 text-[11px] font-semibold transition-colors"
               >Agregar dinero</button>
               <button
                 type="button"
                 @click="openPocketMovement(group.account, pocket, 'withdraw')"
                 :aria-label="`Retirar dinero de ${pocket.name}`"
-                class="px-2.5 py-2 rounded-lg border border-white/10 text-text-secondary hover:text-text-primary hover:bg-white/5 text-[11px] font-semibold transition-colors"
+                class="min-h-11 px-3 py-2 rounded-lg border border-white/10 text-text-secondary hover:text-text-primary hover:bg-white/5 text-[11px] font-semibold transition-colors"
               >Retirar</button>
-              <div class="ml-auto flex items-center gap-0.5">
+              <div class="ml-auto -mr-1.5 flex items-center">
               <button
                 type="button"
                 @click="openEditModal(pocket)"
                 :aria-label="`Editar bolsillo ${pocket.name}`"
-                class="p-1.5 rounded-lg text-text-muted hover:text-accent-emerald hover:bg-white/5 transition-colors"
+                class="tap flex items-center justify-center rounded-lg text-text-muted hover:text-accent-emerald hover:bg-white/5 active:bg-white/10 transition-colors"
                 title="Editar nombre del bolsillo"
               ><PencilIcon class="w-4 h-4" /></button>
               <button
                 type="button"
                 @click="handleDelete(pocket.id, pocket.name)"
                 :aria-label="`Eliminar bolsillo ${pocket.name}`"
-                class="p-1.5 rounded-lg text-text-muted hover:text-accent-rose hover:bg-white/5 transition-colors"
+                class="tap flex items-center justify-center rounded-lg text-text-muted hover:text-accent-rose hover:bg-white/5 active:bg-white/10 transition-colors"
                 title="Eliminar solo si está vacío y sin movimientos"
               ><TrashIcon class="w-4 h-4" /></button>
               </div>
@@ -211,31 +211,18 @@
     </div>
 
     <!-- Add Account Modal -->
-    <div 
-      v-if="showAddModal" 
-      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs"
-      @click.self="closeAddModal"
-      @keydown.esc="closeAddModal"
-    >
-      <div role="dialog" aria-modal="true" :aria-labelledby="pocketParent ? 'pocket-create-title' : 'account-create-title'" class="w-full max-w-md glass-panel rounded-3xl p-4 sm:p-6 md:p-8 shadow-2xl relative border border-white/10 animate-scale-up max-h-[90vh] overflow-y-auto">
-        <!-- Close Button -->
-        <button 
-          @click="closeAddModal"
-          aria-label="Cerrar formulario de cuenta"
-          class="absolute top-4 right-4 p-2 rounded-lg text-text-secondary hover:text-text-primary hover:bg-white/5 transition-all"
-        >
-          <XIcon class="w-5 h-5" />
-        </button>
-
-        <h3 :id="pocketParent ? 'pocket-create-title' : 'account-create-title'" class="font-display font-bold text-2xl text-text-primary mb-2">
-          {{ pocketParent ? 'Crear bolsillo' : 'Agregar Cuenta' }}
-        </h3>
+    <BaseSheet :open="showAddModal" @close="closeAddModal">
+        <template #header>
+          <h3 class="font-display font-bold text-xl sm:text-2xl text-text-primary truncate">
+            {{ pocketParent ? 'Crear bolsillo' : 'Agregar Cuenta' }}
+          </h3>
+        </template>
         <p v-if="pocketParent" class="text-text-secondary text-xs mb-4 leading-relaxed">
           El monto inicial se separa del saldo disponible de {{ pocketParent.name }}. No aumenta el total del banco ni el patrimonio neto.
         </p>
-        <p v-else class="text-text-secondary text-xs mb-6">Configura los detalles de tu nueva cuenta bancaria o de efectivo.</p>
+        <p v-else class="text-text-secondary text-xs mb-5">Configura los detalles de tu nueva cuenta bancaria o de efectivo.</p>
 
-        <form @submit.prevent="saveAccount" class="space-y-4">
+        <form id="add-account-form" @submit.prevent="saveAccount" class="space-y-4">
           <div class="space-y-1">
             <label for="new-account-name" class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">{{ pocketParent ? 'Nombre del bolsillo' : 'Nombre de la Cuenta' }}</label>
             <input 
@@ -245,18 +232,18 @@
               type="text" 
               required
               placeholder="Ej. Tarjeta Visa Oro, Ahorros Bancolombia"
-              class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-emerald"
+              class="field"
             />
           </div>
 
-          <div class="grid grid-cols-2 gap-4">
+          <div class="grid grid-cols-1 min-[400px]:grid-cols-2 gap-4">
             <div class="space-y-1">
               <label for="new-account-type" class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Tipo de Cuenta</label>
               <select 
                 id="new-account-type"
                 v-model="newAcc.type"
                 :disabled="!!pocketParent"
-                class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                class="field"
               >
                 <option value="checking">Corriente</option>
                 <option value="savings">Ahorros</option>
@@ -270,27 +257,31 @@
               <input 
                 id="new-account-currency"
                 v-model="newAcc.currency"
+                autocapitalize="characters"
+                autocomplete="off"
+                maxlength="3"
                 type="text"
                 required
                 :readonly="!!pocketParent"
                 placeholder="COP, USD, EUR"
-                class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary uppercase focus:outline-none focus:border-accent-emerald"
+                class="field uppercase"
               />
             </div>
           </div>
 
-          <div class="grid grid-cols-2 gap-4">
+          <div class="grid grid-cols-1 min-[400px]:grid-cols-2 gap-4">
             <div class="space-y-1">
               <label for="new-account-balance" class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">{{ pocketParent ? 'Fondos iniciales' : 'Saldo Inicial' }}</label>
               <input 
                 id="new-account-balance"
                 v-model.number="newAcc.balance"
                 type="number"
+                inputmode="decimal"
                 step="any"
                 required
                 :min="pocketParent ? 0 : undefined"
                 :aria-describedby="pocketParent ? 'pocket-opening-note' : undefined"
-                class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                class="field"
               />
             </div>
 
@@ -299,8 +290,9 @@
               <input 
                 v-model.number="newAcc.limit"
                 type="number"
+                inputmode="decimal"
                 step="any"
-                class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                class="field"
               />
             </div>
           </div>
@@ -309,17 +301,18 @@
           </p>
 
           <div v-if="newAcc.type === 'credit'" class="space-y-2 animate-fade-in">
-            <div class="grid grid-cols-2 gap-4">
+            <div class="grid grid-cols-1 min-[400px]:grid-cols-2 gap-4">
               <div class="space-y-1">
                 <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Día de corte</label>
                 <input
                   v-model.number="newAcc.statementClosingDay"
                   type="number"
+                  inputmode="numeric"
                   min="1"
                   max="31"
                   step="1"
                   placeholder="Ej. 15"
-                  class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                  class="field"
                 />
               </div>
               <div class="space-y-1">
@@ -327,60 +320,41 @@
                 <input
                   v-model.number="newAcc.paymentDueDay"
                   type="number"
+                  inputmode="numeric"
                   min="1"
                   max="31"
                   step="1"
                   placeholder="Ej. 30"
-                  class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                  class="field"
                 />
               </div>
             </div>
             <p class="text-[10px] text-text-muted">Se repiten cada mes. Son opcionales.</p>
           </div>
+        </form>
 
-          <!-- Buttons -->
-          <div class="flex space-x-3 pt-4">
-            <button 
-              type="button" 
-              @click="closeAddModal"
-              class="w-1/2 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all"
-            >
+        <template #footer>
+          <div class="flex gap-3">
+            <button type="button" @click="closeAddModal" class="flex-1 min-h-11 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all">
               Cancelar
             </button>
-            <button 
-              type="submit" 
-              :disabled="loading"
-              class="w-1/2 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50"
-            >
+            <button type="submit" form="add-account-form" :disabled="loading" class="flex-1 min-h-11 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50">
               <span>{{ pocketParent ? 'Crear bolsillo' : 'Guardar' }}</span>
             </button>
           </div>
-        </form>
-      </div>
-    </div>
+        </template>
+    </BaseSheet>
 
     <!-- Edit Account Modal -->
-    <div
-      v-if="showEditModal"
-      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs"
-      @click.self="closeEditAccountModal"
-      @keydown.esc="closeEditAccountModal"
-    >
-      <div role="dialog" aria-modal="true" aria-labelledby="account-edit-title" class="w-full max-w-md glass-panel rounded-3xl p-4 sm:p-6 md:p-8 shadow-2xl relative border border-white/10 animate-scale-up max-h-[90vh] overflow-y-auto">
-        <button
-          @click="closeEditAccountModal"
-          aria-label="Cerrar formulario de edición"
-          class="absolute top-4 right-4 p-2 rounded-lg text-text-secondary hover:text-text-primary hover:bg-white/5 transition-all"
-        >
-          <XIcon class="w-5 h-5" />
-        </button>
-
-        <h3 id="account-edit-title" class="font-display font-bold text-2xl text-text-primary mb-2">{{ editingAccount?.parentAccountId ? 'Editar bolsillo' : 'Editar Cuenta' }}</h3>
-        <p class="text-text-secondary text-xs mb-6">
+    <BaseSheet :open="showEditModal" @close="closeEditAccountModal">
+        <template #header>
+          <h3 class="font-display font-bold text-xl sm:text-2xl text-text-primary truncate">{{ editingAccount?.parentAccountId ? 'Editar bolsillo' : 'Editar Cuenta' }}</h3>
+        </template>
+        <p class="text-text-secondary text-xs mb-5">
           El saldo solo cambia con movimientos. El tipo, moneda y banco de un bolsillo son heredados y no se pueden cambiar.
         </p>
 
-        <form @submit.prevent="saveEditedAccount" class="space-y-4">
+        <form id="edit-account-form" @submit.prevent="saveEditedAccount" class="space-y-4">
           <div class="space-y-1">
             <label for="edit-account-name" class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Nombre de la Cuenta</label>
             <input
@@ -389,18 +363,18 @@
               v-model="editAcc.name"
               type="text"
               required
-              class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-emerald"
+              class="field"
             />
           </div>
 
-          <div class="grid grid-cols-2 gap-4">
+          <div class="grid grid-cols-1 min-[400px]:grid-cols-2 gap-4">
             <div class="space-y-1">
               <label for="edit-account-type" class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Tipo de Cuenta</label>
               <select
                 id="edit-account-type"
                 v-model="editAcc.type"
                 :disabled="!!editingAccount?.parentAccountId"
-                class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                class="field"
               >
                 <option value="checking">Corriente</option>
                 <option value="savings">Ahorros</option>
@@ -414,11 +388,14 @@
               <input
                 id="edit-account-currency"
                 v-model="editAcc.currency"
+                autocapitalize="characters"
+                autocomplete="off"
+                maxlength="3"
                 type="text"
                 required
                 :readonly="!!editingAccount?.parentAccountId"
                 placeholder="COP, USD, EUR"
-                class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary uppercase focus:outline-none focus:border-accent-emerald"
+                class="field uppercase"
               />
             </div>
           </div>
@@ -428,23 +405,25 @@
             <input
               v-model.number="editAcc.limit"
               type="number"
+              inputmode="decimal"
               step="any"
-            class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
-          />
+              class="field"
+            />
           </div>
 
           <div v-if="editAcc.type === 'credit'" class="space-y-2 animate-fade-in">
-            <div class="grid grid-cols-2 gap-4">
+            <div class="grid grid-cols-1 min-[400px]:grid-cols-2 gap-4">
               <div class="space-y-1">
                 <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Día de corte</label>
                 <input
                   v-model.number="editAcc.statementClosingDay"
                   type="number"
+                  inputmode="numeric"
                   min="1"
                   max="31"
                   step="1"
                   placeholder="Ej. 15"
-                  class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                  class="field"
                 />
               </div>
               <div class="space-y-1">
@@ -452,11 +431,12 @@
                 <input
                   v-model.number="editAcc.paymentDueDay"
                   type="number"
+                  inputmode="numeric"
                   min="1"
                   max="31"
                   step="1"
                   placeholder="Ej. 30"
-                  class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
+                  class="field"
                 />
               </div>
             </div>
@@ -483,7 +463,7 @@
               <select
                 v-model="editMirror.workspaceId"
                 @change="loadMirrorAccounts()"
-                class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-violet"
+                class="field focus:border-accent-violet"
               >
                 <option value="">Sin espejo — cuenta normal</option>
                 <option v-for="ws in otherWorkspaces" :key="ws.id" :value="ws.id">{{ ws.name }}</option>
@@ -500,7 +480,7 @@
                   <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Cuenta que paga (allá)</label>
                   <select
                     v-model="editMirror.sourceAccountId"
-                    class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-violet"
+                    class="field focus:border-accent-violet"
                   >
                     <option value="" disabled>Ej. tu tarjeta de crédito</option>
                     <option v-for="acc in mirrorAccounts" :key="acc.id" :value="acc.id" :disabled="acc.id === editMirror.accountId">
@@ -513,7 +493,7 @@
                   <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Cuenta "por cobrar" (allá)</label>
                   <select
                     v-model="editMirror.accountId"
-                    class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-violet"
+                    class="field focus:border-accent-violet"
                   >
                     <option value="" disabled>Ej. "Por cobrar – Casa", saldo 0</option>
                     <option v-for="acc in mirrorAccounts" :key="acc.id" :value="acc.id" :disabled="acc.id === editMirror.sourceAccountId">
@@ -535,65 +515,51 @@
               </template>
             </div>
           </div>
+        </form>
 
-          <div class="flex space-x-3 pt-4">
-              <button
-                type="button"
-              @click="closeEditAccountModal"
-              class="w-1/2 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all"
-            >
+        <template #footer>
+          <div class="flex gap-3">
+            <button type="button" @click="closeEditAccountModal" class="flex-1 min-h-11 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all">
               Cancelar
             </button>
-            <button
-              type="submit"
-              :disabled="loading"
-              class="w-1/2 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50"
-            >
+            <button type="submit" form="edit-account-form" :disabled="loading" class="flex-1 min-h-11 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50">
               <span>Guardar</span>
             </button>
           </div>
-        </form>
-      </div>
-    </div>
+        </template>
+    </BaseSheet>
 
     <!-- Settle Mirror Modal -->
-    <div
-      v-if="settleAccount"
-      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs"
+    <BaseSheet
+      :open="!!settleAccount"
+      title="Liquidar puente"
+      panel-class="mirror-ledger border-accent-violet/25"
+      @close="settleAccount = null"
     >
-      <div class="w-full max-w-md glass-panel mirror-ledger rounded-3xl p-4 sm:p-6 md:p-8 shadow-2xl relative border border-accent-violet/25 animate-scale-up max-h-[90vh] overflow-y-auto">
-        <div class="absolute -top-10 -right-10 w-40 h-40 rounded-full bg-accent-violet/10 blur-3xl pointer-events-none"></div>
-
-        <button
-          @click="settleAccount = null"
-          class="absolute top-4 right-4 p-2 rounded-lg text-text-secondary hover:text-text-primary hover:bg-white/5 transition-all"
-        >
-          <XIcon class="w-5 h-5" />
-        </button>
-
-        <h3 class="font-display font-bold text-2xl text-text-primary mb-1">Liquidar puente</h3>
+      <template v-if="settleAccount">
         <p class="text-text-secondary text-xs mb-5">
           La plata pasa de verdad de este workspace a {{ mirrorWorkspaceName(settleAccount) }}. No toca presupuestos.
         </p>
 
         <!-- Deuda pendiente, protagonista -->
-        <div class="mb-6 rounded-2xl border border-accent-violet/25 bg-accent-violet/[0.06] px-5 py-4">
-          <span class="text-[10px] font-semibold text-accent-violet/80 uppercase tracking-widest block">Pendiente de reembolso</span>
-          <span class="font-display font-bold text-3xl text-text-primary mt-1 block tracking-tight">
+        <div class="mb-6 rounded-2xl border border-accent-violet/25 bg-accent-violet/[0.06] px-4 sm:px-5 py-4">
+          <span class="text-[11px] font-semibold text-accent-violet/80 uppercase tracking-widest block">Pendiente de reembolso</span>
+          <span class="font-display font-bold text-2xl sm:text-3xl text-text-primary mt-1 block tracking-tight tabular-nums break-words">
             {{ formatCurrency(settleDebt, settleAccount.currency) }}
           </span>
         </div>
 
-        <form @submit.prevent="saveSettlement" class="space-y-4">
-          <div class="grid grid-cols-2 gap-4">
+        <form id="settle-mirror-form" @submit.prevent="saveSettlement" class="space-y-4">
+          <div class="grid grid-cols-1 min-[400px]:grid-cols-2 gap-4">
             <div class="space-y-1">
               <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Monto a liquidar</label>
               <input
                 v-model.number="settleForm.amount"
                 type="number"
+                inputmode="decimal"
                 step="any"
                 required
-                class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-violet"
+                class="field focus:border-accent-violet"
               />
             </div>
             <div class="space-y-1">
@@ -602,7 +568,7 @@
                 v-model="settleForm.date"
                 type="date"
                 required
-                class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-violet"
+                class="field focus:border-accent-violet"
               />
             </div>
           </div>
@@ -612,7 +578,7 @@
             <select
               v-model="settleForm.fromAccountId"
               required
-              class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-violet"
+              class="field focus:border-accent-violet"
             >
               <option value="" disabled>Selecciona cuenta</option>
               <option v-for="acc in settleSourceAccounts" :key="acc.id" :value="acc.id">
@@ -626,7 +592,7 @@
             <select
               v-model="settleForm.toAccountId"
               required
-              class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-violet"
+              class="field focus:border-accent-violet"
             >
               <option value="" disabled>{{ loadingMirrorAccounts ? 'Cargando cuentas…' : 'Selecciona cuenta' }}</option>
               <option v-for="acc in settleDestinationAccounts" :key="acc.id" :value="acc.id">
@@ -634,27 +600,30 @@
               </option>
             </select>
           </div>
+        </form>
+      </template>
 
-          <div class="flex space-x-3 pt-2">
+        <template #footer>
+          <div class="flex gap-3">
             <button
               type="button"
               @click="settleAccount = null"
-              class="w-1/2 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all"
+              class="flex-1 min-h-11 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all"
             >
               Cancelar
             </button>
             <button
               type="submit"
+              form="settle-mirror-form"
               :disabled="loading"
-              class="w-1/2 py-2.5 rounded-xl bg-accent-violet hover:bg-accent-violet/80 text-white font-display font-semibold text-sm cursor-pointer disabled:opacity-50 transition-all"
+              class="flex-1 min-h-11 py-2.5 rounded-xl bg-accent-violet hover:bg-accent-violet/80 text-white font-display font-semibold text-sm cursor-pointer disabled:opacity-50 transition-all"
               style="box-shadow: var(--shadow-glow-violet)"
             >
               <span>Liquidar</span>
             </button>
           </div>
-        </form>
-      </div>
-    </div>
+        </template>
+    </BaseSheet>
   </div>
 </template>
 
@@ -678,7 +647,6 @@ import {
 import {
   Plus as PlusIcon,
   Trash2 as TrashIcon,
-  X as XIcon,
   Pencil as PencilIcon,
   PiggyBank as SavingsIcon,
   CreditCard as CreditIcon,
@@ -687,6 +655,7 @@ import {
   ArrowLeftRight as MirrorIcon,
   Banknote as SettleIcon
 } from 'lucide-vue-next'
+import BaseSheet from '@/components/ui/BaseSheet.vue'
 
 const accountsStore = useAccountsStore()
 const workspacesStore = useWorkspacesStore()
@@ -1108,20 +1077,3 @@ const formatCurrency = (val: number, currency: string) => {
   }).format(val)
 }
 </script>
-
-<style scoped>
-.animate-scale-up {
-  animation: scaleUp 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
-@keyframes scaleUp {
-  from {
-    opacity: 0;
-    transform: scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-</style>
