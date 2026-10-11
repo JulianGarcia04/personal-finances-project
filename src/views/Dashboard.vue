@@ -461,7 +461,7 @@ import {
   projectionChecks,
   cardDebtRows
 } from '@/lib/dashboardMetrics'
-import { getNextOccurrence, daysUntil, expenseAmountForCycle } from '@/lib/creditCycle'
+import { getNextOccurrence, daysUntil, expenseAmountForCycle, getStatementClosingForDueDate } from '@/lib/creditCycle'
 import { 
   Plus as PlusIcon, 
   Sparkles as SparklesIcon,
@@ -990,10 +990,15 @@ const upcomingCardPayments = computed(() => {
       const dueDate = getNextOccurrence(acc.paymentDueDay!)
       // Sin statementClosingDay no se puede saber qué cae en el corte: se muestra
       // el recordatorio de fecha sin monto (ver creditCycle.ts).
-      const amount = acc.statementClosingDay
+      // El monto es el del extracto que se paga en dueDate (último corte antes del
+      // vencimiento), no el del ciclo en curso: después del corte hoy ya cae en el siguiente.
+      const closing = acc.statementClosingDay
+        ? getStatementClosingForDueDate(acc.statementClosingDay, dueDate)
+        : null
+      const amount = closing
         ? transactionsStore.transactions
             .filter(t => t.accountId === acc.id)
-            .reduce((sum, t) => sum + expenseAmountForCycle(t, acc.statementClosingDay!), 0)
+            .reduce((sum, t) => sum + expenseAmountForCycle(t, acc.statementClosingDay!, closing), 0)
         : null
       return {
         id: acc.id,

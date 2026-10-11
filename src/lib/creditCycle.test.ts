@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { getStatementPeriod, expenseAmountForCycle, getNextOccurrence, daysUntil } from './creditCycle.ts'
+import { getStatementPeriod, expenseAmountForCycle, getNextOccurrence, daysUntil, getStatementClosingForDueDate } from './creditCycle.ts'
 
 test('getStatementPeriod ubica el ciclo antes del corte en el mes anterior', () => {
   const { cycleStart, cycleEnd } = getStatementPeriod(25, new Date(2026, 7, 10)) // 10 ago, corte día 25
@@ -71,4 +71,41 @@ test('daysUntil es sano: 0 para hoy, positivo para el futuro', () => {
   assert.equal(daysUntil(new Date(2026, 7, 10), today), 0)
   assert.equal(daysUntil(new Date(2026, 7, 13), today), 3)
   assert.equal(daysUntil(new Date(2026, 7, 5), today), -5)
+})
+
+test('getStatementClosingForDueDate usa el corte del mes anterior cuando el corte es posterior al pago', () => {
+  // corte 25, pago 15 oct → extracto cerrado el 25 sep
+  const closing = getStatementClosingForDueDate(25, new Date(2026, 9, 15))
+  assert.equal(closing.getMonth(), 8)
+  assert.equal(closing.getDate(), 25)
+})
+
+test('getStatementClosingForDueDate usa el corte del mismo mes cuando el corte es anterior al pago', () => {
+  // corte 5, pago 20 oct → extracto cerrado el 5 oct
+  const closing = getStatementClosingForDueDate(5, new Date(2026, 9, 20))
+  assert.equal(closing.getMonth(), 9)
+  assert.equal(closing.getDate(), 5)
+})
+
+test('getStatementClosingForDueDate trata corte el mismo día del pago como el ciclo anterior', () => {
+  const closing = getStatementClosingForDueDate(15, new Date(2026, 9, 15))
+  assert.equal(closing.getMonth(), 8)
+  assert.equal(closing.getDate(), 15)
+})
+
+test('getStatementClosingForDueDate ajusta el corte 31 a meses cortos', () => {
+  // corte 31, pago 10 mar → extracto cerrado el 28 feb
+  const closing = getStatementClosingForDueDate(31, new Date(2026, 2, 10))
+  assert.equal(closing.getMonth(), 1)
+  assert.equal(closing.getDate(), 28)
+})
+
+test('el monto del pago sale del extracto cerrado, no del ciclo en curso después del corte', () => {
+  // corte 25, pago 15 oct, hoy 11 oct: la compra del 20 sep va al pago del 15 oct;
+  // la del 1 oct pertenece al siguiente extracto.
+  const closing = getStatementClosingForDueDate(25, new Date(2026, 9, 15))
+  const sep = { type: 'expense', amount: -100_000, date: new Date(2026, 8, 20), installments: 1 }
+  const oct = { type: 'expense', amount: -50_000, date: new Date(2026, 9, 1), installments: 1 }
+  assert.equal(expenseAmountForCycle(sep, 25, closing), 100_000)
+  assert.equal(expenseAmountForCycle(oct, 25, closing), 0)
 })

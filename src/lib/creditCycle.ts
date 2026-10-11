@@ -57,6 +57,17 @@ export const expenseAmountForCycle = (
   return prorateInstallmentCents(transaction.amount, installments, installmentIndex)
 }
 
+// Corte cuyo extracto se paga en `dueDate`: el último corte estrictamente anterior al
+// vencimiento. Pasarlo como referenceDate a expenseAmountForCycle da el monto de ese
+// extracto, aunque hoy ya haya corrido el ciclo siguiente.
+export const getStatementClosingForDueDate = (cutoffDay: number, dueDate: Date): Date => {
+  const year = dueDate.getFullYear()
+  const month = dueDate.getMonth()
+  const sameMonthClosing = new Date(year, month, Math.min(cutoffDay, daysInMonth(year, month)))
+  if (sameMonthClosing.getDate() < dueDate.getDate()) return sameMonthClosing
+  return new Date(year, month - 1, Math.min(cutoffDay, daysInMonth(year, month - 1)))
+}
+
 // Próxima fecha calendario en la que cae `day` (clamped al mes), contando hoy si coincide.
 export const getNextOccurrence = (day: number, referenceDate = new Date()): Date => {
   const year = referenceDate.getFullYear()

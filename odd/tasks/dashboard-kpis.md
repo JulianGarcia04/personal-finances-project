@@ -35,6 +35,8 @@ A misleading KPI is worse than no KPI. Forward-looking KPIs drive decisions.
 
 - [x] T4 Mobile review fixes (browser proof at 360px found): (a) projection budget warning compares all spending vs sum of budgeted categories only → compare budgeted-category projection vs budget total, all-spending projection vs workspace expense limit; (b) spendable counts savings → use only checking + cash (exclude savings/pockets); (c) COP KPIs show cents → round like rest of app; (d) mobile compaction of the 3 new cards so Patrimonio is not pushed off first screen; (e) card debt shows per-card utilization. Route: delegated (writer).
 
+- [x] T5 Card payment amount after closing day: upcomingCardPayments used today's cycle; now uses the statement closing right before the due date (`getStatementClosingForDueDate` in `src/lib/creditCycle.ts`). Bug also hit closing day > due day cards before the cutoff. Route: inline (small, understood). RED: `does not provide an export named 'getStatementClosingForDueDate'` (83 tests, 1 fail). GREEN: `pnpm test` 94/94, `pnpm build` ✓ built in 431ms.
+
 ## Acceptance criteria
 - MoM on day N compares same N days. Runway uses liquid balance and 3-month avg.
 - Three new KPIs visible, correct for multi-currency, readable at 360px.
