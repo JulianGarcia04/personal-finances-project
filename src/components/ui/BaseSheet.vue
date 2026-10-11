@@ -4,7 +4,7 @@
       <div
         v-if="open"
         class="fixed inset-0 z-[60] flex items-end sm:items-center justify-center sm:p-4 bg-black/70 backdrop-blur-xs"
-        @click.self="emit('close')"
+        @click.self="onBackdrop"
       >
         <div
           ref="panelRef"
@@ -72,8 +72,10 @@ const props = withDefaults(
     size?: 'md' | 'lg'
     /** Extra classes for the panel (e.g. a themed border or `mirror-ledger`). */
     panelClass?: string
+    /** Close when tapping the backdrop. Disable for forms to avoid losing half-filled input. */
+    closeOnBackdrop?: boolean
   }>(),
-  { title: undefined, size: 'md', panelClass: '' }
+  { title: undefined, size: 'md', panelClass: '', closeOnBackdrop: true }
 )
 
 const emit = defineEmits<{ close: [] }>()
@@ -83,6 +85,10 @@ const panelRef = ref<HTMLElement | null>(null)
 let previouslyFocused: HTMLElement | null = null
 
 useBodyScrollLock(toRef(props, 'open'))
+
+const onBackdrop = () => {
+  if (props.closeOnBackdrop) emit('close')
+}
 
 const onKeydown = (event: KeyboardEvent) => {
   if (event.key === 'Escape') {

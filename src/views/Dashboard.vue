@@ -2,8 +2,8 @@
   <div class="max-w-6xl mx-auto space-y-8">
     <!-- Header / Welcome -->
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-      <div>
-        <h2 class="font-display font-bold text-3xl text-text-primary tracking-tight">
+      <div class="min-w-0">
+        <h2 class="font-display font-bold text-2xl sm:text-3xl text-text-primary tracking-tight break-words">
           Bóveda de {{ authStore.user?.displayName }}
         </h2>
         <p class="text-text-secondary text-sm mt-1">Aquí tienes el resumen de tu salud financiera actual.</p>
@@ -13,7 +13,7 @@
       <div class="flex flex-wrap gap-3">
         <router-link 
           to="/transactions" 
-          class="flex items-center space-x-1.5 px-4 py-2.5 rounded-xl bg-slate-900 border border-border text-xs font-semibold text-text-primary hover:bg-slate-800 transition-colors"
+          class="flex items-center min-h-11 space-x-1.5 px-4 py-2.5 rounded-xl bg-slate-900 border border-border text-xs font-semibold text-text-primary hover:bg-slate-800 transition-colors"
         >
           <PlusIcon class="w-3.5 h-3.5 text-accent-emerald" />
           <span>Transacción</span>
@@ -21,7 +21,7 @@
         <router-link 
           v-if="settingsStore.aiEnabled" 
           to="/import" 
-          class="flex items-center space-x-1.5 px-4 py-2.5 rounded-xl bg-gradient-to-r from-accent-emerald/10 to-accent-violet/10 border border-accent-emerald/20 text-xs font-semibold text-accent-emerald hover:brightness-110 transition-all shadow-glow-emerald"
+          class="flex items-center min-h-11 space-x-1.5 px-4 py-2.5 rounded-xl bg-gradient-to-r from-accent-emerald/10 to-accent-violet/10 border border-accent-emerald/20 text-xs font-semibold text-accent-emerald hover:brightness-110 transition-all shadow-glow-emerald"
         >
           <SparklesIcon class="w-3.5 h-3.5" />
           <span>Importar con IA</span>
@@ -57,7 +57,7 @@
           <div>
             <div class="absolute top-0 right-0 w-24 h-24 bg-accent-emerald/5 rounded-full blur-xl pointer-events-none"></div>
             <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Patrimonio Neto</span>
-            <h4 class="font-display font-bold text-2xl mt-2 truncate text-text-primary">
+            <h4 class="font-display font-bold text-xl sm:text-2xl mt-2 tabular-nums break-words text-text-primary">
               {{ formatPrimaryCurrency(netWorthValue) }}
             </h4>
             <span class="text-[10px] text-text-muted mt-1 block">Suma de saldos de tus cuentas</span>
@@ -72,8 +72,8 @@
           <div>
             <div class="absolute top-0 right-0 w-24 h-24 bg-accent-emerald/5 rounded-full blur-xl pointer-events-none"></div>
             <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Ingresos del Mes</span>
-            <div class="flex items-end gap-2 mt-2">
-              <h4 class="font-display font-bold text-2xl text-accent-emerald truncate">
+            <div class="flex flex-wrap items-end gap-x-2 mt-2">
+              <h4 class="min-w-0 font-display font-bold text-xl sm:text-2xl text-accent-emerald tabular-nums break-words">
                 +{{ formatPrimaryCurrency(monthlyIncome) }}
               </h4>
               <span :class="['text-xs mb-1 font-semibold', incomeData.percent >= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
@@ -89,8 +89,8 @@
           <div>
             <div class="absolute top-0 right-0 w-24 h-24 bg-accent-rose/5 rounded-full blur-xl pointer-events-none"></div>
             <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Gastos imputados del Mes</span>
-            <div class="flex items-end gap-2 mt-2">
-              <h4 class="font-display font-bold text-2xl text-accent-rose truncate">
+            <div class="flex flex-wrap items-end gap-x-2 mt-2">
+              <h4 class="min-w-0 font-display font-bold text-xl sm:text-2xl text-accent-rose tabular-nums break-words">
                 {{ formatPrimaryCurrency(monthlyExpenses) }}
               </h4>
               <span :class="['text-xs mb-1 font-semibold', expensesData.percent <= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
@@ -110,8 +110,8 @@
           <!-- ponytail: member breakdown -->
           <div v-if="memberExpenses.length > 0" class="mt-2 pt-2 border-t border-white/5 space-y-1">
             <div v-for="m in memberExpenses" :key="m.name" class="flex justify-between text-[10px]">
-              <span class="text-text-secondary truncate pr-2">{{ m.name }}</span>
-              <span class="font-semibold text-text-primary">{{ formatPrimaryCurrency(m.amount) }}</span>
+              <span class="min-w-0 text-text-secondary truncate pr-2">{{ m.name }}</span>
+              <span class="shrink-0 font-semibold text-text-primary tabular-nums">{{ formatPrimaryCurrency(m.amount) }}</span>
             </div>
           </div>
 
@@ -131,7 +131,7 @@
         <div class="glass-panel rounded-2xl p-4 sm:p-6 relative overflow-hidden group border border-white/5">
           <div class="absolute top-0 right-0 w-24 h-24 bg-accent-amber/5 rounded-full blur-xl pointer-events-none"></div>
           <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Tasa de Ahorro</span>
-          <h4 class="font-display font-bold text-2xl mt-2 text-accent-amber truncate">
+          <h4 class="font-display font-bold text-xl sm:text-2xl mt-2 text-accent-amber tabular-nums truncate">
             {{ savingsRate.toFixed(1) }}%
           </h4>
           <span class="text-[10px] text-text-muted mt-1 block">
@@ -143,28 +143,37 @@
       <!-- 2. Charts Section -->
       <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
         <!-- Gastos por categoría (Donut) -->
-        <div class="glass-panel rounded-2xl p-4 sm:p-6 md:col-span-1 flex flex-col justify-between h-96">
+        <div class="glass-panel rounded-2xl p-4 sm:p-6 md:col-span-1 flex flex-col justify-between sm:h-80 md:h-96">
           <div>
             <h4 class="font-display font-bold text-base text-text-primary">Distribución de Gastos</h4>
             <p class="text-text-muted text-xs mt-0.5">Gastos acumulados por categoría en el mes.</p>
           </div>
           
-          <div class="relative flex-1 flex items-center justify-center p-4">
+          <div class="relative h-56 sm:h-auto sm:flex-1 flex items-center justify-center p-4">
             <canvas ref="donutCanvas" class="max-h-56"></canvas>
             <p v-if="Object.keys(expensesByCategory).length === 0" class="absolute text-center text-text-muted text-xs py-8">
               No hay gastos registrados este mes.
             </p>
           </div>
+
+          <!-- Compact HTML legend on phones (Chart.js legend is hidden below sm) -->
+          <ul v-if="!isSmUp && donutLegend.length > 0" class="mt-2 space-y-1.5 border-t border-white/5 pt-3">
+            <li v-for="item in donutLegend" :key="item.name" class="flex items-center gap-2 text-xs">
+              <span class="w-2.5 h-2.5 rounded-full shrink-0" :style="{ backgroundColor: item.color }"></span>
+              <span class="min-w-0 flex-1 truncate text-text-secondary">{{ item.name }}</span>
+              <span class="shrink-0 font-semibold text-text-primary tabular-nums">{{ formatPrimaryCurrency(item.amount) }}</span>
+            </li>
+          </ul>
         </div>
 
         <!-- Flujo mensual (Bar Chart) -->
-        <div class="glass-panel rounded-2xl p-4 sm:p-6 md:col-span-2 flex flex-col justify-between h-96">
+        <div class="glass-panel rounded-2xl p-4 sm:p-6 md:col-span-2 flex flex-col justify-between h-72 sm:h-80 md:h-96">
           <div>
             <h4 class="font-display font-bold text-base text-text-primary">Flujo de Caja Mensual</h4>
             <p class="text-text-muted text-xs mt-0.5">Comparativo mensual de ingresos y gastos.</p>
           </div>
           
-          <div class="relative flex-1 flex items-center justify-center p-4">
+          <div class="relative flex-1 min-h-0 flex items-center justify-center p-2 sm:p-4">
             <canvas ref="barCanvas" class="w-full max-h-60"></canvas>
             <p v-if="transactionsStore.transactions.length === 0" class="absolute text-center text-text-muted text-xs py-8">
               No hay movimientos históricos para graficar.
@@ -178,8 +187,8 @@
         <!-- Budget of the month -->
         <div v-if="budgetSummary" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
           <div class="flex items-center justify-between">
-            <h4 class="font-display font-bold text-base text-text-primary">Presupuesto del Mes</h4>
-            <router-link to="/goals" class="text-xs text-accent-emerald font-semibold hover:underline">
+            <h4 class="min-w-0 font-display font-bold text-base text-text-primary">Presupuesto del Mes</h4>
+            <router-link to="/goals" class="-my-3 -mr-2 inline-flex items-center min-h-11 px-2 shrink-0 text-xs text-accent-emerald font-semibold hover:underline">
               Ajustar
             </router-link>
           </div>
@@ -200,12 +209,12 @@
           </p>
           <div class="space-y-2 pt-2 border-t border-white/5">
             <div v-for="row in budgetSummary.rows" :key="row.name" class="space-y-1">
-              <div class="flex justify-between text-[11px]">
-                <span class="text-text-secondary flex items-center gap-1.5">
-                  <span class="w-2 h-2 rounded-full" :style="{ backgroundColor: row.color }"></span>
-                  {{ row.name }}
+              <div class="flex justify-between gap-2 text-[11px]">
+                <span class="min-w-0 text-text-secondary flex items-center gap-1.5">
+                  <span class="w-2 h-2 rounded-full shrink-0" :style="{ backgroundColor: row.color }"></span>
+                  <span class="truncate">{{ row.name }}</span>
                 </span>
-                <span :class="row.percent > 100 ? 'text-accent-rose font-semibold' : row.percent === 100 ? 'text-accent-amber font-semibold' : 'text-text-muted'">{{ row.percent }}%</span>
+                <span class="shrink-0" :class="row.percent > 100 ? 'text-accent-rose font-semibold' : row.percent === 100 ? 'text-accent-amber font-semibold' : 'text-text-muted'">{{ row.percent }}%</span>
               </div>
               <div class="w-full h-1 rounded-full bg-white/10 overflow-hidden">
                 <div
@@ -221,15 +230,15 @@
         <div v-if="goalProgress.length > 0" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
           <div class="flex items-center justify-between">
             <h4 class="font-display font-bold text-base text-text-primary">Tus Metas de Ahorro</h4>
-            <router-link to="/goals" class="text-xs text-accent-emerald font-semibold hover:underline">
+            <router-link to="/goals" class="-my-3 -mr-2 inline-flex items-center min-h-11 px-2 shrink-0 text-xs text-accent-emerald font-semibold hover:underline">
               Ver metas
             </router-link>
           </div>
           <div class="space-y-3">
             <div v-for="goal in goalProgress" :key="goal.id" class="space-y-1.5">
-              <div class="flex justify-between text-xs">
-                <span class="text-text-primary font-semibold truncate max-w-[160px]">{{ goal.name }}</span>
-                <span class="text-accent-emerald font-semibold">{{ goal.percent }}%</span>
+              <div class="flex justify-between gap-2 text-xs">
+                <span class="min-w-0 text-text-primary font-semibold truncate">{{ goal.name }}</span>
+                <span class="shrink-0 text-accent-emerald font-semibold">{{ goal.percent }}%</span>
               </div>
               <div class="w-full h-2 rounded-full bg-slate-950/60 overflow-hidden border border-white/5">
                 <div
@@ -249,7 +258,7 @@
       <div v-if="upcomingCardPayments.length > 0" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
         <div class="flex items-center justify-between">
           <h4 class="font-display font-bold text-base text-text-primary">Próximos Pagos de Tarjeta</h4>
-          <router-link to="/accounts" class="text-xs text-accent-emerald font-semibold hover:underline">
+          <router-link to="/accounts" class="-my-3 -mr-2 inline-flex items-center min-h-11 px-2 shrink-0 text-xs text-accent-emerald font-semibold hover:underline">
             Ver cuentas
           </router-link>
         </div>
@@ -259,7 +268,7 @@
             :key="payment.id"
             class="flex items-center justify-between p-3 rounded-xl bg-white/[0.01] border border-white/5"
           >
-            <div class="truncate pr-2">
+            <div class="min-w-0 flex-1 truncate pr-2">
               <p class="text-sm font-medium text-text-primary truncate">{{ payment.name }}</p>
               <p
                 :class="['text-[10px] mt-0.5', payment.daysLeft <= 3 ? 'text-accent-rose font-semibold' : payment.daysLeft <= 7 ? 'text-accent-amber' : 'text-text-muted']"
@@ -267,7 +276,7 @@
                 {{ payment.daysLeft <= 0 ? 'Vence hoy' : `Vence en ${payment.daysLeft} días` }}
               </p>
             </div>
-            <span v-if="payment.amount !== null" class="font-display font-semibold text-sm text-text-primary shrink-0">
+            <span v-if="payment.amount !== null" class="font-display font-semibold text-sm text-text-primary tabular-nums shrink-0">
               {{ formatCurrency(payment.amount, payment.currency) }}
             </span>
           </div>
@@ -280,7 +289,7 @@
         <div class="glass-panel rounded-2xl p-4 sm:p-6 lg:col-span-2 space-y-4">
           <div class="flex items-center justify-between">
             <h4 class="font-display font-bold text-base text-text-primary">Transacciones Recientes</h4>
-            <router-link to="/transactions" class="text-xs text-accent-emerald font-semibold hover:underline">
+            <router-link to="/transactions" class="-my-3 -mr-2 inline-flex items-center min-h-11 px-2 shrink-0 text-xs text-accent-emerald font-semibold hover:underline">
               Ver todas
             </router-link>
           </div>
@@ -291,22 +300,22 @@
               :key="tx.id"
               class="flex items-center justify-between p-3 rounded-xl bg-white/[0.01] border border-white/5 hover:border-white/10 transition-all"
             >
-              <div class="flex items-center space-x-3 truncate">
+              <div class="min-w-0 flex-1 flex items-center space-x-3 truncate">
                 <div 
-                  class="w-9 h-9 rounded-lg flex items-center justify-center text-xs"
+                  class="w-9 h-9 shrink-0 rounded-lg flex items-center justify-center text-xs"
                   :style="{ backgroundColor: (getCategory(tx.categoryId)?.color || '#94a3b8') + '12', color: getCategory(tx.categoryId)?.color || '#94a3b8' }"
                   v-if="getCategory(tx.categoryId)"
                 >
                   <component :is="getCategoryIcon(getCategory(tx.categoryId)?.icon || 'HelpCircle')" class="w-4 h-4" />
                 </div>
-                <div class="truncate">
+                <div class="min-w-0 truncate">
                   <p class="text-sm font-semibold text-text-primary truncate">{{ tx.description }}</p>
-                  <p class="text-[10px] text-text-secondary mt-0.5">{{ getAccountName(tx.accountId) }} • {{ formatDate(tx.date) }}</p>
+                  <p class="text-[10px] text-text-secondary mt-0.5 truncate">{{ getAccountName(tx.accountId) }} • {{ formatDate(tx.date) }}</p>
                 </div>
               </div>
 
-              <span class="text-right shrink-0">
-                <span :class="['font-display font-bold text-sm', displayOf(tx).amountClass]">
+              <span class="text-right shrink-0 pl-2">
+                <span :class="['font-display font-bold text-sm tabular-nums', displayOf(tx).amountClass]">
                   {{ displayOf(tx).prefix }}{{ formatCurrency(displayOf(tx).amount, tx.currency) }}
                 </span>
                 <span v-if="displayOf(tx).route" class="block text-[10px] text-text-muted mt-0.5">{{ displayOf(tx).route }}</span>
@@ -322,7 +331,7 @@
         <div class="glass-panel rounded-2xl p-4 sm:p-6 lg:col-span-1 space-y-4">
           <div class="flex items-center justify-between">
             <h4 class="font-display font-bold text-base text-text-primary">Saldos de Cuentas</h4>
-            <router-link to="/accounts" class="text-xs text-accent-emerald font-semibold hover:underline">
+            <router-link to="/accounts" class="-my-3 -mr-2 inline-flex items-center min-h-11 px-2 shrink-0 text-xs text-accent-emerald font-semibold hover:underline">
               Gestionar
             </router-link>
           </div>
@@ -333,11 +342,11 @@
               :key="acc.id"
               class="flex items-center justify-between p-3 rounded-xl bg-white/[0.01] border border-white/5"
             >
-              <div class="flex items-center space-x-2.5">
-                <component :is="getAccountIcon(acc.type)" class="w-4 h-4 text-text-secondary" />
-                <span class="text-sm font-medium text-text-primary truncate max-w-[160px]">{{ accountSummaryLabel(acc) }}</span>
+              <div class="min-w-0 flex-1 flex items-center space-x-2.5">
+                <component :is="getAccountIcon(acc.type)" class="w-4 h-4 shrink-0 text-text-secondary" />
+                <span class="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">{{ accountSummaryLabel(acc) }}</span>
               </div>
-              <span :class="['font-display font-semibold text-sm', acc.balance >= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
+              <span :class="['shrink-0 pl-2 font-display font-semibold text-sm tabular-nums', acc.balance >= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
                 {{ formatCurrency(acc.balance, acc.currency) }}
               </span>
             </div>
@@ -349,7 +358,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useAuthStore } from '@/stores/authStore'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
@@ -389,6 +398,23 @@ const donutCanvas = ref<HTMLCanvasElement | null>(null)
 const barCanvas = ref<HTMLCanvasElement | null>(null)
 let donutChart: Chart | null = null
 let barChart: Chart | null = null
+
+// Chart.js legend only from sm up; phones get a compact HTML legend instead.
+const smQuery = typeof window !== 'undefined' ? window.matchMedia('(min-width: 640px)') : null
+const isSmUp = ref(smQuery?.matches ?? true)
+const onSmChange = (e: MediaQueryListEvent) => {
+  isSmUp.value = e.matches
+}
+smQuery?.addEventListener('change', onSmChange)
+onBeforeUnmount(() => {
+  smQuery?.removeEventListener('change', onSmChange)
+  donutChart?.destroy()
+  barChart?.destroy()
+})
+watch(isSmUp, () => renderCharts())
+
+// Compact axis labels (e.g. "1,2 M", "350 mil") so the y-axis fits on narrow screens.
+const compactNumber = new Intl.NumberFormat('es-CO', { notation: 'compact', maximumFractionDigits: 1 })
 
 onMounted(async () => {
   await accountsStore.fetchAccounts()
@@ -583,6 +609,16 @@ const expensesByCategory = computed(() => {
   return groups
 })
 
+const donutLegend = computed(() =>
+  Object.entries(expensesByCategory.value)
+    .map(([name, amount]) => ({
+      name,
+      amount,
+      color: transactionsStore.categories.find(c => c.name === name)?.color || '#6b7280'
+    }))
+    .sort((a, b) => b.amount - a.amount)
+)
+
 // Gráficos renderizados con Chart.js directamente
 const renderCharts = () => {
   // Destruir instancias previas si existen
@@ -617,6 +653,7 @@ const renderCharts = () => {
         maintainAspectRatio: false,
         plugins: {
           legend: {
+            display: isSmUp.value,
             position: 'bottom',
             labels: {
               boxWidth: 10,
@@ -692,7 +729,11 @@ const renderCharts = () => {
           },
           y: {
             grid: { color: 'rgba(255,255,255,0.03)' },
-            ticks: { color: '#64748b', font: { family: 'Plus Jakarta Sans', size: 10 } }
+            ticks: {
+              color: '#64748b',
+              font: { family: 'Plus Jakarta Sans', size: 10 },
+              callback: (value) => compactNumber.format(Number(value))
+            }
           }
         },
         plugins: {

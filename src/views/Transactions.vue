@@ -382,7 +382,7 @@
     </div>
 
     <!-- Add Transaction Modal -->
-    <BaseSheet :open="showAddModal" title="Nueva Transacción" @close="closeAddModal">
+    <BaseSheet :open="showAddModal" title="Nueva Transacción" :close-on-backdrop="false" @close="closeAddModal">
         <p class="text-text-secondary text-xs mb-5">Registra un movimiento manual en tus cuentas.</p>
 
         <form id="add-tx-form" @submit.prevent="saveTransaction" class="space-y-4">
@@ -666,7 +666,7 @@
     </BaseSheet>
 
     <!-- Edit Transaction Modal -->
-    <BaseSheet :open="showEditModal" title="Editar Transacción" @close="closeEditModal">
+    <BaseSheet :open="showEditModal" title="Editar Transacción" :close-on-backdrop="false" @close="closeEditModal">
         <p class="text-text-secondary text-xs mb-5">Modifica los detalles de este movimiento.</p>
 
         <form id="edit-tx-form" @submit.prevent="saveEditedTransaction" class="space-y-4">

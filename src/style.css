@@ -254,3 +254,53 @@ body {
     transform: none;
   }
 }
+
+/* Range slider with a 24px thumb for touch. Thumb color follows `currentColor` (set a text-* class). */
+.range-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 1.5rem;
+  background: transparent;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.range-slider:focus {
+  outline: none;
+}
+.range-slider::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+.range-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 24px;
+  height: 24px;
+  margin-top: -9px;
+  border-radius: 50%;
+  background: currentColor;
+  border: 3px solid #080c14;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+}
+.range-slider::-moz-range-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+.range-slider::-moz-range-thumb {
+  box-sizing: border-box;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: currentColor;
+  border: 3px solid #080c14;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+}
+.range-slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.4);
+}
+.range-slider:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.4);
+}

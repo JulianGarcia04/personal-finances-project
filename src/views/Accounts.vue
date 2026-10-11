@@ -211,7 +211,7 @@
     </div>
 
     <!-- Add Account Modal -->
-    <BaseSheet :open="showAddModal" @close="closeAddModal">
+    <BaseSheet :open="showAddModal" :close-on-backdrop="false" @close="closeAddModal">
         <template #header>
           <h3 class="font-display font-bold text-xl sm:text-2xl text-text-primary truncate">
             {{ pocketParent ? 'Crear bolsillo' : 'Agregar Cuenta' }}
@@ -346,7 +346,7 @@
     </BaseSheet>
 
     <!-- Edit Account Modal -->
-    <BaseSheet :open="showEditModal" @close="closeEditAccountModal">
+    <BaseSheet :open="showEditModal" :close-on-backdrop="false" @close="closeEditAccountModal">
         <template #header>
           <h3 class="font-display font-bold text-xl sm:text-2xl text-text-primary truncate">{{ editingAccount?.parentAccountId ? 'Editar bolsillo' : 'Editar Cuenta' }}</h3>
         </template>

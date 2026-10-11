@@ -2,8 +2,8 @@
   <div class="max-w-6xl mx-auto space-y-8 pb-12">
     <!-- Header -->
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-      <div>
-        <h2 class="font-display font-bold text-3xl text-text-primary tracking-tight">
+      <div class="min-w-0">
+        <h2 class="font-display font-bold text-2xl sm:text-3xl text-text-primary tracking-tight">
           Objetivos & Presupuesto
         </h2>
         <p class="text-text-secondary text-sm mt-1">Crea metas de ahorro a largo plazo y define la distribución de tus ingresos mensuales.</p>
@@ -11,7 +11,7 @@
 
       <button 
         @click="showCreateModal = true"
-        class="inline-flex items-center space-x-2 px-5 py-3 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm transition-all shadow-glow-emerald cursor-pointer"
+        class="self-start sm:self-auto inline-flex items-center min-h-11 space-x-2 px-5 py-3 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm transition-all shadow-glow-emerald cursor-pointer"
       >
         <PlusIcon class="w-4 h-4" />
         <span>Nuevo Objetivo</span>
@@ -46,7 +46,7 @@
           </div>
           <button 
             @click="showCreateModal = true"
-            class="px-4 py-2 rounded-lg bg-slate-900 border border-border text-xs font-semibold text-text-primary hover:bg-slate-800 transition-colors"
+            class="min-h-11 px-4 py-2 rounded-lg bg-slate-900 border border-border text-xs font-semibold text-text-primary hover:bg-slate-800 transition-colors"
           >
             Crear mi primer objetivo
           </button>
@@ -60,25 +60,27 @@
             class="glass-panel rounded-2xl p-5 border border-white/5 space-y-4 hover:border-white/10 transition-all flex flex-col justify-between"
           >
             <!-- Goal Header -->
-            <div class="flex justify-between items-start">
-              <div>
-                <h4 class="font-display font-bold text-lg text-text-primary truncate max-w-[180px]">{{ goal.name }}</h4>
+            <div class="flex justify-between items-start gap-3">
+              <div class="min-w-0">
+                <h4 class="font-display font-bold text-lg text-text-primary truncate">{{ goal.name }}</h4>
                 <p class="text-[10px] text-text-muted mt-0.5">Meta: {{ formatDate(goal.targetDate) }}</p>
               </div>
-              <div class="flex items-center space-x-1.5">
+              <div class="flex items-center gap-2 shrink-0">
                 <button 
                   @click="openContributeModal(goal)"
                   title="Aportar saldo"
-                  class="p-2 rounded-lg bg-accent-emerald/10 border border-accent-emerald/20 text-accent-emerald hover:bg-accent-emerald/20 transition-colors cursor-pointer"
+                  aria-label="Aportar saldo"
+                  class="tap flex items-center justify-center rounded-xl bg-accent-emerald/10 border border-accent-emerald/20 text-accent-emerald hover:bg-accent-emerald/20 transition-colors cursor-pointer"
                 >
-                  <PiggyBankIcon class="w-3.5 h-3.5" />
+                  <PiggyBankIcon class="w-4 h-4" />
                 </button>
                 <button 
                   @click="handleDeleteGoal(goal.id)"
                   title="Eliminar meta"
-                  class="p-2 rounded-lg bg-accent-rose/10 border border-accent-rose/20 text-accent-rose hover:bg-accent-rose/20 transition-colors cursor-pointer"
+                  aria-label="Eliminar meta"
+                  class="tap flex items-center justify-center rounded-xl bg-accent-rose/10 border border-accent-rose/20 text-accent-rose hover:bg-accent-rose/20 transition-colors cursor-pointer"
                 >
-                  <TrashIcon class="w-3.5 h-3.5" />
+                  <TrashIcon class="w-4 h-4" />
                 </button>
               </div>
             </div>
@@ -99,21 +101,21 @@
               </div>
 
               <!-- Amounts -->
-              <div class="flex justify-between text-xs pt-1">
-                <div>
-                  <span class="text-text-muted">Ahorrado:</span>
-                  <span class="text-text-primary ml-1 font-semibold">{{ formatCurrency(goal.currentAmount, goal.currency) }}</span>
+              <div class="grid grid-cols-2 gap-2 text-xs pt-1">
+                <div class="min-w-0">
+                  <span class="block text-text-muted">Ahorrado</span>
+                  <span class="block text-text-primary font-semibold tabular-nums break-words">{{ formatCurrency(goal.currentAmount, goal.currency) }}</span>
                 </div>
-                <div>
-                  <span class="text-text-muted">Objetivo:</span>
-                  <span class="text-text-secondary ml-1 font-semibold">{{ formatCurrency(goal.targetAmount, goal.currency) }}</span>
+                <div class="min-w-0 text-right">
+                  <span class="block text-text-muted">Objetivo</span>
+                  <span class="block text-text-secondary font-semibold tabular-nums break-words">{{ formatCurrency(goal.targetAmount, goal.currency) }}</span>
                 </div>
               </div>
             </div>
 
             <!-- Goal Footer info -->
-            <div class="text-[10px] text-text-secondary bg-slate-950/30 p-2.5 rounded-lg border border-white/5 flex justify-between">
-              <span>Restante: {{ formatCurrency(Math.max(goal.targetAmount - goal.currentAmount, 0), goal.currency) }}</span>
+            <div class="text-[11px] text-text-secondary bg-slate-950/30 p-2.5 rounded-lg border border-white/5 flex flex-wrap justify-between gap-x-3 gap-y-1">
+              <span class="tabular-nums">Restante: {{ formatCurrency(Math.max(goal.targetAmount - goal.currentAmount, 0), goal.currency) }}</span>
               <span class="text-accent-violet font-semibold uppercase">{{ getDaysRemainingText(goal.targetDate) }}</span>
             </div>
           </div>
@@ -137,8 +139,9 @@
               <input 
                 v-model.number="incomeInput"
                 type="number"
+                inputmode="decimal"
                 min="0"
-                class="w-full pl-8 pr-4 py-3 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary focus:border-accent-emerald/40 focus:outline-hidden transition-all font-semibold"
+                class="field pl-8 font-semibold"
                 placeholder="Ingresa tus ingresos"
                 @change="saveBudget"
               />
@@ -150,8 +153,8 @@
             <canvas ref="budgetChartRef"></canvas>
             <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none mt-2">
               <span class="text-[10px] text-text-muted font-semibold uppercase tracking-wider">Ahorro</span>
-              <span class="font-display font-bold text-lg text-accent-emerald">
-                {{ formatCurrency(monthlySavingsAmount, userCurrency) }}
+              <span class="max-w-[8.5rem] truncate font-display font-bold text-base text-accent-emerald tabular-nums" :title="formatCurrency(monthlySavingsAmount, userCurrency)">
+                {{ formatCompactCurrency(monthlySavingsAmount, userCurrency) }}
               </span>
             </div>
           </div>
@@ -160,19 +163,19 @@
           <div class="space-y-4">
             <!-- Needs Slider (50% default) -->
             <div class="space-y-1.5">
-              <div class="flex justify-between text-xs font-semibold">
-                <span class="text-text-secondary flex items-center gap-1.5">
-                  <span class="w-2.5 h-2.5 rounded-full bg-accent-emerald"></span>
+              <div class="flex justify-between gap-2 text-xs font-semibold">
+                <span class="min-w-0 text-text-secondary flex items-center gap-1.5">
+                  <span class="shrink-0 w-2.5 h-2.5 rounded-full bg-accent-emerald"></span>
                   Necesidades (50%)
                 </span>
-                <span class="text-text-primary">{{ formatCurrency(monthlyNeedsAmount, userCurrency) }}</span>
+                <span class="shrink-0 text-text-primary tabular-nums">{{ formatCurrency(monthlyNeedsAmount, userCurrency) }}</span>
               </div>
               <input 
                 v-model.number="needsPercent"
                 type="range"
                 min="0"
                 max="100"
-                class="w-full accent-accent-emerald cursor-pointer"
+                class="range-slider text-accent-emerald"
                 @input="adjustSliders('needs')"
                 @change="saveBudget"
               />
@@ -180,19 +183,19 @@
 
             <!-- Wants Slider (30% default) -->
             <div class="space-y-1.5">
-              <div class="flex justify-between text-xs font-semibold">
-                <span class="text-text-secondary flex items-center gap-1.5">
-                  <span class="w-2.5 h-2.5 rounded-full bg-accent-violet"></span>
+              <div class="flex justify-between gap-2 text-xs font-semibold">
+                <span class="min-w-0 text-text-secondary flex items-center gap-1.5">
+                  <span class="shrink-0 w-2.5 h-2.5 rounded-full bg-accent-violet"></span>
                   Deseos (30%)
                 </span>
-                <span class="text-text-primary">{{ formatCurrency(monthlyWantsAmount, userCurrency) }}</span>
+                <span class="shrink-0 text-text-primary tabular-nums">{{ formatCurrency(monthlyWantsAmount, userCurrency) }}</span>
               </div>
               <input 
                 v-model.number="wantsPercent"
                 type="range"
                 min="0"
                 max="100"
-                class="w-full accent-accent-violet cursor-pointer"
+                class="range-slider text-accent-violet"
                 @input="adjustSliders('wants')"
                 @change="saveBudget"
               />
@@ -200,19 +203,19 @@
 
             <!-- Savings Slider (20% default) -->
             <div class="space-y-1.5">
-              <div class="flex justify-between text-xs font-semibold">
-                <span class="text-text-secondary flex items-center gap-1.5">
-                  <span class="w-2.5 h-2.5 rounded-full bg-accent-amber"></span>
+              <div class="flex justify-between gap-2 text-xs font-semibold">
+                <span class="min-w-0 text-text-secondary flex items-center gap-1.5">
+                  <span class="shrink-0 w-2.5 h-2.5 rounded-full bg-accent-amber"></span>
                   Ahorro (20%)
                 </span>
-                <span class="text-text-primary">{{ formatCurrency(monthlySavingsAmount, userCurrency) }}</span>
+                <span class="shrink-0 text-text-primary tabular-nums">{{ formatCurrency(monthlySavingsAmount, userCurrency) }}</span>
               </div>
               <input 
                 v-model.number="savingsPercent"
                 type="range"
                 min="0"
                 max="100"
-                class="w-full accent-accent-amber cursor-pointer"
+                class="range-slider text-accent-amber"
                 @input="adjustSliders('savings')"
                 @change="saveBudget"
               />
@@ -220,7 +223,7 @@
           </div>
 
           <!-- Total Allocation indicator -->
-          <div class="p-3 bg-slate-950/45 border border-white/5 rounded-xl text-center text-xs flex justify-between">
+          <div class="p-3 bg-slate-950/45 border border-white/5 rounded-xl text-center text-xs flex justify-between gap-2">
             <span class="text-text-secondary">Suma total porcentajes:</span>
             <span :class="[isPercentSumValid ? 'text-accent-emerald font-bold' : 'text-accent-rose font-bold']">
               {{ needsPercent + wantsPercent + savingsPercent }}%
@@ -232,8 +235,8 @@
 
     <!-- Category Budgets (presupuesto mensual recurrente) -->
     <div class="space-y-6">
-      <h3 class="font-display font-bold text-xl text-text-primary flex items-center space-x-2">
-        <WalletIcon class="w-5 h-5 text-accent-emerald" />
+      <h3 class="font-display font-bold text-lg sm:text-xl text-text-primary flex items-center space-x-2">
+        <WalletIcon class="w-5 h-5 shrink-0 text-accent-emerald" />
         <span>Presupuesto Mensual por Categoría</span>
       </h3>
 
@@ -253,9 +256,9 @@
           class="flex flex-col sm:flex-row sm:items-center gap-3 py-3 border-b border-white/5 last:border-0"
         >
           <!-- Category identity -->
-          <div class="flex items-center space-x-2.5 sm:w-48 shrink-0">
+          <div class="min-w-0 flex items-center space-x-2.5 sm:w-48 shrink-0">
             <span
-              class="p-2 rounded-lg"
+              class="shrink-0 p-2 rounded-lg"
               :style="{ backgroundColor: cat.color + '15', color: cat.color }"
             >
               <component :is="getCategoryIcon(cat.icon)" class="w-4 h-4" />
@@ -269,17 +272,18 @@
             <input
               :value="categoryBudgetInputs[cat.id] ?? ''"
               type="number"
+              inputmode="decimal"
               min="0"
               placeholder="Sin límite"
-              class="w-full pl-7 pr-3 py-2 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary focus:border-accent-emerald/40 focus:outline-hidden transition-all"
+              class="field pl-7"
               @change="(e) => saveCategoryBudget(cat.id, (e.target as HTMLInputElement).value)"
             />
           </div>
 
           <!-- Progress vs real spending -->
           <div class="flex-1 space-y-1">
-            <div class="flex justify-between text-[11px] font-semibold">
-              <span class="text-text-secondary">
+            <div class="flex flex-wrap justify-between gap-x-2 text-[11px] font-semibold">
+              <span class="text-text-secondary tabular-nums">
                 Gastado: {{ formatCurrency(spendingByCategory[cat.id] || 0, userCurrency) }}
               </span>
               <span v-if="categoryBudgetInputs[cat.id]" :class="budgetPercent(cat.id) > 100 ? 'text-accent-rose' : budgetPercent(cat.id) >= 70 ? 'text-accent-amber' : 'text-accent-emerald'">
@@ -302,25 +306,25 @@
         <!-- ponytail: no sabemos qué categorías son "necesidad" vs "deseo"; comparamos gasto total y ahorro reales contra el plan -->
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
           <div class="space-y-1.5">
-            <div class="flex justify-between font-semibold">
-              <span class="text-text-secondary">Gasto (plan necesidades+deseos)</span>
-              <span class="text-text-primary">{{ formatCurrency(monthlyNeedsAmount + monthlyWantsAmount, userCurrency) }}</span>
+            <div class="flex justify-between gap-2 font-semibold">
+              <span class="min-w-0 text-text-secondary">Gasto (plan necesidades+deseos)</span>
+              <span class="shrink-0 text-right text-text-primary tabular-nums">{{ formatCurrency(monthlyNeedsAmount + monthlyWantsAmount, userCurrency) }}</span>
             </div>
-            <div class="flex justify-between font-semibold">
-              <span class="text-text-secondary">Gasto real del mes</span>
-              <span :class="realMonthExpense > (monthlyNeedsAmount + monthlyWantsAmount) ? 'text-accent-rose' : 'text-accent-emerald'">
+            <div class="flex justify-between gap-2 font-semibold">
+              <span class="min-w-0 text-text-secondary">Gasto real del mes</span>
+              <span class="shrink-0 text-right tabular-nums" :class="realMonthExpense > (monthlyNeedsAmount + monthlyWantsAmount) ? 'text-accent-rose' : 'text-accent-emerald'">
                 {{ formatCurrency(realMonthExpense, userCurrency) }}
               </span>
             </div>
           </div>
           <div class="space-y-1.5">
-            <div class="flex justify-between font-semibold">
-              <span class="text-text-secondary">Ahorro (plan)</span>
-              <span class="text-text-primary">{{ formatCurrency(monthlySavingsAmount, userCurrency) }}</span>
+            <div class="flex justify-between gap-2 font-semibold">
+              <span class="min-w-0 text-text-secondary">Ahorro (plan)</span>
+              <span class="shrink-0 text-right text-text-primary tabular-nums">{{ formatCurrency(monthlySavingsAmount, userCurrency) }}</span>
             </div>
-            <div class="flex justify-between font-semibold">
-              <span class="text-text-secondary">Ahorro real del mes</span>
-              <span :class="realMonthSavings >= monthlySavingsAmount ? 'text-accent-emerald' : 'text-accent-amber'">
+            <div class="flex justify-between gap-2 font-semibold">
+              <span class="min-w-0 text-text-secondary">Ahorro real del mes</span>
+              <span class="shrink-0 text-right tabular-nums" :class="realMonthSavings >= monthlySavingsAmount ? 'text-accent-emerald' : 'text-accent-amber'">
                 {{ formatCurrency(realMonthSavings, userCurrency) }}
               </span>
             </div>
@@ -329,52 +333,45 @@
       </div>
     </div>
 
-    <!-- Modal: Create Savings Goal -->
-    <div 
-      v-if="showCreateModal"
-      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs"
-    >
-      <div class="glass-panel w-full max-w-md rounded-2xl border border-white/10 p-4 sm:p-6 space-y-6 max-h-[90vh] overflow-y-auto">
-        <div class="flex justify-between items-center">
-          <h3 class="font-display font-bold text-xl text-text-primary">Nuevo Objetivo de Ahorro</h3>
-          <button @click="showCreateModal = false" class="text-text-muted hover:text-text-primary cursor-pointer">
-            <XIcon class="w-5 h-5" />
-          </button>
-        </div>
-
-        <form @submit.prevent="handleCreateGoal" class="space-y-4">
+    <!-- Sheet: Create Savings Goal -->
+    <BaseSheet :open="showCreateModal" title="Nuevo Objetivo de Ahorro" :close-on-backdrop="false" @close="showCreateModal = false">
+        <form id="create-goal-form" @submit.prevent="handleCreateGoal" class="space-y-4">
           <!-- Goal Name -->
           <div class="space-y-1.5">
-            <label class="block text-xs font-semibold text-text-secondary">Nombre de la Meta</label>
+            <label for="goal-name" class="block text-xs font-semibold text-text-secondary">Nombre de la Meta</label>
             <input 
+              id="goal-name"
               v-model="newGoalName"
               type="text"
               required
-              class="w-full px-4 py-3 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary focus:border-accent-emerald/40 focus:outline-hidden transition-all"
+              class="field"
               placeholder="Ej. Comprar un carro nuevo 🚗"
             />
           </div>
 
-          <div class="grid grid-cols-2 gap-4">
+          <div class="grid grid-cols-1 min-[400px]:grid-cols-2 gap-4">
             <!-- Target Amount -->
             <div class="space-y-1.5">
-              <label class="block text-xs font-semibold text-text-secondary">Monto Objetivo</label>
+              <label for="goal-target" class="block text-xs font-semibold text-text-secondary">Monto Objetivo</label>
               <input 
+                id="goal-target"
                 v-model.number="newGoalTargetAmount"
                 type="number"
+                inputmode="decimal"
                 required
                 min="1"
-                class="w-full px-4 py-3 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary focus:border-accent-emerald/40 focus:outline-hidden transition-all font-semibold"
+                class="field font-semibold"
                 placeholder="Monto total"
               />
             </div>
 
             <!-- Currency -->
             <div class="space-y-1.5">
-              <label class="block text-xs font-semibold text-text-secondary">Moneda</label>
+              <label for="goal-currency" class="block text-xs font-semibold text-text-secondary">Moneda</label>
               <select 
+                id="goal-currency"
                 v-model="newGoalCurrency"
-                class="w-full px-4 py-3 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary focus:border-accent-emerald/40 focus:outline-hidden transition-all font-semibold cursor-pointer"
+                class="field font-semibold cursor-pointer"
               >
                 <option value="USD">USD ($)</option>
                 <option value="COP">COP ($)</option>
@@ -383,72 +380,58 @@
             </div>
           </div>
 
-          <div class="grid grid-cols-2 gap-4">
+          <div class="grid grid-cols-1 min-[400px]:grid-cols-2 gap-4">
             <!-- Current Amount (Optional) -->
             <div class="space-y-1.5">
-              <label class="block text-xs font-semibold text-text-secondary">Monto Inicial (Opcional)</label>
+              <label for="goal-current" class="block text-xs font-semibold text-text-secondary">Monto Inicial (Opcional)</label>
               <input 
+                id="goal-current"
                 v-model.number="newGoalCurrentAmount"
                 type="number"
+                inputmode="decimal"
                 min="0"
-                class="w-full px-4 py-3 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary focus:border-accent-emerald/40 focus:outline-hidden transition-all"
+                class="field"
                 placeholder="Ya ahorrado"
               />
             </div>
 
             <!-- Target Date -->
             <div class="space-y-1.5">
-              <label class="block text-xs font-semibold text-text-secondary">Fecha Límite</label>
+              <label for="goal-date" class="block text-xs font-semibold text-text-secondary">Fecha Límite</label>
               <input 
+                id="goal-date"
                 v-model="newGoalTargetDate"
                 type="date"
                 required
-                class="w-full px-4 py-3 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary focus:border-accent-emerald/40 focus:outline-hidden transition-all cursor-pointer"
+                class="field cursor-pointer"
               />
             </div>
           </div>
+        </form>
 
-          <!-- Actions -->
-          <div class="flex justify-end space-x-3 pt-4 border-t border-white/5">
-            <button 
-              type="button"
-              @click="showCreateModal = false"
-              class="px-4 py-2.5 rounded-xl bg-slate-950 border border-white/5 text-xs font-semibold text-text-secondary hover:text-text-primary hover:bg-slate-900 transition-colors cursor-pointer"
-            >
+        <template #footer>
+          <div class="flex gap-3">
+            <button type="button" @click="showCreateModal = false" class="flex-1 min-h-11 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all cursor-pointer">
               Cancelar
             </button>
-            <button 
-              type="submit"
-              class="px-4 py-2.5 rounded-xl bg-accent-emerald text-background font-display font-bold text-xs hover:bg-accent-emerald-hover shadow-glow-emerald cursor-pointer"
-            >
+            <button type="submit" form="create-goal-form" class="flex-1 min-h-11 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer">
               Crear Meta
             </button>
           </div>
-        </form>
-      </div>
-    </div>
+        </template>
+    </BaseSheet>
 
-    <!-- Modal: Contribute funds -->
-    <div 
-      v-if="showContributeModal"
-      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs"
-    >
-      <div class="glass-panel w-full max-w-md rounded-2xl border border-white/10 p-4 sm:p-6 space-y-6 max-h-[90vh] overflow-y-auto">
-        <div class="flex justify-between items-center">
-          <h3 class="font-display font-bold text-xl text-text-primary">Aportar a: {{ selectedGoal?.name }}</h3>
-          <button @click="showContributeModal = false" class="text-text-muted hover:text-text-primary cursor-pointer">
-            <XIcon class="w-5 h-5" />
-          </button>
-        </div>
-
-        <form @submit.prevent="handleContribute" class="space-y-4">
+    <!-- Sheet: Contribute funds -->
+    <BaseSheet :open="showContributeModal" :title="`Aportar a: ${selectedGoal?.name ?? ''}`" :close-on-backdrop="false" @close="showContributeModal = false">
+        <form id="contribute-goal-form" @submit.prevent="handleContribute" class="space-y-4">
           <!-- Selected Account -->
           <div class="space-y-1.5">
-            <label class="block text-xs font-semibold text-text-secondary">Deducir de la Cuenta</label>
+            <label for="contribute-account" class="block text-xs font-semibold text-text-secondary">Deducir de la Cuenta</label>
             <select 
+              id="contribute-account"
               v-model="contributeAccountId"
               required
-              class="w-full px-4 py-3 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary focus:border-accent-emerald/40 focus:outline-hidden transition-all font-semibold cursor-pointer"
+              class="field font-semibold cursor-pointer"
             >
               <option value="" disabled>Selecciona una cuenta</option>
               <option 
@@ -463,42 +446,37 @@
 
           <!-- Contribute Amount -->
           <div class="space-y-1.5">
-            <label class="block text-xs font-semibold text-text-secondary">Monto a Aportar</label>
+            <label for="contribute-amount" class="block text-xs font-semibold text-text-secondary">Monto a Aportar</label>
             <div class="relative">
-              <span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-text-muted font-semibold">
+              <span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-text-muted font-semibold pointer-events-none">
                 {{ selectedGoal ? (selectedGoal.currency === 'COP' ? '$' : selectedGoal.currency) : '$' }}
               </span>
               <input 
+                id="contribute-amount"
                 v-model.number="contributeAmount"
                 type="number"
+                inputmode="decimal"
                 required
                 min="1"
-                class="w-full pl-8 pr-4 py-3 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary focus:border-accent-emerald/40 focus:outline-hidden transition-all font-semibold"
+                :class="['field font-semibold', selectedGoal && selectedGoal.currency !== 'COP' ? 'pl-14' : 'pl-8']"
                 placeholder="0"
               />
             </div>
-            <p class="text-[10px] text-text-muted mt-1">Este aporte se registrará automáticamente como un movimiento en tus transacciones.</p>
+            <p class="text-[11px] text-text-muted mt-1">Este aporte se registrará automáticamente como un movimiento en tus transacciones.</p>
           </div>
+        </form>
 
-          <!-- Actions -->
-          <div class="flex justify-end space-x-3 pt-4 border-t border-white/5">
-            <button 
-              type="button"
-              @click="showContributeModal = false"
-              class="px-4 py-2.5 rounded-xl bg-slate-950 border border-white/5 text-xs font-semibold text-text-secondary hover:text-text-primary hover:bg-slate-900 transition-colors cursor-pointer"
-            >
+        <template #footer>
+          <div class="flex gap-3">
+            <button type="button" @click="showContributeModal = false" class="flex-1 min-h-11 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all cursor-pointer">
               Cancelar
             </button>
-            <button 
-              type="submit"
-              class="px-4 py-2.5 rounded-xl bg-accent-emerald text-background font-display font-bold text-xs hover:bg-accent-emerald-hover shadow-glow-emerald cursor-pointer"
-            >
+            <button type="submit" form="contribute-goal-form" class="flex-1 min-h-11 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer">
               Realizar Aporte
             </button>
           </div>
-        </form>
-      </div>
-    </div>
+        </template>
+    </BaseSheet>
   </div>
 </template>
 
@@ -509,6 +487,7 @@ import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { Goal } from '@/types'
+import BaseSheet from '@/components/ui/BaseSheet.vue'
 import { expenseAmountForDate } from '@/lib/installments'
 import { getAccountDisplayLabel, isPocketRelatedAccount } from '@/lib/pockets'
 import {
@@ -516,7 +495,6 @@ import {
   PiggyBank as PiggyBankIcon,
   Trash2 as TrashIcon,
   Plus as PlusIcon,
-  X as XIcon,
   Wallet as WalletIcon,
   Utensils, Car, Film, Lightbulb, Heart, GraduationCap, TrendingUp, HelpCircle,
   ShoppingBag, Home, Gift, Coffee, Plane, DollarSign, PiggyBank, Smartphone,
@@ -634,6 +612,16 @@ const formatCurrency = (val: number, currency: string) => {
     currency: currency || 'USD',
     minimumFractionDigits: 0,
     maximumFractionDigits: 0
+  }).format(val)
+}
+
+// Compact form for tight spots (donut centre), e.g. "1,2 M US$".
+const formatCompactCurrency = (val: number, currency: string) => {
+  return new Intl.NumberFormat('es-ES', {
+    style: 'currency',
+    currency: currency || 'USD',
+    notation: 'compact',
+    maximumFractionDigits: 1
   }).format(val)
 }
 
@@ -898,23 +886,3 @@ const getCategoryIcon = (iconName: string) => {
   return icons[iconName] || HelpCircle
 }
 </script>
-
-<style scoped>
-/* Slider premium adjustments */
-input[type="range"] {
-  -webkit-appearance: none;
-  appearance: none;
-  height: 6px;
-  border-radius: 9999px;
-  background: rgba(255, 255, 255, 0.08);
-}
-input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
-  border: 2px solid #080c14;
-}
-</style>
