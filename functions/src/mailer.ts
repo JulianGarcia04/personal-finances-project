@@ -58,6 +58,7 @@ export function createGmailSender(
 ): SendEmail {
   const transport = createTransport({ service: "gmail", auth: { user: config.user, pass: config.pass } });
   return async ({ to, subject, html, text }) => {
-    await transport.sendMail({ from: config.from, to: to.join(", "), subject, html, text });
+    // Members are BCC-ed so no one sees the other recipients' addresses.
+    await transport.sendMail({ from: config.from, to: config.from, bcc: to.join(", "), subject, html, text });
   };
 }

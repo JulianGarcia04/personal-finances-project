@@ -42,7 +42,7 @@ test("createGmailSender uses the Gmail service with the app password and the con
   });
   await send({ to: ["x@mail.com", "y@mail.com"], subject: "S", html: "<p>H</p>", text: "T" });
   assert.deepEqual(calls.options, { service: "gmail", auth: { user: "a@gmail.com", pass: "app-pass" } });
-  assert.deepEqual(calls.mail, { from: "Vault <a@gmail.com>", to: "x@mail.com, y@mail.com", subject: "S", html: "<p>H</p>", text: "T" });
+  assert.deepEqual(calls.mail, { from: "Vault <a@gmail.com>", to: "Vault <a@gmail.com>", bcc: "x@mail.com, y@mail.com", subject: "S", html: "<p>H</p>", text: "T" });
 });
 
 test("budget alert email at 80% says the cap is near", () => {
