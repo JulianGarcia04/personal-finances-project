@@ -117,6 +117,43 @@ test('client income into a pocket records the movement and balance atomically', 
   assert.equal((await adminDb.collection('accounts').doc(parent.id).get()).data().balance, 500)
 })
 
+test('statement import applies mixed income and expense rows atomically to pockets and their parent bank', async () => {
+  const { accountsStore, transactionsStore, adminDb, workspaceId } = fixture
+  const parent = await accountsStore.addAccount({ name: 'Statement import parent', type: 'checking', balance: 1_000, currency: 'COP' })
+  const pocket = await accountsStore.addAccount({
+    name: 'Statement import pocket', type: 'savings', balance: 300, currency: 'COP', parentAccountId: parent.id
+  })
+  const beforeTransactions = await adminDb.collection('transactions').where('workspaceId', '==', workspaceId).get()
+  const rows = [
+    { date: '2026-10-10T10:00:00.000Z', description: 'Statement income', amount: 50, categorySuggestion: 'Income' },
+    { date: '2026-10-10T11:00:00.000Z', description: 'Statement expense', amount: -20, categorySuggestion: 'Food' }
+  ]
+
+  const results = await Promise.allSettled([
+    transactionsStore.addTransactionsBatch(pocket.id, rows),
+    transactionsStore.addTransactionsBatch(parent.id, rows)
+  ])
+  const [parentAfter, pocketAfter, afterTransactions] = await Promise.all([
+    adminDb.collection('accounts').doc(parent.id).get(),
+    adminDb.collection('accounts').doc(pocket.id).get(),
+    adminDb.collection('transactions').where('workspaceId', '==', workspaceId).get()
+  ])
+
+  assert.deepEqual({
+    outcomes: results.map(result => result.status),
+    parentBalance: parentAfter.data().balance,
+    pocketBalance: pocketAfter.data().balance,
+    newTransactionCount: afterTransactions.size - beforeTransactions.size,
+    importedTypes: results.flatMap(result => result.status === 'fulfilled' ? result.value.map(tx => tx.type) : [])
+  }, {
+    outcomes: ['fulfilled', 'fulfilled'],
+    parentBalance: 730,
+    pocketBalance: 330,
+    newTransactionCount: 4,
+    importedTypes: ['income', 'expense', 'income', 'expense']
+  })
+})
+
 test('client edits and reversals update overlapping pocket accounts atomically', async () => {
   const { accountsStore, transactionsStore, adminDb } = fixture
   const parent = await accountsStore.addAccount({ name: 'Movement parent', type: 'checking', balance: 900, currency: 'COP' })
@@ -649,7 +686,7 @@ test('rules protect hierarchy metadata and reject unsupported sequential pocket 
   assert.equal((await adminDb.collection('accounts').doc(pocket.id).get()).data().balance, 200)
   const beforeImport = await adminDb.collection('transactions').where('workspaceId', '==', workspaceId).get()
   await assert.rejects(transactionsStore.addTransactionsBatch(pocket.id, [{
-    date: new Date().toISOString(), description: 'Unsupported imported pocket expense', amount: -5,
+    date: 'not-a-date', description: 'Invalid imported pocket expense', amount: -5,
     categorySuggestion: 'Food'
   }]))
   assert.equal((await adminDb.collection('transactions').where('workspaceId', '==', workspaceId).get()).size, beforeImport.size)

@@ -9,6 +9,7 @@ import { genkit } from "genkit";
 import { googleAI } from "@genkit-ai/google-genai";
 import { z } from "zod";
 import { createWorkspaceAccount, mutateWorkspaceTransaction } from "./pockets";
+export { importPocketStatement } from "./pocketImports";
 
 dotenv.config();
 const corsHandler = cors({ origin: true });

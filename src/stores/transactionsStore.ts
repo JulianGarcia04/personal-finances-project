@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { db, auth, storage } from '@/lib/firebase'
+import { db, auth, storage, functions } from '@/lib/firebase'
 import { useAccountsStore } from './accountsStore'
 import { useAuthStore } from './authStore'
 import { Account, Transaction, Category, TransactionType } from '@/types'
@@ -22,6 +22,8 @@ import {
   increment,
   Timestamp
 } from 'firebase/firestore'
+import { httpsCallable } from 'firebase/functions'
+import { StatementImportBatchSchema } from '@/schemas'
 import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage'
 
 // Categorías por defecto iniciales
@@ -114,6 +116,12 @@ function publishPocketDeltas(
     account.balance += delta
     if (account.parentAccountId) account.pocketActivity = true
   }
+}
+
+class ImportMustUsePocketCallable extends Error {}
+
+function importContextIsCurrent(userId: string, workspaceId: string): boolean {
+  return auth.currentUser?.uid === userId && useAuthStore().activeWorkspaceId === workspaceId
 }
 
 async function commitPocketMovement(options: {
@@ -866,71 +874,169 @@ export const useTransactionsStore = defineStore('transactions', {
       const accountsStore = useAccountsStore()
       const account = accountsStore.getAccountById(accountId)
       if (!account) throw new Error('Cuenta no encontrada')
-      if (movementAccountIsPocketRelated(account)) {
-        throw new Error('La importación en lote todavía no admite cuentas con bolsillos; no se guardó ningún movimiento.')
-      }
-
-      this.loading = true
-      const batch = writeBatch(db)
+      const parsedRows = StatementImportBatchSchema.parse(rawTxsList)
+      const initiatingUserId = user.uid
+      const initiatingWorkspaceId = workspaceId
+      const initiatingAccountId = accountId
+      const expectedCurrency = account.currency || 'USD'
+      const eligibleCategories = this.categories.filter(category =>
+        category.workspaceId === null || category.workspaceId === workspaceId
+      )
+      const preparedRows = parsedRows.map(row => {
+        const suggestion = row.categorySuggestion.toLowerCase()
+        const matchedCategory = eligibleCategories.find(category =>
+          category.name.toLowerCase() === suggestion
+        )
+        const fallbackCategory = eligibleCategories.find(category =>
+          category.name.toLowerCase() === 'otros'
+        )
+        return {
+          ...row,
+          dateValue: new Date(row.date),
+          categoryId: matchedCategory?.id ?? fallbackCategory?.id ?? ''
+        }
+      })
+      const totalAmountChange = preparedRows.reduce((total, row) => total + row.amount, 0)
+      if (!Number.isFinite(totalAmountChange)) throw new Error('El total del extracto no es válido.')
       const addedLocalTxs: Transaction[] = []
-      let totalAmountChange = 0
+      const transactionRefs = preparedRows.map(() => doc(collection(db, 'transactions')))
+      const createdAt = new Date()
+      let finalBalance: number | null = null
+      let usePocketCallable = movementAccountIsPocketRelated(account)
 
+      const assertCurrentContext = () => {
+        if (!importContextIsCurrent(initiatingUserId, initiatingWorkspaceId)) {
+          throw new Error('La sesión o el workspace cambió antes de guardar el extracto.')
+        }
+      }
       try {
-        rawTxsList.forEach(tx => {
-          const docRef = doc(collection(db, 'transactions'))
-          const txDate = new Date(tx.date)
-          
-          let categoryId = ''
-          const matchedCategory = this.categories.find(c => 
-            c.name.toLowerCase() === tx.categorySuggestion.toLowerCase()
-          )
-          if (matchedCategory) {
-            categoryId = matchedCategory.id
-          } else {
-            const otherCat = this.categories.find(c => c.name === 'Otros')
-            categoryId = otherCat ? otherCat.id : ''
+        if (!usePocketCallable) {
+          const accountRef = doc(db, 'accounts', initiatingAccountId)
+          try {
+            finalBalance = await runTransaction(db, async transaction => {
+              assertCurrentContext()
+              const accountSnapshot = await transaction.get(accountRef)
+              if (!accountSnapshot.exists()) throw new Error('Cuenta no encontrada')
+              const storedAccount = accountSnapshot.data() as Account
+              if (storedAccount.workspaceId !== initiatingWorkspaceId ||
+                  (storedAccount.currency || 'USD') !== expectedCurrency) {
+                throw new Error('La cuenta cambió de workspace o moneda durante la importación.')
+              }
+              if (movementAccountIsPocketRelated(storedAccount)) throw new ImportMustUsePocketCallable()
+              const currentBalance = Number(storedAccount.balance)
+              const balanceAfter = currentBalance + totalAmountChange
+              if (!Number.isFinite(currentBalance) || !Number.isFinite(balanceAfter)) {
+                throw new Error('El saldo de la cuenta no es válido.')
+              }
+              const txData = preparedRows.map((row, index) => ({
+                workspaceId: initiatingWorkspaceId,
+                userId: initiatingUserId,
+                accountId: initiatingAccountId,
+                amount: row.amount,
+                description: row.description,
+                categoryId: row.categoryId,
+                date: Timestamp.fromDate(row.dateValue),
+                type: row.amount > 0 ? 'income' as TransactionType : 'expense' as TransactionType,
+                toAccountId: null,
+                currency: expectedCurrency,
+                createdAt,
+                id: transactionRefs[index].id
+              }))
+              for (const item of txData) {
+                const { id, ...data } = item
+                transaction.set(doc(db, 'transactions', id), data)
+              }
+              transaction.update(accountRef, { balance: balanceAfter })
+              return balanceAfter
+            })
+            for (const [index, row] of preparedRows.entries()) {
+              const txData = {
+                workspaceId: initiatingWorkspaceId,
+                userId: initiatingUserId,
+                accountId: initiatingAccountId,
+                amount: row.amount,
+                description: row.description,
+                categoryId: row.categoryId,
+                date: Timestamp.fromDate(row.dateValue),
+                type: row.amount > 0 ? 'income' as TransactionType : 'expense' as TransactionType,
+                toAccountId: null,
+                currency: expectedCurrency,
+                createdAt
+              }
+              addedLocalTxs.push({ id: transactionRefs[index].id, ...txData, date: row.dateValue })
+            }
+          } catch (error) {
+            let relatedInFirestore = error instanceof ImportMustUsePocketCallable
+            const firestoreCode = (error as { code?: string } | null)?.code
+            if (!relatedInFirestore && (firestoreCode === 'permission-denied' || firestoreCode === 'aborted')) {
+              assertCurrentContext()
+              try {
+                const latestSnapshot = await getDoc(accountRef)
+                if (latestSnapshot.exists()) {
+                  const latestAccount = latestSnapshot.data() as Account
+                  relatedInFirestore = latestAccount.workspaceId === initiatingWorkspaceId &&
+                    (latestAccount.currency || 'USD') === expectedCurrency &&
+                    movementAccountIsPocketRelated(latestAccount)
+                }
+              } catch {
+                // Preserve the original atomic failure if the authoritative re-read is unavailable.
+              }
+            }
+            if (!relatedInFirestore) throw error
+            usePocketCallable = true
           }
+        }
 
-          const txAmount = Number(tx.amount)
-          totalAmountChange += txAmount
-
-          const txData = {
-            workspaceId,
-            userId: user.uid,
-            accountId,
-            amount: txAmount,
-            description: tx.description,
-            categoryId,
-            date: Timestamp.fromDate(txDate),
-            type: txAmount >= 0 ? 'income' as TransactionType : 'expense' as TransactionType,
-            toAccountId: null,
-            currency: account.currency || 'USD',
-            createdAt: new Date()
-          }
-
-          batch.set(docRef, txData)
-          addedLocalTxs.push({
-            id: docRef.id,
-            ...txData,
-            date: txDate
+        if (usePocketCallable) {
+          assertCurrentContext()
+          const callable = httpsCallable(functions, 'importPocketStatement')
+          const response = await callable({
+            workspaceId: initiatingWorkspaceId,
+            accountId: initiatingAccountId,
+            expectedCurrency,
+            rows: preparedRows.map(row => ({
+              date: row.dateValue.toISOString(),
+              description: row.description,
+              amount: row.amount,
+              categoryId: row.categoryId
+            }))
           })
-        })
+          const result = response.data as { balance: number; createdAt: string; transactions: Array<{ id: string }> }
+          if (!Number.isFinite(result.balance) || !Number.isFinite(new Date(result.createdAt).getTime()) ||
+              result.transactions.length !== preparedRows.length) {
+            throw new Error('La respuesta del importador no coincide con las filas enviadas.')
+          }
+          preparedRows.forEach((row, index) => {
+            const txData = {
+              workspaceId: initiatingWorkspaceId,
+              userId: initiatingUserId,
+              accountId: initiatingAccountId,
+              amount: row.amount,
+              description: row.description,
+              categoryId: row.categoryId,
+              date: Timestamp.fromDate(row.dateValue),
+              type: row.amount > 0 ? 'income' as TransactionType : 'expense' as TransactionType,
+              toAccountId: null,
+              currency: expectedCurrency,
+              createdAt: new Date(result.createdAt)
+            }
+            addedLocalTxs.push({ id: result.transactions[index].id, ...txData, date: row.dateValue })
+          })
+          finalBalance = result.balance
+        }
 
-        // Ejecutar en Firestore
-        await batch.commit()
-
-        // Actualizar balance
-        await accountsStore.updateAccountBalance(accountId, totalAmountChange)
-
-        this.transactions = [...addedLocalTxs, ...this.transactions]
-        this.transactions.sort((a, b) => b.date.getTime() - a.date.getTime())
-
+        if (importContextIsCurrent(initiatingUserId, initiatingWorkspaceId)) {
+          const currentAccount = accountsStore.accounts.find(existing =>
+            existing.id === initiatingAccountId && existing.workspaceId === initiatingWorkspaceId
+          )
+          if (currentAccount && finalBalance !== null) currentAccount.balance = finalBalance
+          this.transactions = [...addedLocalTxs, ...this.transactions]
+          this.transactions.sort((a, b) => b.date.getTime() - a.date.getTime())
+        }
         return addedLocalTxs
       } catch (error) {
         console.error('Error al importar lote de transacciones:', error)
         throw error
-      } finally {
-        this.loading = false
       }
     },
 

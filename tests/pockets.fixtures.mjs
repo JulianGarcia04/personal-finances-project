@@ -54,10 +54,11 @@ export async function createPocketFixture() {
   })
 
   try {
-    const { auth, db, app } = await vite.ssrLoadModule('/src/lib/firebase.ts')
+    const { auth, db, app, functions } = await vite.ssrLoadModule('/src/lib/firebase.ts')
     const { initializeApp, deleteApp } = await import('firebase/app')
     const { getAuth, connectAuthEmulator, createUserWithEmailAndPassword, signOut } = await import('firebase/auth')
     const { getFirestore, connectFirestoreEmulator, doc, setDoc, terminate } = await import('firebase/firestore')
+    const { getFunctions, connectFunctionsEmulator } = await import('firebase/functions')
     const { createPinia, setActivePinia } = await import('pinia')
     const authStoreModule = await vite.ssrLoadModule('/src/stores/authStore.ts')
     const accountsStoreModule = await vite.ssrLoadModule('/src/stores/accountsStore.ts')
@@ -95,6 +96,8 @@ export async function createPocketFixture() {
     connectAuthEmulator(outsiderAuth, `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`, { disableWarnings: true })
     const outsiderDb = getFirestore(outsiderApp)
     connectFirestoreEmulator(outsiderDb, '127.0.0.1', 8080)
+    const outsiderFunctions = getFunctions(outsiderApp)
+    connectFunctionsEmulator(outsiderFunctions, '127.0.0.1', 5001)
     const outsider = await createUserWithEmailAndPassword(
       outsiderAuth,
       `outsider-${Date.now()}@example.test`,
@@ -128,6 +131,8 @@ export async function createPocketFixture() {
       adminDb,
       app,
       auth,
+      functions,
+      outsiderFunctions,
       authStore,
       accountsStore,
       transactionsStore,

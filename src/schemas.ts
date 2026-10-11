@@ -57,6 +57,21 @@ export const TransactionSchema = z.object({
   path: ['toAccountId']
 })
 
+// Statement descriptions come from external bank formats and do not use the
+// shorter manual-transaction form limit. Firestore enforces document quotas.
+export const StatementImportRowSchema = z.object({
+  date: z.string().min(1).refine(value => Number.isFinite(new Date(value).getTime()), {
+    message: 'Fecha inválida'
+  }),
+  description: z.string().min(1),
+  amount: z.number().finite().refine(value => value !== 0, {
+    message: 'El monto no puede ser cero'
+  }),
+  categorySuggestion: z.string()
+}).strict()
+
+export const StatementImportBatchSchema = z.array(StatementImportRowSchema).min(1)
+
 export const ApiKeySchema = z.object({
   apiKey: z.string()
     .min(10, 'La API Key es demasiado corta')

@@ -1,0 +1,15 @@
+{
+  "functions": {
+    "source": "test-fixtures/pockets-callable",
+    "runtime": "nodejs20"
+  },
+  "firestore": {
+    "rules": "test-fixtures/pockets-callable/firestore.rules"
+  },
+  "emulators": {
+    "auth": { "host": "127.0.0.1", "port": 9099 },
+    "firestore": { "host": "127.0.0.1", "port": 8080 },
+    "functions": { "host": "127.0.0.1", "port": 5001 },
+    "singleProjectMode": true
+  }
+}
