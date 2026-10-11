@@ -11,7 +11,7 @@
       <nav
         role="tablist"
         aria-label="Secciones de configuración"
-        class="flex gap-2 overflow-x-auto -mx-4 px-4 pb-1 mb-6 [scrollbar-width:none] lg:mx-0 lg:px-0 lg:pb-0 lg:mb-0 lg:flex-col lg:gap-1 lg:sticky lg:top-6 lg:overflow-visible"
+        class="flex gap-2 overflow-x-auto -mx-4 px-4 sm:-mx-6 sm:px-6 pb-1 mb-6 [scrollbar-width:none] lg:mx-0 lg:px-0 lg:pb-0 lg:mb-0 lg:flex-col lg:gap-1 lg:sticky lg:top-6 lg:overflow-visible"
       >
         <button
           v-for="tab in tabs"
