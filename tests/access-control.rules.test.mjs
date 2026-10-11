@@ -172,6 +172,15 @@ test('workspace creation must be owned by and only contain the creator', async (
   })
 })
 
+test('statement import markers are server-only', async () => {
+  const markerId = `${workspaceId}_client-probe-1234`
+  await adminDb.collection('statementImports').doc(markerId).set({ workspaceId, requestHash: 'x' })
+  await assert.rejects(getDoc(doc(owner.db, 'statementImports', markerId)), denied)
+  await assert.rejects(getDocs(collection(member.db, 'statementImports')), denied)
+  await assert.rejects(setDoc(doc(member.db, 'statementImports', `${workspaceId}_forged-12345`), { workspaceId }), denied)
+  await assert.rejects(deleteDoc(doc(owner.db, 'statementImports', markerId)), denied)
+})
+
 test('only the owner can delete the workspace', async () => {
   await assert.rejects(deleteDoc(doc(member.db, 'workspaces', workspaceId)), denied)
   await deleteDoc(doc(owner.db, 'workspaces', workspaceId))

@@ -19,14 +19,27 @@ service firebase.storage {
              request.auth.uid in firestore.get(/databases/(default)/documents/workspaces/$(workspaceId)).data.members;
     }
 
-    // Permitir lectura y escritura solo en el subdirectorio del propio usuario (legado o data personal)
-    match /users/{userId}/{allPaths=**} {
-      allow read, write: if isOwner(userId);
+    // Uploads must be a receipt (image or PDF) below the 5 MB limit enforced by the UI.
+    function isValidReceiptUpload() {
+      return request.resource.size < 5 * 1024 * 1024 &&
+             (request.resource.contentType.matches('image/.*') ||
+              request.resource.contentType == 'application/pdf');
     }
 
-    // Permitir lectura y escritura en el directorio del workspace (ej. comprobantes)
+    // Permitir lectura y escritura solo en el subdirectorio del propio usuario (legado o data personal)
+    match /users/{userId}/{allPaths=**} {
+      allow read, delete: if isOwner(userId);
+      allow create, update: if isOwner(userId) && isValidReceiptUpload();
+    }
+
+    // Lectura y borrado en todo el directorio del workspace (incluye archivos legados)
     match /workspaces/{workspaceId}/{allPaths=**} {
-      allow read, write: if isWorkspaceMember(workspaceId);
+      allow read, delete: if isWorkspaceMember(workspaceId);
+    }
+
+    // Las subidas del workspace solo se permiten como comprobantes
+    match /workspaces/{workspaceId}/receipts/{fileName} {
+      allow create, update: if isWorkspaceMember(workspaceId) && isValidReceiptUpload();
     }
   }
 }

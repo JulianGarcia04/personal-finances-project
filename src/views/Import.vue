@@ -430,23 +430,36 @@ const processWithIA = async () => {
   }
 }
 
+// Idempotency key reused only when retrying the exact same account + rows after a failure.
+let pendingImport: { fingerprint: string; statementImportId: string } | null = null
+
 // Confirmar importación
 const confirmBatchImport = async () => {
   importingBatch.value = true
+  const rows = selectedTransactions.value.map(({ date, description, amount, categorySuggestion }) => ({
+    date,
+    description,
+    amount,
+    categorySuggestion
+  }))
+  const fingerprint = JSON.stringify([targetAccountId.value, rows])
+  if (pendingImport?.fingerprint !== fingerprint) {
+    pendingImport = { fingerprint, statementImportId: crypto.randomUUID() }
+  }
   try {
-    await transactionsStore.addTransactionsBatch(
-      targetAccountId.value,
-      selectedTransactions.value.map(({ date, description, amount, categorySuggestion }) => ({
-        date,
-        description,
-        amount,
-        categorySuggestion
-      }))
-    )
+    await transactionsStore.addTransactionsBatch(targetAccountId.value, rows, {
+      statementImportId: pendingImport.statementImportId
+    })
+    pendingImport = null
     router.push({ name: 'Transactions' })
   } catch (err) {
     console.error(err)
-    alert('Error al guardar las transacciones.')
+    // Callable errors carry a client-safe Spanish message; other failures keep the generic text.
+    const code = (err as { code?: unknown } | null)?.code
+    const message = (err as { message?: unknown } | null)?.message
+    alert(typeof code === 'string' && code.startsWith('functions/') && typeof message === 'string' && message
+      ? message
+      : 'Error al guardar las transacciones.')
   } finally {
     importingBatch.value = false
   }

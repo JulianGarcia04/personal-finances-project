@@ -1132,7 +1132,7 @@ export const useTransactionsStore = defineStore('transactions', {
       description: string;
       amount: number;
       categorySuggestion: string;
-    }>): Promise<Transaction[]> {
+    }>, options: { statementImportId?: string } = {}): Promise<Transaction[]> {
       const user = auth.currentUser
       const authStore = useAuthStore()
       const workspaceId = authStore.activeWorkspaceId
@@ -1264,6 +1264,8 @@ export const useTransactionsStore = defineStore('transactions', {
             workspaceId: initiatingWorkspaceId,
             accountId: initiatingAccountId,
             expectedCurrency,
+            // Idempotency key: callers reuse it when retrying the same statement import.
+            statementImportId: options.statementImportId ?? crypto.randomUUID(),
             rows: preparedRows.map(row => ({
               date: row.dateValue.toISOString(),
               description: row.description,

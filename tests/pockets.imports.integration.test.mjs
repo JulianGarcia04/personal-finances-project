@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test, { after, before } from 'node:test'
+import { randomUUID } from 'node:crypto'
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
 import { createPocketFixture, functionsRequire } from './pockets.fixtures.mjs'
@@ -23,8 +24,8 @@ function row(amount, description = 'Imported statement movement', categoryId = '
   }
 }
 
-function request(workspaceId, accountId, rows, expectedCurrency = 'COP') {
-  return { workspaceId, accountId, expectedCurrency, rows }
+function request(workspaceId, accountId, rows, expectedCurrency = 'COP', statementImportId = randomUUID()) {
+  return { workspaceId, accountId, expectedCurrency, statementImportId, rows }
 }
 
 function withDeadline(promise, label, timeoutMs = 20_000) {
@@ -296,7 +297,8 @@ test('callable rejects invalid later rows, spoofed ownership, foreign categories
     workspaceId: 'another-workspace', name: 'Foreign', type: 'expense'
   })
   await assert.rejects(callable(request(workspaceId, pocket.id, [row(5, 'Foreign category', 'foreign-import-category')])))
-  await assert.rejects(callable(request(workspaceId, pocket.id, [row(-11)])))
+  await assert.rejects(callable(request(workspaceId, pocket.id, [row(-11)])), error =>
+    error.code === 'functions/failed-precondition' && /negativo/.test(error.message))
 
   await adminDb.collection('accounts').doc(parent.id).update({ childAccountIds: [] })
   await assert.rejects(callable(request(workspaceId, parent.id, [row(1)])))
@@ -329,6 +331,57 @@ test('authenticated callable accepts more than five hundred rows and long statem
   assert.ok(Math.abs((await adminDb.collection('accounts').doc(pocket.id).get()).data().balance - 1005.01) < 1e-8)
 })
 
+test('callable rejects statements above the row cap without writes', async () => {
+  const { accountsStore, adminDb, functions, workspaceId } = fixture
+  const parent = await accountsStore.addAccount({ name: 'Capped import parent', type: 'checking', balance: 100, currency: 'COP' })
+  const pocket = await accountsStore.addAccount({
+    name: 'Capped import pocket', type: 'savings', balance: 10, currency: 'COP', parentAccountId: parent.id
+  })
+  const callable = httpsCallable(functions, 'importPocketStatement')
+  const beforeCount = await transactionCount(adminDb, workspaceId)
+  const rows = Array.from({ length: 1_001 }, (_, index) => row(0.01, `Row ${index}`))
+
+  await assert.rejects(callable(request(workspaceId, pocket.id, rows)), error =>
+    error.code === 'functions/invalid-argument' && /1000/.test(error.message))
+  await assert.rejects(callable({ ...request(workspaceId, pocket.id, [row(1)]), statementImportId: 'bad id!' }), error =>
+    error.code === 'functions/invalid-argument')
+  const { statementImportId: _omitted, ...withoutId } = request(workspaceId, pocket.id, [row(1)])
+  await assert.rejects(callable(withoutId), error => error.code === 'functions/invalid-argument')
+  assert.equal(await transactionCount(adminDb, workspaceId), beforeCount)
+  assert.equal((await adminDb.collection('accounts').doc(pocket.id).get()).data().balance, 10)
+})
+
+test('a retried statementImportId replays the first result without writing twice', async () => {
+  const { accountsStore, adminDb, functions, workspaceId } = fixture
+  const parent = await accountsStore.addAccount({ name: 'Idempotent import parent', type: 'checking', balance: 500, currency: 'COP' })
+  const pocket = await accountsStore.addAccount({
+    name: 'Idempotent import pocket', type: 'savings', balance: 100, currency: 'COP', parentAccountId: parent.id
+  })
+  const callable = httpsCallable(functions, 'importPocketStatement')
+  const beforeCount = await transactionCount(adminDb, workspaceId)
+  const data = request(workspaceId, pocket.id, [row(25, 'Retried deposit'), row(-5, 'Retried fee')])
+
+  const first = await callable(data)
+  const second = await callable(data)
+  assert.deepEqual(second.data, first.data)
+  assert.equal(first.data.balance, 120)
+  assert.equal(await transactionCount(adminDb, workspaceId), beforeCount + 2)
+  assert.equal((await adminDb.collection('accounts').doc(pocket.id).get()).data().balance, 120)
+  const stored = await adminDb.collection('transactions').where('accountId', '==', pocket.id).get()
+  assert.deepEqual(stored.docs.map(snapshot => snapshot.data().statementImportId), [data.statementImportId, data.statementImportId])
+
+  const concurrentData = request(workspaceId, pocket.id, [row(-10, 'Double click')])
+  const concurrent = await Promise.all([callable(concurrentData), callable(concurrentData)])
+  assert.deepEqual(concurrent[1].data, concurrent[0].data)
+  assert.equal(await transactionCount(adminDb, workspaceId), beforeCount + 3)
+  assert.equal((await adminDb.collection('accounts').doc(pocket.id).get()).data().balance, 110)
+
+  await assert.rejects(callable({ ...data, rows: [row(99, 'Different statement')] }), error =>
+    error.code === 'functions/failed-precondition')
+  assert.equal(await transactionCount(adminDb, workspaceId), beforeCount + 3)
+  assert.equal((await adminDb.collection('accounts').doc(pocket.id).get()).data().balance, 110)
+})
+
 test('callable request-size document failure leaves the account and history unchanged', async () => {
   const { accountsStore, adminDb, functions, workspaceId } = fixture
   const parent = await accountsStore.addAccount({ name: 'Quota import parent', type: 'checking', balance: 50, currency: 'COP' })
@@ -347,7 +400,8 @@ test('callable request-size document failure leaves the account and history unch
     quotaError = error
   }
   assert.ok(quotaError, 'Firestore must reject the over-document-limit statement')
-  assert.match(quotaError.message, /size|maximum|exceed|quota|bytes|1048576/i)
+  assert.equal(quotaError.code, 'functions/invalid-argument')
+  assert.match(quotaError.message, /excede|tamaño/i)
   assert.equal(await transactionCount(adminDb, workspaceId), beforeCount)
   assert.equal((await adminDb.collection('accounts').doc(pocket.id).get()).data().balance, beforeBalance)
 })

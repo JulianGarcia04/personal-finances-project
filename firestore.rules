@@ -522,5 +522,10 @@ service cloud.firestore {
       allow create: if isWorkspaceMember(request.resource.data.workspaceId);
       allow update, delete: if isWorkspaceMember(resource.data.workspaceId);
     }
+
+    // Statement import idempotency markers are written and read only by Cloud Functions.
+    match /statementImports/{markerId} {
+      allow read, write: if false;
+    }
   }
 }
