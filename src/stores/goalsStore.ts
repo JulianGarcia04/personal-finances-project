@@ -24,6 +24,8 @@ interface GoalsState {
   budgetAllocations: Record<string, number>;
   categoryBudgets: Record<string, number>;
   exchangeRates: Record<string, number>;
+  // Workspace-wide budget alert emails (notifyBudgetThreshold). Absent means enabled.
+  budgetAlertsEnabled: boolean;
   loading: boolean;
 }
 
@@ -37,6 +39,7 @@ export const useGoalsStore = defineStore('goals', {
     budgetAllocations: {},
     categoryBudgets: {},
     exchangeRates: {},
+    budgetAlertsEnabled: true,
     loading: false,
   }),
   getters: {
@@ -198,6 +201,7 @@ export const useGoalsStore = defineStore('goals', {
           this.budgetAllocations = data.budgetAllocations || {}
           this.categoryBudgets = data.categoryBudgets || {}
           this.exchangeRates = data.exchangeRates || {}
+          this.budgetAlertsEnabled = data.budgetAlertsEnabled !== false
         }
       } catch (error) {
         console.error('Error al cargar configuraciones del presupuesto:', error)
@@ -238,6 +242,16 @@ export const useGoalsStore = defineStore('goals', {
       } finally {
         this.loading = false
       }
+    },
+
+    // 7. Activar/desactivar alertas de presupuesto por correo
+    async saveBudgetAlertsEnabled(enabled: boolean): Promise<void> {
+      const authStore = useAuthStore()
+      const workspaceId = authStore.activeWorkspaceId
+      if (!workspaceId) throw new Error('Workspace no inicializado')
+
+      await updateDoc(doc(db, 'workspaces', workspaceId), { budgetAlertsEnabled: enabled })
+      this.budgetAlertsEnabled = enabled
     }
   }
 })

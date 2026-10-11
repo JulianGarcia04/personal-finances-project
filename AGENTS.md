@@ -102,6 +102,17 @@ Vault está diseñado para correr completamente offline utilizando **Firebase Em
    ENCRYPTION_SECRET=vault-super-secure-encryption-secret-32-chars
    ```
 
+   **Alertas de presupuesto por correo (opcional):** el trigger `notifyBudgetThreshold` envía un correo a los miembros del workspace cuando una categoría llega al 80 % o al 100 % de su presupuesto mensual, usando `nodemailer` sobre Gmail SMTP. Requiere una cuenta de Gmail con verificación en dos pasos y una **contraseña de aplicación** (https://myaccount.google.com/apppasswords); la contraseña normal de la cuenta no funciona.
+   * **Local (emuladores):** crea `functions/.secret.local` (no se versiona) con:
+     ```env
+     SMTP_USER=tu-cuenta@gmail.com
+     SMTP_PASS=tu-app-password-de-16-caracteres
+     ```
+     Son secretos de Functions (`defineSecret`), por eso van en `.secret.local` y no en `functions/.env`. Si faltan, la función registra una advertencia y no envía el correo.
+   * **Producción:** `firebase functions:secrets:set SMTP_USER` y `firebase functions:secrets:set SMTP_PASS` antes de desplegar.
+   * Opcional: `ALERTS_FROM="Vault <tu-cuenta@gmail.com>"` en `functions/.env` para personalizar el remitente (por defecto `Vault <SMTP_USER>`; Gmail solo permite tu cuenta o sus alias).
+   * Las alertas se activan o desactivan por workspace en **Configuración → Workspace** (campo `budgetAlertsEnabled`, activo por defecto).
+
 3. **Iniciar Servidores:**
    * **Frontend (Vite):** `pnpm dev`
    * **Firebase Emulators (Auth, Firestore, Storage, Functions):** `pnpm emulators` (consola en `http://localhost:4000`)

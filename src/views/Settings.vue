@@ -128,6 +128,25 @@
               </form>
             </div>
 
+            <!-- Budget alert emails (workspace-wide). Whole row toggles the switch. -->
+            <div class="p-4 sm:p-6">
+              <label class="flex items-start justify-between gap-4 min-h-11 cursor-pointer">
+                <span class="min-w-0 space-y-1">
+                  <span class="block font-display font-medium text-sm text-text-primary">Alertas de presupuesto por correo</span>
+                  <span class="block text-text-muted text-xs">Avisa por correo a los miembros cuando una categoría llega al 80 % o al 100 % de su presupuesto mensual.</span>
+                </span>
+                <span class="relative inline-flex items-center shrink-0 min-h-11 -mt-2.5">
+                  <input
+                    type="checkbox"
+                    v-model="budgetAlertsEnabled"
+                    @change="handleBudgetAlertsChange"
+                    class="sr-only peer"
+                  >
+                  <div class="relative w-11 h-6 bg-slate-800 rounded-full peer peer-focus:ring-2 peer-focus:ring-accent-emerald/20 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-slate-400 after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent-emerald peer-checked:after:bg-background"></div>
+                </span>
+              </label>
+            </div>
+
             <!-- Create workspace -->
             <div class="p-4 sm:p-6 space-y-3">
               <div>
@@ -716,6 +735,7 @@ onMounted(async () => {
   await accountsStore.fetchAccounts()
   await goalsStore.loadBudgetSettings()
   Object.assign(rateInputs, goalsStore.exchangeRates)
+  budgetAlertsEnabled.value = goalsStore.budgetAlertsEnabled
 })
 
 // Workspace Management
@@ -763,6 +783,17 @@ const handleInviteUser = async () => {
     inviteMsg.value = err.message || 'Error al invitar al usuario'
   } finally {
     invitingUser.value = false
+  }
+}
+
+const budgetAlertsEnabled = ref(true)
+const handleBudgetAlertsChange = async () => {
+  const enabled = budgetAlertsEnabled.value
+  try {
+    await goalsStore.saveBudgetAlertsEnabled(enabled)
+  } catch (err) {
+    console.error('Error actualizando alertas de presupuesto:', err)
+    budgetAlertsEnabled.value = !enabled
   }
 }
 

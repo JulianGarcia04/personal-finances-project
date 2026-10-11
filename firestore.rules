@@ -444,7 +444,8 @@ service cloud.firestore {
     function workspaceSettingsKeys() {
       return [
         'expenseLimit', 'budgetIncome', 'budgetNeedsPercent', 'budgetWantsPercent',
-        'budgetSavingsPercent', 'budgetAllocations', 'categoryBudgets', 'exchangeRates'
+        'budgetSavingsPercent', 'budgetAllocations', 'categoryBudgets', 'exchangeRates',
+        'budgetAlertsEnabled'
       ];
     }
 

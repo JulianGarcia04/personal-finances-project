@@ -21,7 +21,7 @@ Category caps exist but nothing warns the user; overspending is only visible if 
 ## Tasks
 - [x] T1 Pure alert logic (threshold evaluation, month key, spend aggregation) + unit tests (RED first).
 - [x] T2 Trigger + mailer (nodemailer, secrets, template, dedupe ledger, rules) + tests.
-- [ ] T3 Settings toggle (workspace field) + docs (README/AGENTS env vars).
+- [x] T3 Settings toggle (workspace field) + docs (README/AGENTS env vars).
 
 ## Delivery strategy
 ask-on-risk. Forecast ~400-550 authored lines.
@@ -35,5 +35,7 @@ ask-on-risk. Forecast ~400-550 authored lines.
 - T2 (delegated writer): `notifyBudgetThreshold` (onDocumentWritten `transactions/{id}`, retry + `isEventTooOld` guard, secrets `SMTP_USER`/`SMTP_PASS`), `mailer.ts` (nodemailer Gmail, optional `ALERTS_FROM`, skips with a warning when secrets are missing), `templates/budgetAlert.ts` (Spanish copy, HTML-escaped names), server-only ledger `budgetAlerts/{workspaceId}_{YYYY-MM}_{categoryId}` claimed in a Firestore transaction before sending; claim released on send failure so the retry re-sends. Rules: `budgetAlerts` deny-all. RED observed (TS2305/TS2307 missing exports/modules), then GREEN: `pnpm --filter functions test` 109/109; `pnpm test:emulators:rules` 34/34 (no new rules test: `tests/` outside the authorized surface).
 - Decisions: time zone and primary currency from the workspace owner's profile (`timeZoneForCountry(country)`, `resolvePrimaryCurrency`), America/Bogota / COP fallbacks; only the current local month is evaluated; recipients = all `workspace.members` (profile email, Auth fallback) in one message.
 
+- T3 (delegated writer): `goalsStore.budgetAlertsEnabled` (absent → true) + `saveBudgetAlertsEnabled`; toggle in Settings → Workspace (same switch markup as the AI importer toggle, reverts on save error); `budgetAlertsEnabled` added to `workspaceSettingsKeys()` in firestore.rules; AGENTS.md documents `functions/.secret.local` for emulators, `firebase functions:secrets:set SMTP_USER|SMTP_PASS` for production, Gmail app password and optional `ALERTS_FROM`. README.md is a 5-line Vite stub with no setup section, so it was left unchanged. No runnable RED for the Vue toggle (no component test harness); checks: `pnpm exec vue-tsc --noEmit` exit 0, `pnpm --filter functions test` 109/109, `pnpm test:emulators:rules` 34/34.
+
 ## Next step
-T3.
+Parent: native review assessment of the three work-unit commits; manual smoke test with real Gmail app password.
