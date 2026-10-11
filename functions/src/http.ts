@@ -187,13 +187,18 @@ function timeZoneOffsetMs(instant: number, timeZone: string): number {
   return wallClockAsUtc - Math.floor(instant / 1000) * 1000;
 }
 
-/** UTC instant of local midnight on the first day of the given month in `timeZone`. */
-function zonedMonthStart({ year, month }: YearMonth, timeZone: string): Date {
-  const wallClock = Date.UTC(year, month, 1);
+/** UTC instant of a local wall-clock time (0-based month; overflowing days roll over) in `timeZone`. */
+export function zonedWallClockToInstant(year: number, month: number, day: number, hour: number, timeZone: string): Date {
+  const wallClock = Date.UTC(year, month, day, hour);
   let instant = wallClock - timeZoneOffsetMs(wallClock, timeZone);
   const corrected = wallClock - timeZoneOffsetMs(instant, timeZone);
   if (corrected !== instant) instant = corrected;
   return new Date(instant);
+}
+
+/** UTC instant of local midnight on the first day of the given month in `timeZone`. */
+function zonedMonthStart({ year, month }: YearMonth, timeZone: string): Date {
+  return zonedWallClockToInstant(year, month, 1, 0, timeZone);
 }
 
 /** The last `monthsBack` local months (current one included) and the instant the first one starts. */
