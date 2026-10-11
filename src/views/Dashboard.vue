@@ -335,7 +335,7 @@
             >
               <div class="flex items-center space-x-2.5">
                 <component :is="getAccountIcon(acc.type)" class="w-4 h-4 text-text-secondary" />
-                <span class="text-sm font-medium text-text-primary truncate max-w-[120px]">{{ acc.name }}</span>
+                <span class="text-sm font-medium text-text-primary truncate max-w-[160px]">{{ accountSummaryLabel(acc) }}</span>
               </div>
               <span :class="['font-display font-semibold text-sm', acc.balance >= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
                 {{ formatCurrency(acc.balance, acc.currency) }}
@@ -356,9 +356,10 @@ import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useGoalsStore } from '@/stores/goalsStore'
-import { AccountType, Transaction } from '@/types'
+import { Account, AccountType, Transaction } from '@/types'
 import { expenseAmountForMonth } from '@/lib/installments'
 import { getTransactionDisplay } from '@/lib/transactionDisplay'
+import { getAccountDisplayLabel, groupAccountsByPocket } from '@/lib/pockets'
 import { getNextOccurrence, daysUntil, expenseAmountForCycle } from '@/lib/creditCycle'
 import { 
   Plus as PlusIcon, 
@@ -725,7 +726,13 @@ const getCategoryIcon = (iconName: string) => {
 
 const getAccountName = (id: string) => {
   const acc = accountsStore.getAccountById(id)
-  return acc ? acc.name : 'Desconocida'
+  return acc ? getAccountDisplayLabel(acc, accountsStore.accounts) : 'Desconocida'
+}
+
+const accountSummaryLabel = (account: Account) => {
+  const group = groupAccountsByPocket(accountsStore.accounts, authStore.activeWorkspaceId || undefined)
+    .find(item => item.account.id === account.id)
+  return group?.pockets.length ? `${account.name} · Disponible` : getAccountDisplayLabel(account, accountsStore.accounts)
 }
 
 const displayOf = (tx: Transaction) => getTransactionDisplay(tx, getAccountName)

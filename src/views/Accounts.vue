@@ -7,7 +7,7 @@
         <p class="text-text-secondary text-sm mt-1">Registra tus cuentas bancarias, tarjetas de crédito y efectivo.</p>
       </div>
       <button 
-        @click="showAddModal = true"
+        @click="openNewAccountModal"
         class="flex items-center justify-center space-x-2 px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer transition-all duration-200"
       >
         <PlusIcon class="w-4 h-4" />
@@ -35,11 +35,12 @@
 
     <!-- Accounts Cards Grid -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-      <div 
-        v-for="account in accountsStore.accounts" 
-        :key="account.id"
-        :class="['glass-panel rounded-2xl p-4 sm:p-6 flex flex-col justify-between min-h-52 transition-all relative overflow-hidden group border border-white/5', account.mirror ? 'mirror-ledger glow-card-violet' : getGlowClass(account.type)]"
-      >
+      <div v-for="group in accountGroups" :key="group.account.id" class="space-y-3">
+        <div
+          v-for="account in [group.account]"
+          :key="account.id"
+          :class="['glass-panel rounded-2xl p-4 sm:p-6 flex flex-col justify-between min-h-52 transition-all relative overflow-hidden group border border-white/5', account.mirror ? 'mirror-ledger glow-card-violet' : getGlowClass(account.type)]"
+        >
         <!-- Background light blur -->
         <div :class="['absolute top-0 right-0 w-24 h-24 rounded-full blur-xl opacity-20 pointer-events-none', account.mirror ? 'bg-accent-violet' : getOrbBgClass(account.type)]"></div>
 
@@ -56,14 +57,16 @@
             <div class="flex items-center space-x-1">
               <button
                 @click="openEditModal(account)"
-                class="opacity-0 group-hover:opacity-100 p-2 rounded-lg text-text-muted hover:text-accent-emerald hover:bg-white/5 transition-all"
+                :aria-label="`Editar cuenta ${account.name}`"
+                class="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-emerald p-2 rounded-lg text-text-muted hover:text-accent-emerald hover:bg-white/5 transition-all"
                 title="Editar Cuenta"
               >
                 <PencilIcon class="w-4 h-4" />
               </button>
               <button
                 @click="handleDelete(account.id, account.name)"
-                class="opacity-0 group-hover:opacity-100 p-2 rounded-lg text-text-muted hover:text-accent-rose hover:bg-white/5 transition-all"
+                :aria-label="`Eliminar cuenta ${account.name}`"
+                class="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-rose p-2 rounded-lg text-text-muted hover:text-accent-rose hover:bg-white/5 transition-all"
                 title="Eliminar Cuenta"
               >
                 <TrashIcon class="w-4 h-4" />
@@ -72,6 +75,9 @@
           </div>
 
           <h4 class="font-display font-bold text-lg text-text-primary mt-4 truncate">{{ account.name }}</h4>
+          <p v-if="group.isOrphan" class="text-[11px] text-accent-amber mt-1" role="note">
+            Bolsillo sin grupo. Conserva este identificador: {{ account.id }}
+          </p>
           <p
             v-if="account.mirror"
             class="text-[11px] text-accent-violet/90 uppercase tracking-wide mt-1 flex items-center gap-1.5"
@@ -85,6 +91,17 @@
             <span>Corte: <strong class="text-text-secondary">{{ account.statementClosingDay ? `día ${account.statementClosingDay}` : '—' }}</strong></span>
             <span>Pago: <strong class="text-text-secondary">{{ account.paymentDueDay ? `día ${account.paymentDueDay}` : '—' }}</strong></span>
           </div>
+
+          <button
+            v-if="canCreatePocket(account)"
+            type="button"
+            @click="openPocketModal(account)"
+            :aria-label="`Agregar bolsillo a ${account.name}`"
+            class="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-accent-emerald/10 border border-accent-emerald/25 text-accent-emerald hover:bg-accent-emerald/15 text-xs font-semibold transition-colors"
+          >
+            <SavingsIcon class="w-3.5 h-3.5" />
+            <span>Agregar bolsillo</span>
+          </button>
           <div v-if="account.type === 'credit' && (account.statementClosingDay || account.paymentDueDay)" class="flex flex-col gap-0.5 text-[10px] text-text-muted mt-1.5">
             <span v-if="account.statementClosingDay">{{ closingDaysUntil(account) === 0 ? 'Corte hoy' : `Corte en ${closingDaysUntil(account)} días` }}</span>
             <span v-if="account.paymentDueDay">{{ dueDaysUntil(account) === 0 ? 'Vence hoy' : `Vence en ${dueDaysUntil(account)} días` }}</span>
@@ -126,6 +143,66 @@
             <span class="text-[9px] text-text-muted block mt-0.5">{{ creditUtilization(account) }}% usado</span>
           </div>
         </div>
+        </div>
+
+        <div v-if="!group.isOrphan && group.pockets.length" class="rounded-2xl border border-accent-emerald/15 bg-slate-950/35 p-3 sm:p-4 space-y-3">
+          <div class="grid grid-cols-3 gap-2 border-b border-white/5 pb-3 text-center">
+            <div>
+              <p class="text-[9px] sm:text-[10px] text-text-muted uppercase tracking-wide">Disponible</p>
+              <p class="text-xs sm:text-sm font-semibold text-text-primary">{{ formatCurrency(accountPocketTotals(group.account.id).availableBalance, group.account.currency) }}</p>
+            </div>
+            <div>
+              <p class="text-[9px] sm:text-[10px] text-text-muted uppercase tracking-wide">En bolsillos</p>
+              <p class="text-xs sm:text-sm font-semibold text-accent-emerald">{{ formatCurrency(accountPocketTotals(group.account.id).pocketBalance, group.account.currency) }}</p>
+            </div>
+            <div>
+              <p class="text-[9px] sm:text-[10px] text-text-muted uppercase tracking-wide">Total del banco</p>
+              <p class="text-xs sm:text-sm font-semibold text-text-primary">{{ formatCurrency(accountPocketTotals(group.account.id).totalBalance, group.account.currency) }}</p>
+            </div>
+          </div>
+          <p class="text-[10px] text-text-muted leading-relaxed">
+            El patrimonio neto ya suma el saldo disponible y cada bolsillo una sola vez.
+          </p>
+          <div
+            v-for="pocket in group.pockets"
+            :key="pocket.id"
+            class="rounded-xl border border-white/5 bg-white/[0.025] px-3 py-3 flex flex-col gap-3"
+          >
+            <div class="min-w-0">
+              <p class="text-xs font-semibold text-text-primary truncate">{{ getAccountDisplayLabel(pocket, accountsStore.accounts) }}</p>
+              <p class="text-[10px] text-text-muted mt-1">Ahorros · {{ pocket.currency }} · ID {{ pocket.id }}</p>
+              <p class="text-sm font-display font-semibold text-accent-emerald mt-1">{{ formatCurrency(pocket.balance, pocket.currency) }}</p>
+            </div>
+              <div class="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                @click="openPocketMovement(group.account, pocket, 'fund')"
+                :aria-label="`Agregar dinero a ${pocket.name}`"
+                class="px-3 py-2 rounded-lg border border-accent-emerald/20 text-accent-emerald hover:bg-accent-emerald/10 text-[11px] font-semibold transition-colors"
+              >Agregar dinero</button>
+              <button
+                type="button"
+                @click="openPocketMovement(group.account, pocket, 'withdraw')"
+                :aria-label="`Retirar dinero de ${pocket.name}`"
+                class="px-3 py-2 rounded-lg border border-white/10 text-text-secondary hover:text-text-primary hover:bg-white/5 text-[11px] font-semibold transition-colors"
+              >Retirar</button>
+              <button
+                type="button"
+                @click="openEditModal(pocket)"
+                :aria-label="`Editar bolsillo ${pocket.name}`"
+                class="p-2 rounded-lg text-text-muted hover:text-accent-emerald hover:bg-white/5 transition-colors"
+                title="Editar nombre del bolsillo"
+              ><PencilIcon class="w-4 h-4" /></button>
+              <button
+                type="button"
+                @click="handleDelete(pocket.id, pocket.name)"
+                :aria-label="`Eliminar bolsillo ${pocket.name}`"
+                class="p-2 rounded-lg text-text-muted hover:text-accent-rose hover:bg-white/5 transition-colors"
+                title="Eliminar solo si está vacío y sin movimientos"
+              ><TrashIcon class="w-4 h-4" /></button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -133,23 +210,33 @@
     <div 
       v-if="showAddModal" 
       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs"
+      @click.self="closeAddModal"
+      @keydown.esc="closeAddModal"
     >
-      <div class="w-full max-w-md glass-panel rounded-3xl p-4 sm:p-6 md:p-8 shadow-2xl relative border border-white/10 animate-scale-up max-h-[90vh] overflow-y-auto">
+      <div role="dialog" aria-modal="true" :aria-labelledby="pocketParent ? 'pocket-create-title' : 'account-create-title'" class="w-full max-w-md glass-panel rounded-3xl p-4 sm:p-6 md:p-8 shadow-2xl relative border border-white/10 animate-scale-up max-h-[90vh] overflow-y-auto">
         <!-- Close Button -->
         <button 
           @click="closeAddModal"
+          aria-label="Cerrar formulario de cuenta"
           class="absolute top-4 right-4 p-2 rounded-lg text-text-secondary hover:text-text-primary hover:bg-white/5 transition-all"
         >
           <XIcon class="w-5 h-5" />
         </button>
 
-        <h3 class="font-display font-bold text-2xl text-text-primary mb-2">Agregar Cuenta</h3>
-        <p class="text-text-secondary text-xs mb-6">Configura los detalles de tu nueva cuenta bancaria o de efectivo.</p>
+        <h3 :id="pocketParent ? 'pocket-create-title' : 'account-create-title'" class="font-display font-bold text-2xl text-text-primary mb-2">
+          {{ pocketParent ? 'Crear bolsillo' : 'Agregar Cuenta' }}
+        </h3>
+        <p v-if="pocketParent" class="text-text-secondary text-xs mb-4 leading-relaxed">
+          El monto inicial se separa del saldo disponible de {{ pocketParent.name }}. No aumenta el total del banco ni el patrimonio neto.
+        </p>
+        <p v-else class="text-text-secondary text-xs mb-6">Configura los detalles de tu nueva cuenta bancaria o de efectivo.</p>
 
         <form @submit.prevent="saveAccount" class="space-y-4">
           <div class="space-y-1">
-            <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Nombre de la Cuenta</label>
+            <label for="new-account-name" class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">{{ pocketParent ? 'Nombre del bolsillo' : 'Nombre de la Cuenta' }}</label>
             <input 
+              id="new-account-name"
+              ref="pocketNameInput"
               v-model="newAcc.name" 
               type="text" 
               required
@@ -160,9 +247,11 @@
 
           <div class="grid grid-cols-2 gap-4">
             <div class="space-y-1">
-              <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Tipo de Cuenta</label>
+              <label for="new-account-type" class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Tipo de Cuenta</label>
               <select 
+                id="new-account-type"
                 v-model="newAcc.type"
+                :disabled="!!pocketParent"
                 class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
               >
                 <option value="checking">Corriente</option>
@@ -173,11 +262,13 @@
             </div>
 
             <div class="space-y-1">
-              <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Moneda Base</label>
+              <label for="new-account-currency" class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Moneda Base</label>
               <input 
+                id="new-account-currency"
                 v-model="newAcc.currency"
                 type="text"
                 required
+                :readonly="!!pocketParent"
                 placeholder="COP, USD, EUR"
                 class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary uppercase focus:outline-none focus:border-accent-emerald"
               />
@@ -186,12 +277,15 @@
 
           <div class="grid grid-cols-2 gap-4">
             <div class="space-y-1">
-              <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Saldo Inicial</label>
+              <label for="new-account-balance" class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">{{ pocketParent ? 'Fondos iniciales' : 'Saldo Inicial' }}</label>
               <input 
+                id="new-account-balance"
                 v-model.number="newAcc.balance"
                 type="number"
                 step="any"
                 required
+                :min="pocketParent ? 0 : undefined"
+                :aria-describedby="pocketParent ? 'pocket-opening-note' : undefined"
                 class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
               />
             </div>
@@ -206,6 +300,9 @@
               />
             </div>
           </div>
+          <p v-if="pocketParent" id="pocket-opening-note" class="text-[10px] text-text-muted leading-relaxed">
+            Banco: {{ pocketParent.name }} · moneda heredada: {{ pocketParent.currency }}. Puedes empezar con cero; no se crea una transferencia por cero.
+          </p>
 
           <div v-if="newAcc.type === 'credit'" class="space-y-2 animate-fade-in">
             <div class="grid grid-cols-2 gap-4">
@@ -251,7 +348,7 @@
               :disabled="loading"
               class="w-1/2 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50"
             >
-              <span>Guardar</span>
+              <span>{{ pocketParent ? 'Crear bolsillo' : 'Guardar' }}</span>
             </button>
           </div>
         </form>
@@ -262,22 +359,29 @@
     <div
       v-if="showEditModal"
       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs"
+      @click.self="closeEditAccountModal"
+      @keydown.esc="closeEditAccountModal"
     >
-      <div class="w-full max-w-md glass-panel rounded-3xl p-4 sm:p-6 md:p-8 shadow-2xl relative border border-white/10 animate-scale-up max-h-[90vh] overflow-y-auto">
+      <div role="dialog" aria-modal="true" aria-labelledby="account-edit-title" class="w-full max-w-md glass-panel rounded-3xl p-4 sm:p-6 md:p-8 shadow-2xl relative border border-white/10 animate-scale-up max-h-[90vh] overflow-y-auto">
         <button
-          @click="showEditModal = false"
+          @click="closeEditAccountModal"
+          aria-label="Cerrar formulario de edición"
           class="absolute top-4 right-4 p-2 rounded-lg text-text-secondary hover:text-text-primary hover:bg-white/5 transition-all"
         >
           <XIcon class="w-5 h-5" />
         </button>
 
-        <h3 class="font-display font-bold text-2xl text-text-primary mb-2">Editar Cuenta</h3>
-        <p class="text-text-secondary text-xs mb-6">El saldo solo cambia con transacciones; aquí editas la configuración.</p>
+        <h3 id="account-edit-title" class="font-display font-bold text-2xl text-text-primary mb-2">{{ editingAccount?.parentAccountId ? 'Editar bolsillo' : 'Editar Cuenta' }}</h3>
+        <p class="text-text-secondary text-xs mb-6">
+          El saldo solo cambia con movimientos. El tipo, moneda y banco de un bolsillo son heredados y no se pueden cambiar.
+        </p>
 
         <form @submit.prevent="saveEditedAccount" class="space-y-4">
           <div class="space-y-1">
-            <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Nombre de la Cuenta</label>
+            <label for="edit-account-name" class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Nombre de la Cuenta</label>
             <input
+              id="edit-account-name"
+              ref="editAccountNameInput"
               v-model="editAcc.name"
               type="text"
               required
@@ -287,9 +391,11 @@
 
           <div class="grid grid-cols-2 gap-4">
             <div class="space-y-1">
-              <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Tipo de Cuenta</label>
+              <label for="edit-account-type" class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Tipo de Cuenta</label>
               <select
+                id="edit-account-type"
                 v-model="editAcc.type"
+                :disabled="!!editingAccount?.parentAccountId"
                 class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
               >
                 <option value="checking">Corriente</option>
@@ -300,11 +406,13 @@
             </div>
 
             <div class="space-y-1">
-              <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Moneda Base</label>
+              <label for="edit-account-currency" class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Moneda Base</label>
               <input
+                id="edit-account-currency"
                 v-model="editAcc.currency"
                 type="text"
                 required
+                :readonly="!!editingAccount?.parentAccountId"
                 placeholder="COP, USD, EUR"
                 class="w-full px-4 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary uppercase focus:outline-none focus:border-accent-emerald"
               />
@@ -352,7 +460,7 @@
           </div>
 
           <!-- Espejo entre workspaces (cuenta puente) -->
-          <div v-if="otherWorkspaces.length" class="rounded-2xl border border-accent-violet/20 bg-accent-violet/[0.04] p-4 space-y-3.5">
+          <div v-if="otherWorkspaces.length && !editingAccount?.parentAccountId" class="rounded-2xl border border-accent-violet/20 bg-accent-violet/[0.04] p-4 space-y-3.5">
             <div class="flex items-start gap-2.5">
               <div class="p-1.5 rounded-lg bg-accent-violet/10 border border-accent-violet/25 shrink-0 mt-0.5">
                 <MirrorIcon class="w-3.5 h-3.5 text-accent-violet" />
@@ -425,9 +533,9 @@
           </div>
 
           <div class="flex space-x-3 pt-4">
-            <button
-              type="button"
-              @click="showEditModal = false"
+              <button
+                type="button"
+              @click="closeEditAccountModal"
               class="w-1/2 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all"
             >
               Cancelar
@@ -547,7 +655,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, nextTick, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
@@ -555,6 +664,13 @@ import { useAuthStore } from '@/stores/authStore'
 import { Account, AccountType } from '@/types'
 import { AccountSchema } from '@/schemas'
 import { getNextOccurrence, daysUntil, expenseAmountForCycle } from '@/lib/creditCycle'
+import {
+  canTransferBetweenAccounts,
+  getAccountDisplayLabel,
+  getAccountPocketTotals,
+  groupAccountsByPocket,
+  isPocketAccount
+} from '@/lib/pockets'
 import {
   Plus as PlusIcon,
   Trash2 as TrashIcon,
@@ -572,10 +688,14 @@ const accountsStore = useAccountsStore()
 const workspacesStore = useWorkspacesStore()
 const transactionsStore = useTransactionsStore()
 const authStore = useAuthStore()
+const router = useRouter()
 
 const showAddModal = ref(false)
 const showEditModal = ref(false)
 const loading = ref(false)
+const pocketParent = ref<Account | null>(null)
+const pocketNameInput = ref<HTMLInputElement | null>(null)
+const editAccountNameInput = ref<HTMLInputElement | null>(null)
 const newAcc = ref<{
   name: string;
   type: AccountType;
@@ -597,6 +717,32 @@ const newAcc = ref<{
 onMounted(async () => {
   await Promise.all([accountsStore.fetchAccounts(), workspacesStore.fetchMyWorkspaces()])
 })
+
+const accountGroups = computed(() => groupAccountsByPocket(accountsStore.accounts, authStore.activeWorkspaceId || undefined))
+const editingAccountId = ref('')
+const editingAccount = computed(() => accountsStore.accounts.find(account => account.id === editingAccountId.value) ?? null)
+
+const canCreatePocket = (account: Account) =>
+  !isPocketAccount(account) && !account.mirror && ['checking', 'savings'].includes(account.type)
+
+const accountPocketTotals = (parentId: string) => getAccountPocketTotals(parentId, accountsStore.accounts)
+
+const openPocketMovement = async (parent: Account, pocket: Account, direction: 'fund' | 'withdraw') => {
+  const source = direction === 'fund' ? parent : pocket
+  const destination = direction === 'fund' ? pocket : parent
+  if (!canTransferBetweenAccounts(source, destination, accountsStore.accounts)) {
+    alert('No se puede mover dinero entre estas cuentas: revisa el workspace, la moneda y el estado del bolsillo.')
+    return
+  }
+  await router.push({
+    path: '/transactions',
+    query: {
+      pocketTransfer: '1',
+      fromAccountId: source.id,
+      toAccountId: destination.id
+    }
+  })
+}
 
 // --- Cuentas puente (espejo entre workspaces) ---
 
@@ -656,6 +802,7 @@ const mirrorPreview = computed(() => {
 
 const closeAddModal = () => {
   showAddModal.value = false
+  pocketParent.value = null
   newAcc.value = {
     name: '',
     type: 'savings',
@@ -667,7 +814,36 @@ const closeAddModal = () => {
   }
 }
 
+const openNewAccountModal = async () => {
+  closeAddModal()
+  showAddModal.value = true
+  await nextTick()
+  pocketNameInput.value?.focus()
+}
+
+const openPocketModal = async (parent: Account) => {
+  if (!canCreatePocket(parent)) return
+  pocketParent.value = parent
+  newAcc.value = {
+    name: '',
+    type: 'savings',
+    balance: 0,
+    limit: 0,
+    currency: parent.currency,
+    statementClosingDay: null,
+    paymentDueDay: null
+  }
+  showAddModal.value = true
+  await nextTick()
+  pocketNameInput.value?.focus()
+}
+
 const saveAccount = async () => {
+  if (pocketParent.value && (!Number.isFinite(newAcc.value.balance) || newAcc.value.balance < 0)) {
+    alert('Los fondos iniciales del bolsillo deben ser un monto válido y no negativo.')
+    return
+  }
+
   // Zod Validation
   const validation = AccountSchema.safeParse({
     name: newAcc.value.name,
@@ -686,18 +862,28 @@ const saveAccount = async () => {
 
   loading.value = true
   try {
-    await accountsStore.addAccount({
-      name: newAcc.value.name,
-      type: newAcc.value.type,
-      balance: newAcc.value.balance,
-      limit: newAcc.value.limit,
-      currency: newAcc.value.currency.toUpperCase(),
-      statementClosingDay: newAcc.value.statementClosingDay || null,
-      paymentDueDay: newAcc.value.paymentDueDay || null
-    })
+    if (pocketParent.value) {
+      await accountsStore.addPocket({
+        name: newAcc.value.name,
+        balance: newAcc.value.balance,
+        currency: pocketParent.value.currency,
+        parentAccountId: pocketParent.value.id
+      })
+    } else {
+      await accountsStore.addAccount({
+        name: newAcc.value.name,
+        type: newAcc.value.type,
+        balance: newAcc.value.balance,
+        limit: newAcc.value.limit,
+        currency: newAcc.value.currency.toUpperCase(),
+        statementClosingDay: newAcc.value.statementClosingDay || null,
+        paymentDueDay: newAcc.value.paymentDueDay || null
+      })
+    }
     closeAddModal()
   } catch (err) {
     console.error('Error al guardar cuenta:', err)
+    alert(err instanceof Error ? err.message : 'No se pudo guardar la cuenta.')
   } finally {
     loading.value = false
   }
@@ -711,9 +897,7 @@ const editAcc = ref<{
   statementClosingDay: number | null;
   paymentDueDay: number | null;
 }>({ name: '', type: 'savings', limit: 0, currency: 'COP', statementClosingDay: null, paymentDueDay: null })
-const editingAccountId = ref('')
-
-const openEditModal = (account: Account) => {
+const openEditModal = async (account: Account) => {
   editingAccountId.value = account.id
   editAcc.value = {
     name: account.name,
@@ -727,9 +911,19 @@ const openEditModal = (account: Account) => {
   mirrorAccounts.value = []
   if (editMirror.value.workspaceId) loadMirrorAccounts()
   showEditModal.value = true
+  await nextTick()
+  editAccountNameInput.value?.focus()
+}
+
+const closeEditAccountModal = () => {
+  showEditModal.value = false
+  editingAccountId.value = ''
+  editMirror.value = emptyMirror()
+  mirrorAccounts.value = []
 }
 
 const saveEditedAccount = async () => {
+  const accountBeingEdited = editingAccount.value
   const currency = editAcc.value.currency.toUpperCase()
   // Validar con el mismo schema (balance queda por fuera, no se edita)
   const validation = AccountSchema.pick({ name: true, type: true, limit: true, currency: true, statementClosingDay: true, paymentDueDay: true }).safeParse({
@@ -763,11 +957,13 @@ const saveEditedAccount = async () => {
       statementClosingDay: editAcc.value.statementClosingDay || null,
       paymentDueDay: editAcc.value.paymentDueDay || null
     })
-    await accountsStore.setAccountMirror(
-      editingAccountId.value,
-      workspaceId ? { workspaceId, sourceAccountId, accountId } : null
-    )
-    showEditModal.value = false
+    if (!accountBeingEdited?.parentAccountId) {
+      await accountsStore.setAccountMirror(
+        editingAccountId.value,
+        workspaceId ? { workspaceId, sourceAccountId, accountId } : null
+      )
+    }
+    closeEditAccountModal()
   } catch (err: any) {
     console.error('Error al actualizar cuenta:', err)
     alert(err?.message || 'No se pudo actualizar la cuenta')
@@ -780,6 +976,13 @@ const saveEditedAccount = async () => {
 
 const settleAccount = ref<Account | null>(null)
 const settleForm = ref({ amount: 0, fromAccountId: '', toAccountId: '', date: '' })
+
+watch(() => authStore.activeWorkspaceId, (workspaceId, previousWorkspaceId) => {
+  if (workspaceId === previousWorkspaceId) return
+  closeAddModal()
+  closeEditAccountModal()
+  settleAccount.value = null
+})
 
 const settleDebt = computed(() => (settleAccount.value ? -settleAccount.value.balance : 0))
 
@@ -846,7 +1049,13 @@ const cycleChargeAmount = (account: Account) => {
 }
 
 const handleDelete = async (id: string, name: string) => {
-  if (confirm(`¿Estás seguro de que deseas eliminar la cuenta "${name}"? Todas las transacciones asociadas ya no estarán vinculadas.`)) {
+  const account = accountsStore.getAccountById(id)
+  const warning = account && isPocketAccount(account)
+    ? `Solo se puede eliminar el bolsillo "${name}" si tiene saldo cero y no conserva movimientos; el historial no se borra.`
+    : account?.childAccountIds?.length
+      ? `La cuenta "${name}" tiene bolsillos vinculados. Primero elimina únicamente los bolsillos vacíos y sin movimientos; el historial no se borra.`
+      : `¿Estás seguro de que deseas eliminar la cuenta "${name}"? Todas las transacciones asociadas ya no estarán vinculadas.`
+  if (confirm(warning)) {
     try {
       await accountsStore.deleteAccount(id)
     } catch (err: any) {

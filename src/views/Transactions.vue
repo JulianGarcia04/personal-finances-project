@@ -52,7 +52,7 @@
         >
           <option value="">Todas las cuentas</option>
           <option v-for="acc in accountsStore.accounts" :key="acc.id" :value="acc.id">
-            {{ acc.name }} ({{ acc.currency }})
+            {{ getAccountDisplayLabel(acc, accountsStore.accounts) }} ({{ acc.currency }})
           </option>
         </select>
       </div>
@@ -400,8 +400,8 @@
                 class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
               >
                 <option value="" disabled>Selecciona cuenta</option>
-                <option v-for="acc in accountsStore.accounts" :key="acc.id" :value="acc.id">
-                  {{ acc.name }} ({{ acc.currency }})
+                <option v-for="acc in availableNewSourceAccounts" :key="acc.id" :value="acc.id">
+                  {{ getAccountDisplayLabel(acc, accountsStore.accounts) }} ({{ acc.currency }})
                 </option>
               </select>
             </div>
@@ -416,7 +416,7 @@
               >
                 <option value="" disabled>Selecciona cuenta</option>
                 <option v-for="acc in availableDestinationAccounts" :key="acc.id" :value="acc.id">
-                  {{ acc.name }} ({{ acc.currency }})
+                  {{ getAccountDisplayLabel(acc, accountsStore.accounts) }} ({{ acc.currency }})
                 </option>
               </select>
             </div>
@@ -602,6 +602,7 @@
           <div class="grid grid-cols-3 gap-2 p-1 rounded-xl bg-slate-900/80 border border-border">
             <button
               type="button"
+              :disabled="isEditingOpeningAllocation"
               @click="editTx.type = 'expense'"
               :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', editTx.type === 'expense' ? 'bg-accent-rose/10 text-accent-rose border border-accent-rose/20' : 'text-text-secondary hover:text-text-primary']"
             >
@@ -609,6 +610,7 @@
             </button>
             <button
               type="button"
+              :disabled="isEditingOpeningAllocation"
               @click="editTx.type = 'income'"
               :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', editTx.type === 'income' ? 'bg-accent-emerald/10 text-accent-emerald border border-accent-emerald/20' : 'text-text-secondary hover:text-text-primary']"
             >
@@ -616,6 +618,7 @@
             </button>
             <button
               type="button"
+              :disabled="isEditingOpeningAllocation"
               @click="editTx.type = 'transfer'"
               :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', editTx.type === 'transfer' ? 'bg-accent-amber/10 text-accent-amber border border-accent-amber/20' : 'text-text-secondary hover:text-text-primary']"
             >
@@ -623,6 +626,7 @@
             </button>
             <button
               type="button"
+              :disabled="isEditingOpeningAllocation"
               @click="editTx.type = 'loan'"
               title="Dinero que le presto a alguien (sale de la cuenta, no cuenta como gasto)"
               :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', editTx.type === 'loan' ? 'bg-accent-violet/10 text-accent-violet border border-accent-violet/20' : 'text-text-secondary hover:text-text-primary']"
@@ -631,6 +635,7 @@
             </button>
             <button
               type="button"
+              :disabled="isEditingOpeningAllocation"
               @click="editTx.type = 'loan_payment'"
               title="Me pagaron un préstamo (entra a la cuenta, no cuenta como ingreso)"
               :class="['py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer', editTx.type === 'loan_payment' ? 'bg-accent-violet/10 text-accent-violet border border-accent-violet/20' : 'text-text-secondary hover:text-text-primary']"
@@ -638,6 +643,9 @@
               Pago Préstamo
             </button>
           </div>
+          <p v-if="isEditingOpeningAllocation" class="text-[11px] text-text-muted">
+            La asignación inicial conserva sus cuentas y tipo; puedes editar su monto, fecha y descripción.
+          </p>
 
           <!-- Account select -->
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -648,11 +656,12 @@
               <select 
                 v-model="editTx.accountId"
                 required
+                :disabled="isEditingOpeningAllocation"
                 class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
               >
                 <option value="" disabled>Selecciona cuenta</option>
-                <option v-for="acc in accountsStore.accounts" :key="acc.id" :value="acc.id">
-                  {{ acc.name }} ({{ acc.currency }})
+                <option v-for="acc in availableEditSourceAccounts" :key="acc.id" :value="acc.id">
+                  {{ getAccountDisplayLabel(acc, accountsStore.accounts) }} ({{ acc.currency }})
                 </option>
               </select>
             </div>
@@ -663,11 +672,12 @@
               <select 
                 v-model="editTx.toAccountId"
                 required
+                :disabled="isEditingOpeningAllocation"
                 class="w-full px-3 py-2.5 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald"
               >
                 <option value="" disabled>Selecciona cuenta</option>
                 <option v-for="acc in availableEditDestinationAccounts" :key="acc.id" :value="acc.id">
-                  {{ acc.name }} ({{ acc.currency }})
+                  {{ getAccountDisplayLabel(acc, accountsStore.accounts) }} ({{ acc.currency }})
                 </option>
               </select>
             </div>
@@ -835,13 +845,16 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
+import { useAuthStore } from '@/stores/authStore'
 import { Transaction, TransactionType } from '@/types'
 import { TransactionSchema } from '@/schemas'
 import { getMonthlyInstallmentAmount } from '@/lib/installments'
 import { getTransactionDisplay } from '@/lib/transactionDisplay'
+import { canTransferBetweenAccounts, getAccountDisplayLabel, isPocketAccount, isPocketRelatedAccount } from '@/lib/pockets'
 import { 
   Plus as PlusIcon, 
   Trash2 as TrashIcon, 
@@ -857,9 +870,13 @@ import {
 const accountsStore = useAccountsStore()
 const transactionsStore = useTransactionsStore()
 const workspacesStore = useWorkspacesStore()
+const authStore = useAuthStore()
+const route = useRoute()
+const router = useRouter()
 
 const showAddModal = ref(false)
 const loading = ref(false)
+const pocketTransferSelection = ref(false)
 
 // Ponytail: Batch selection state and computed
 const selectedTxIds = ref<string[]>([])
@@ -987,9 +1004,24 @@ const isEditCreditExpense = computed(() =>
   editTx.value.type === 'expense' && accountsStore.getAccountById(editTx.value.accountId)?.type === 'credit'
 )
 
+const isEditingOpeningAllocation = computed(() => {
+  const transaction = transactionsStore.transactions.find(item => item.id === editingTxId.value)
+  return !!transaction && accountsStore.accounts.some(account => account.openingAllocationId === transaction.id)
+})
+
 // Computed properties for Edit Modal
 const availableEditDestinationAccounts = computed(() => {
-  return accountsStore.accounts.filter(a => a.id !== editTx.value.accountId)
+  if (editTx.value.type !== 'transfer') return accountsStore.accounts.filter(account => account.id !== editTx.value.accountId)
+  const source = accountsStore.getAccountById(editTx.value.accountId)
+  return accountsStore.accounts.filter(account => account.id !== editTx.value.accountId &&
+    (!source || canTransferBetweenAccounts(source, account, accountsStore.accounts)))
+})
+
+const availableEditSourceAccounts = computed(() => {
+  if (editTx.value.type !== 'transfer') return accountsStore.accounts
+  const destination = accountsStore.getAccountById(editTx.value.toAccountId)
+  return accountsStore.accounts.filter(account => account.id !== editTx.value.toAccountId &&
+    (!destination || canTransferBetweenAccounts(account, destination, accountsStore.accounts)))
 })
 
 const availableEditCategories = computed(() => {
@@ -999,6 +1031,7 @@ const availableEditCategories = computed(() => {
 
 onMounted(async () => {
   await accountsStore.fetchAccounts()
+  applyPocketTransferQuery()
   await transactionsStore.fetchCategories()
   await transactionsStore.fetchTransactions()
   await workspacesStore.fetchActiveWorkspaceProfiles()
@@ -1025,7 +1058,16 @@ const pendingLoansByCurrency = computed(() => {
 
 // Filtrar cuentas destino (transferencias) excluyendo la origen
 const availableDestinationAccounts = computed(() => {
-  return accountsStore.accounts.filter(a => a.id !== newTx.value.accountId)
+  const source = accountsStore.getAccountById(newTx.value.accountId)
+  return accountsStore.accounts.filter(account => account.id !== newTx.value.accountId &&
+    (!source || canTransferBetweenAccounts(source, account, accountsStore.accounts)))
+})
+
+const availableNewSourceAccounts = computed(() => {
+  if (newTx.value.type !== 'transfer') return accountsStore.accounts
+  const destination = accountsStore.getAccountById(newTx.value.toAccountId)
+  return accountsStore.accounts.filter(account => account.id !== newTx.value.toAccountId &&
+    (!destination || canTransferBetweenAccounts(account, destination, accountsStore.accounts)))
 })
 
 // Filtrar categorías según tipo seleccionado (ingreso o gasto)
@@ -1042,6 +1084,7 @@ const getUserName = (uid?: string) => {
 
 const closeAddModal = () => {
   showAddModal.value = false
+  pocketTransferSelection.value = false
   newTx.value = {
     type: 'expense',
     accountId: '',
@@ -1055,7 +1098,54 @@ const closeAddModal = () => {
     userId: ''
   }
   clearReceipt()
+  clearPocketTransferQuery()
 }
+
+const clearPocketTransferQuery = () => {
+  if (route.query.pocketTransfer === undefined && route.query.fromAccountId === undefined && route.query.toAccountId === undefined) return
+  const query = { ...route.query }
+  delete query.pocketTransfer
+  delete query.fromAccountId
+  delete query.toAccountId
+  void router.replace({ query })
+}
+
+const applyPocketTransferQuery = () => {
+  if (route.query.pocketTransfer !== '1') return
+  const fromId = typeof route.query.fromAccountId === 'string' ? route.query.fromAccountId : ''
+  const toId = typeof route.query.toAccountId === 'string' ? route.query.toAccountId : ''
+  const source = accountsStore.getAccountById(fromId)
+  const destination = accountsStore.getAccountById(toId)
+  const workspaceId = authStore.activeWorkspaceId
+  const isValid = !!workspaceId && !!source && !!destination &&
+    source.workspaceId === workspaceId && destination.workspaceId === workspaceId &&
+    (isPocketAccount(source) || isPocketAccount(destination)) &&
+    canTransferBetweenAccounts(source, destination, accountsStore.accounts)
+
+  if (!isValid) {
+    clearPocketTransferQuery()
+    return
+  }
+
+  newTx.value.type = 'transfer'
+  newTx.value.accountId = source.id
+  newTx.value.toAccountId = destination.id
+  newTx.value.categoryId = ''
+  newTx.value.date = new Date().toISOString().substring(0, 10)
+  pocketTransferSelection.value = true
+  showAddModal.value = true
+  clearPocketTransferQuery()
+}
+
+watch(() => [route.query.pocketTransfer, route.query.fromAccountId, route.query.toAccountId], applyPocketTransferQuery)
+
+watch(() => authStore.activeWorkspaceId, (workspaceId, previousWorkspaceId) => {
+  if (workspaceId === previousWorkspaceId) return
+  const hasPocketSelection = [newTx.value.accountId, newTx.value.toAccountId]
+    .map(id => accountsStore.getAccountById(id))
+    .some(account => account && isPocketRelatedAccount(account))
+  if (pocketTransferSelection.value || hasPocketSelection || route.query.pocketTransfer !== undefined) closeAddModal()
+})
 
 const saveTransaction = async () => {
   const parsedAmount = Number(newTx.value.amount || 0)
@@ -1255,7 +1345,7 @@ const handleDelete = async (id: string) => {
 // Helpers
 const getAccountName = (id: string) => {
   const acc = accountsStore.getAccountById(id)
-  return acc ? acc.name : 'Desconocida'
+  return acc ? getAccountDisplayLabel(acc, accountsStore.accounts) : 'Desconocida'
 }
 
 const getAccountCurrency = (id: string) => {

@@ -22,7 +22,7 @@
             >
               <option value="" disabled>Selecciona una cuenta</option>
               <option v-for="acc in accountsStore.accounts" :key="acc.id" :value="acc.id">
-                {{ acc.name }} ({{ acc.currency }})
+                {{ getAccountDisplayLabel(acc, accountsStore.accounts) }} ({{ acc.currency }})
               </option>
             </select>
           </div>
@@ -284,6 +284,7 @@ import { useRouter } from 'vue-router'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
+import { getAccountDisplayLabel } from '@/lib/pockets'
 
 const accountsStore = useAccountsStore()
 const settingsStore = useSettingsStore()
@@ -419,7 +420,15 @@ const processWithIA = async () => {
 const confirmBatchImport = async () => {
   importingBatch.value = true
   try {
-    await transactionsStore.addTransactionsBatch(targetAccountId.value, selectedTransactions.value)
+    await transactionsStore.addTransactionsBatch(
+      targetAccountId.value,
+      selectedTransactions.value.map(({ date, description, amount, categorySuggestion }) => ({
+        date,
+        description,
+        amount,
+        categorySuggestion
+      }))
+    )
     router.push({ name: 'Transactions' })
   } catch (err) {
     console.error(err)

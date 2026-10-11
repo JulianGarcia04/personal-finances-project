@@ -456,7 +456,7 @@
                 :key="acc.id" 
                 :value="acc.id"
               >
-                {{ acc.name }} (Saldo: {{ formatCurrency(acc.balance, acc.currency) }})
+                {{ getAccountDisplayLabel(acc, accountsStore.accounts) }} (Saldo disponible: {{ formatCurrency(acc.balance, acc.currency) }})
               </option>
             </select>
           </div>
@@ -510,6 +510,7 @@ import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { Goal } from '@/types'
 import { expenseAmountForDate } from '@/lib/installments'
+import { getAccountDisplayLabel, isPocketRelatedAccount } from '@/lib/pockets'
 import {
   Target as TargetIcon,
   PiggyBank as PiggyBankIcon,
@@ -794,6 +795,10 @@ const handleContribute = async () => {
   if (!account) return
 
   if (account.balance < amount) {
+    if (isPocketRelatedAccount(account)) {
+      alert('El saldo disponible de esta cuenta no alcanza para el aporte. No se registró ningún movimiento.')
+      return
+    }
     if (!confirm('El saldo de la cuenta es menor que el aporte. ¿Deseas continuar de todos modos?')) {
       return
     }
