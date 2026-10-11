@@ -24,8 +24,8 @@
       >
         <div class="absolute top-0 right-0 w-32 h-32 bg-accent-emerald/5 rounded-full blur-2xl pointer-events-none"></div>
         <span class="text-xs font-semibold text-text-secondary uppercase tracking-widest">Patrimonio Neto ({{ cur }})</span>
-        <h3 :class="['font-display font-bold text-2xl sm:text-3xl mt-2 tabular-nums break-words', total >= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
-          {{ formatCurrency(total, cur) }}
+        <h3 :class="['min-w-0 font-display font-bold text-xl min-[400px]:text-2xl sm:text-3xl mt-2 tabular-nums', total >= 0 ? 'text-accent-emerald' : 'text-accent-rose']" :title="formatCurrency(total, cur)">
+          <span class="whitespace-nowrap">{{ splitMoney(formatCurrency(total, cur))[0] }}</span> <span class="inline-block max-w-full truncate align-bottom whitespace-nowrap">{{ splitMoney(formatCurrency(total, cur))[1] }}</span>
         </h3>
       </div>
       <div v-if="Object.keys(accountsStore.netWorthByCurrency).length === 0" class="glass-panel rounded-2xl p-6 col-span-full text-center">
@@ -103,8 +103,8 @@
         <div :class="['pt-4 flex items-end justify-between gap-3 mt-5', account.mirror ? 'mirror-perforation' : 'border-t border-white/5']">
           <div class="min-w-0">
             <span class="text-[11px] text-text-muted font-medium block">{{ balanceLabel(account) }}</span>
-            <span :class="['font-display font-bold text-xl mt-1 block tabular-nums break-words', balanceToneClass(account)]">
-              {{ formatCurrency(account.mirror ? Math.abs(account.balance) : account.balance, account.currency) }}
+            <span :class="['font-display font-bold text-lg min-[400px]:text-xl mt-1 block tabular-nums', balanceToneClass(account)]" :title="formatCurrency(account.mirror ? Math.abs(account.balance) : account.balance, account.currency)">
+              <span class="whitespace-nowrap">{{ splitMoney(formatCurrency(account.mirror ? Math.abs(account.balance) : account.balance, account.currency))[0] }}</span> <span class="inline-block max-w-full truncate align-bottom whitespace-nowrap">{{ splitMoney(formatCurrency(account.mirror ? Math.abs(account.balance) : account.balance, account.currency))[1] }}</span>
             </span>
           </div>
 
@@ -151,15 +151,15 @@
           <div class="grid grid-cols-1 min-[400px]:grid-cols-3 gap-2 border-b border-white/5 pb-3 min-[400px]:text-center">
             <div class="min-w-0 flex items-baseline justify-between gap-3 min-[400px]:block">
               <p class="text-[11px] text-text-muted uppercase tracking-wide">Disponible</p>
-              <p class="text-xs sm:text-sm font-semibold text-text-primary tabular-nums break-words">{{ formatCurrency(accountPocketTotals(group.account.id).availableBalance, group.account.currency) }}</p>
+              <p class="min-w-0 text-xs sm:text-sm font-semibold text-text-primary tabular-nums" :title="formatCurrency(accountPocketTotals(group.account.id).availableBalance, group.account.currency)"><span class="whitespace-nowrap">{{ splitMoney(formatCurrency(accountPocketTotals(group.account.id).availableBalance, group.account.currency))[0] }}</span> <span class="inline-block max-w-full truncate align-bottom whitespace-nowrap">{{ splitMoney(formatCurrency(accountPocketTotals(group.account.id).availableBalance, group.account.currency))[1] }}</span></p>
             </div>
             <div class="min-w-0 flex items-baseline justify-between gap-3 min-[400px]:block">
               <p class="text-[11px] text-text-muted uppercase tracking-wide">En bolsillos</p>
-              <p class="text-xs sm:text-sm font-semibold text-accent-emerald tabular-nums break-words">{{ formatCurrency(accountPocketTotals(group.account.id).pocketBalance, group.account.currency) }}</p>
+              <p class="min-w-0 text-xs sm:text-sm font-semibold text-accent-emerald tabular-nums" :title="formatCurrency(accountPocketTotals(group.account.id).pocketBalance, group.account.currency)"><span class="whitespace-nowrap">{{ splitMoney(formatCurrency(accountPocketTotals(group.account.id).pocketBalance, group.account.currency))[0] }}</span> <span class="inline-block max-w-full truncate align-bottom whitespace-nowrap">{{ splitMoney(formatCurrency(accountPocketTotals(group.account.id).pocketBalance, group.account.currency))[1] }}</span></p>
             </div>
             <div class="min-w-0 flex items-baseline justify-between gap-3 min-[400px]:block">
               <p class="text-[11px] text-text-muted uppercase tracking-wide">Total del banco</p>
-              <p class="text-xs sm:text-sm font-semibold text-text-primary tabular-nums break-words">{{ formatCurrency(accountPocketTotals(group.account.id).totalBalance, group.account.currency) }}</p>
+              <p class="min-w-0 text-xs sm:text-sm font-semibold text-text-primary tabular-nums" :title="formatCurrency(accountPocketTotals(group.account.id).totalBalance, group.account.currency)"><span class="whitespace-nowrap">{{ splitMoney(formatCurrency(accountPocketTotals(group.account.id).totalBalance, group.account.currency))[0] }}</span> <span class="inline-block max-w-full truncate align-bottom whitespace-nowrap">{{ splitMoney(formatCurrency(accountPocketTotals(group.account.id).totalBalance, group.account.currency))[1] }}</span></p>
             </div>
           </div>
           <p class="text-[11px] text-text-muted leading-relaxed">
@@ -173,7 +173,7 @@
             <div class="min-w-0">
               <p class="text-xs font-semibold text-text-primary truncate">{{ getAccountDisplayLabel(pocket, accountsStore.accounts) }}</p>
               <p class="text-[11px] text-text-muted mt-1 break-all">Ahorros · {{ pocket.currency }} · ID {{ pocket.id }}</p>
-              <p class="text-sm font-display font-semibold text-accent-emerald mt-1 tabular-nums break-words">{{ formatCurrency(pocket.balance, pocket.currency) }}</p>
+              <p class="min-w-0 text-sm font-display font-semibold text-accent-emerald mt-1 tabular-nums" :title="formatCurrency(pocket.balance, pocket.currency)"><span class="whitespace-nowrap">{{ splitMoney(formatCurrency(pocket.balance, pocket.currency))[0] }}</span> <span class="inline-block max-w-full truncate align-bottom whitespace-nowrap">{{ splitMoney(formatCurrency(pocket.balance, pocket.currency))[1] }}</span></p>
             </div>
             <div class="flex flex-wrap items-center gap-2">
               <button
@@ -544,8 +544,8 @@
         <!-- Deuda pendiente, protagonista -->
         <div class="mb-6 rounded-2xl border border-accent-violet/25 bg-accent-violet/[0.06] px-4 sm:px-5 py-4">
           <span class="text-[11px] font-semibold text-accent-violet/80 uppercase tracking-widest block">Pendiente de reembolso</span>
-          <span class="font-display font-bold text-2xl sm:text-3xl text-text-primary mt-1 block tracking-tight tabular-nums break-words">
-            {{ formatCurrency(settleDebt, settleAccount.currency) }}
+          <span class="min-w-0 font-display font-bold text-xl min-[400px]:text-2xl sm:text-3xl text-text-primary mt-1 block tracking-tight tabular-nums" :title="formatCurrency(settleDebt, settleAccount.currency)">
+            <span class="whitespace-nowrap">{{ splitMoney(formatCurrency(settleDebt, settleAccount.currency))[0] }}</span> <span class="inline-block max-w-full truncate align-bottom whitespace-nowrap">{{ splitMoney(formatCurrency(settleDebt, settleAccount.currency))[1] }}</span>
           </span>
         </div>
 
@@ -637,6 +637,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { Account, AccountType } from '@/types'
 import { AccountSchema } from '@/schemas'
 import { getNextOccurrence, daysUntil, expenseAmountForCycle } from '@/lib/creditCycle'
+import { splitMoney } from '@/lib/money'
 import {
   canTransferBetweenAccounts,
   getAccountDisplayLabel,

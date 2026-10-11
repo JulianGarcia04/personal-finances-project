@@ -368,6 +368,7 @@ import { useGoalsStore } from '@/stores/goalsStore'
 import { Account, AccountType, Transaction } from '@/types'
 import { expenseAmountForMonth } from '@/lib/installments'
 import { getTransactionDisplay } from '@/lib/transactionDisplay'
+import { splitMoney } from '@/lib/money'
 import { getAccountDisplayLabel, groupAccountsByPocket } from '@/lib/pockets'
 import { getNextOccurrence, daysUntil, expenseAmountForCycle } from '@/lib/creditCycle'
 import { 
@@ -817,13 +818,6 @@ const formatDate = (dateVal: Date | string) => {
     day: '2-digit',
     month: 'short'
   }).format(d)
-}
-
-// Split a formatted amount at its first (non-breaking) space so a stat value can
-// only wrap between the currency symbol and the number, never between digits.
-const splitMoney = (formatted: string): [string, string] => {
-  const i = formatted.search(/[\s\u00a0\u202f]/)
-  return i < 0 ? ['', formatted] : [formatted.slice(0, i), formatted.slice(i + 1)]
 }
 
 const formatPrimaryCurrency = (val: number) => {
