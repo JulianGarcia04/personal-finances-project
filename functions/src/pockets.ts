@@ -1,4 +1,5 @@
 import * as admin from 'firebase-admin'
+import { FieldValue, Timestamp } from 'firebase-admin/firestore'
 import { roundMoney } from './money'
 
 export type WorkspaceAccountInput = {
@@ -45,7 +46,7 @@ export async function createWorkspaceAccount(
   const userRef = db.collection('users').doc(userId)
   const workspaceRef = db.collection('workspaces').doc(workspaceId)
   const accountRef = db.collection('accounts').doc()
-  const createdAt = admin.firestore.Timestamp.now()
+  const createdAt = Timestamp.now()
   const parentRef = parentAccountId ? db.collection('accounts').doc(parentAccountId) : null
   const openingRef = parentAccountId && input.balance > 0
     ? db.collection('transactions').doc()
@@ -457,14 +458,14 @@ export async function mutateWorkspaceTransaction(
         amount: Number(movement.amount),
         description: movement.description,
         categoryId: movement.type === 'income' || movement.type === 'expense' ? movement.categoryId || '' : '',
-        date: admin.firestore.Timestamp.fromDate(date),
+        date: Timestamp.fromDate(date),
         type: movement.type,
         toAccountId: movement.type === 'transfer' ? movement.toAccountId || null : null,
         receiptUrl: movement.receiptUrl ?? null,
         notes: movement.notes ?? null,
         installments: movement.type === 'expense' && source.type === 'credit' ? movement.installments || 1 : 1,
         currency: source.currency || 'USD',
-        createdAt: input.kind === 'updated' && before ? before.createdAt : admin.firestore.FieldValue.serverTimestamp()
+        createdAt: input.kind === 'updated' && before ? before.createdAt : FieldValue.serverTimestamp()
       }
     }
 

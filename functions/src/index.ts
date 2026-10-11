@@ -4,6 +4,7 @@ import "./options";
 import { onRequest } from "firebase-functions/v2/https";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import * as admin from "firebase-admin";
+import { FieldPath, FieldValue, Timestamp } from "firebase-admin/firestore";
 import cors from "cors";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { genkit } from "genkit";
@@ -112,7 +113,7 @@ async function resolveGeminiApiKey(userId: string, useDefaultKey: boolean | unde
     try {
       await settingsRef.update({
         ...encryptApiKey(decrypted.apiKey, secret),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        updatedAt: FieldValue.serverTimestamp()
       });
     } catch (error) {
       console.error(`Failed to re-encrypt legacy API key for ${userId}:`, error);
@@ -140,7 +141,7 @@ export const saveUserApiKey = onRequest({cors: true}, async (req, res) => {
       await db.collection("users").doc(userId).collection("secure").doc("settings").set({
         encryptedApiKey: encryptedData,
         iv: iv,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        updatedAt: FieldValue.serverTimestamp()
       });
 
       res.status(200).json({ success: true, message: "API Key guardada y encriptada exitosamente." });
@@ -533,8 +534,8 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
           targetAmount: Number(targetAmount),
           currentAmount: Number(currentAmount || 0),
           currency: currency.toUpperCase(),
-          targetDate: admin.firestore.Timestamp.fromDate(parsedDate),
-          createdAt: admin.firestore.FieldValue.serverTimestamp()
+          targetDate: Timestamp.fromDate(parsedDate),
+          createdAt: FieldValue.serverTimestamp()
         };
         await newGoalRef.set(newGoal);
         return { id: newGoalRef.id, ...newGoal };
@@ -677,7 +678,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
         // Rows dated inside the period, plus older installment purchases whose
         // later installments may still fall inside it.
         const [inPeriodSnapshot, installmentSnapshot, catsSnapshot] = await Promise.all([
-          expenses.where('date', '>=', admin.firestore.Timestamp.fromDate(period.start)).orderBy('date', 'desc').get(),
+          expenses.where('date', '>=', Timestamp.fromDate(period.start)).orderBy('date', 'desc').get(),
           expenses.where('installments', '>', 1).get(),
           // Nombres de categorías del workspace activo (no de toda la colección)
           db.collection('categories').where('workspaceId', '==', activeWorkspaceId).get()
@@ -746,12 +747,12 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
         const fieldUpdates: unknown[] = [];
         limits.forEach((limit, categoryId) => {
           fieldUpdates.push(
-            new admin.firestore.FieldPath('categoryBudgets', categoryId),
-            Number.isFinite(limit) && limit > 0 ? limit : admin.firestore.FieldValue.delete()
+            new FieldPath('categoryBudgets', categoryId),
+            Number.isFinite(limit) && limit > 0 ? limit : FieldValue.delete()
           );
         });
         const [firstField, firstValue, ...rest] = fieldUpdates;
-        await wsRef.update(firstField as admin.firestore.FieldPath, firstValue, ...rest);
+        await wsRef.update(firstField as FieldPath, firstValue, ...rest);
         return { success: true, savedBudgets: budgets.length, message: "Presupuestos guardados en el workspace activo." };
       }
     );
@@ -881,10 +882,10 @@ export const inviteToWorkspace = onRequest({cors: true}, async (req, res) => {
           throw new HttpError(403, "Solo el propietario del workspace puede invitar usuarios.");
         }
         transaction.update(wsRef, {
-          members: admin.firestore.FieldValue.arrayUnion(inviteeId)
+          members: FieldValue.arrayUnion(inviteeId)
         });
         transaction.set(db.collection("users").doc(inviteeId), {
-          workspaces: admin.firestore.FieldValue.arrayUnion(workspaceId)
+          workspaces: FieldValue.arrayUnion(workspaceId)
         }, { merge: true });
       });
 

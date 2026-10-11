@@ -62,7 +62,6 @@ const userMessage = [{ role: 'user', content: 'Hola' }]
 // static members, so `admin.firestore.FieldValue` is undefined inside emulated handlers
 // (production is unaffected). index.ts should import FieldValue/Timestamp/FieldPath from
 // "firebase-admin/firestore". Until then these tests run and report as TODO.
-const EMULATOR_FIELDVALUE_TODO = 'index.ts uses admin.firestore.FieldValue, undefined under the functions emulator proxy'
 
 before(async () => {
   app = initializeApp({ projectId }, `functions-http-${runId}`)
@@ -158,7 +157,7 @@ test('inviteToWorkspace answers an unknown email with the generic 200 message an
   assert.deepEqual(workspace.get('members'), [users.owner.uid, users.member.uid])
 })
 
-test('inviteToWorkspace by the owner adds the invitee to the workspace and the user doc', { todo: EMULATOR_FIELDVALUE_TODO }, async () => {
+test('inviteToWorkspace by the owner adds the invitee to the workspace and the user doc', async () => {
   const unknown = await call('inviteToWorkspace', {
     token: users.owner.idToken, body: { workspaceId: users.workspaceId, email: `nobody-${runId}@example.test` }
   })
@@ -179,7 +178,7 @@ test('saveUserApiKey rejects a non-string apiKey with 400', async () => {
   assert.equal(body.error, 'La API Key debe ser un texto.')
 })
 
-test('saveUserApiKey stores an encrypted key with the configured secret', { todo: EMULATOR_FIELDVALUE_TODO }, async () => {
+test('saveUserApiKey stores an encrypted key with the configured secret', async () => {
   const plain = 'emulator-only-user-key'
   const { status } = await call('saveUserApiKey', { token: users.member.idToken, body: { apiKey: plain } })
   assert.equal(status, 200)

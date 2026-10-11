@@ -1,7 +1,7 @@
 {
   "functions": {
     "source": "test-fixtures/pockets-callable",
-    "runtime": "nodejs20"
+    "runtime": "nodejs22"
   },
   "firestore": {
     "rules": "test-fixtures/pockets-callable/firestore.rules"
