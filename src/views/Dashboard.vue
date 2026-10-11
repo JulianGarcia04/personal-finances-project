@@ -63,7 +63,8 @@
             <span class="text-[10px] text-text-muted mt-1 block">Suma de saldos de tus cuentas</span>
           </div>
           <div class="mt-4 pt-4 border-t border-white/5 text-[10px] text-text-secondary">
-            Runway: <span class="font-bold text-text-primary">{{ liquidityDays }} días</span>
+            Runway: <span class="font-bold text-text-primary tabular-nums">{{ liquidityDays === null ? '∞' : liquidityDays }} días</span>
+            <span class="block text-text-muted mt-0.5">Saldo líquido al ritmo de gasto de los últimos 3 meses</span>
           </div>
         </div>
 
@@ -80,7 +81,7 @@
                 {{ incomeData.percent > 0 ? '+' : '' }}{{ incomeData.percent }}%
               </span>
             </div>
-            <span class="text-[10px] text-text-muted mt-1 block">vs mes anterior ({{ formatPrimaryCurrency(incomeData.previous) }})</span>
+            <span class="text-[10px] text-text-muted mt-1 block">vs mismo periodo del mes anterior ({{ formatPrimaryCurrency(incomeData.previous) }})</span>
           </div>
         </div>
 
@@ -97,7 +98,7 @@
                 {{ expensesData.percent > 0 ? '+' : '' }}{{ expensesData.percent }}%
               </span>
             </div>
-            <span class="text-[10px] text-text-muted mt-1 block">vs mes anterior ({{ formatPrimaryCurrency(expensesData.previous) }})</span>
+            <span class="text-[10px] text-text-muted mt-1 block">vs mismo periodo del mes anterior ({{ formatPrimaryCurrency(expensesData.previous) }})</span>
             <span class="text-[10px] text-text-secondary mt-2 block">Compras registradas: {{ formatPrimaryCurrency(monthlyPurchaseTotal) }} total</span>
           </div>
           
@@ -370,6 +371,14 @@ import { expenseAmountForMonth } from '@/lib/installments'
 import { getTransactionDisplay } from '@/lib/transactionDisplay'
 import { splitMoney } from '@/lib/money'
 import { getAccountDisplayLabel, groupAccountsByPocket } from '@/lib/pockets'
+import {
+  alignedMonthPeriods,
+  isDateInPeriod,
+  expenseAmountInPeriod,
+  percentChange,
+  previousFullMonths,
+  runwayDays
+} from '@/lib/dashboardMetrics'
 import { getNextOccurrence, daysUntil, expenseAmountForCycle } from '@/lib/creditCycle'
 import { 
   Plus as PlusIcon, 
@@ -451,31 +460,27 @@ const netWorthValue = computed(() => {
 })
 
 // Ingresos del mes actual
-// ponytail: MoM (Month-over-Month) comparativas
+// MoM (Month-over-Month) aligned by elapsed days: day 1..N vs day 1..min(N, lastDay)
+// of the previous month. `current` stays the full imputed month for the headline amount.
 const getMoMData = (type: 'income' | 'expense') => {
-  const now = new Date()
-  const thisMonth = now.getMonth(), thisYear = now.getFullYear()
-  const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-  const lastMonth = lastMonthDate.getMonth(), lastMonthYear = lastMonthDate.getFullYear()
+  const { current: currentPeriod, previous: previousPeriod } = alignedMonthPeriods(new Date())
 
-  let current = 0, previous = 0
+  let current = 0, toDate = 0, previous = 0
   transactionsStore.transactions.forEach(t => {
-    if (t.type === type) {
-      const m = t.date.getMonth(), y = t.date.getFullYear()
-      if (type === 'expense') {
-        current += convert(expenseAmountForMonth(t, thisYear, thisMonth), t.currency)
-        previous += convert(expenseAmountForMonth(t, lastMonthYear, lastMonth), t.currency)
-      } else if (m === thisMonth && y === thisYear) {
-        current += convert(Math.abs(t.amount), t.currency)
-      } else if (m === lastMonth && y === lastMonthYear) {
-        previous += convert(Math.abs(t.amount), t.currency)
-      }
+    if (t.type !== type) return
+    if (type === 'expense') {
+      current += convert(expenseAmountForMonth(t, currentPeriod.year, currentPeriod.month), t.currency)
+      toDate += convert(expenseAmountInPeriod(t, currentPeriod), t.currency)
+      previous += convert(expenseAmountInPeriod(t, previousPeriod), t.currency)
+      return
     }
+    const amount = convert(Math.abs(t.amount), t.currency)
+    if (t.date.getMonth() === currentPeriod.month && t.date.getFullYear() === currentPeriod.year) current += amount
+    if (isDateInPeriod(t.date, currentPeriod)) toDate += amount
+    if (isDateInPeriod(t.date, previousPeriod)) previous += amount
   })
-  
-  const diff = current - previous
-  const percent = previous === 0 ? (current > 0 ? 100 : 0) : Math.round((diff / previous) * 100)
-  return { current, previous, percent, diff }
+
+  return { current, toDate, previous, percent: percentChange(toDate, previous) }
 }
 
 const incomeData = computed(() => getMoMData('income'))
@@ -495,11 +500,32 @@ const monthlyPurchaseTotal = computed(() => {
   }, 0)
 })
 
-// ponytail: Runway y Liquidez
+// Liquid accounts: cash-like balances (checking/savings/cash). Credit cards and mirror
+// bridge accounts are excluded; pockets are separate balances, so nothing is double counted.
+const liquidAccounts = computed(() =>
+  accountsStore.accounts.filter(acc => acc.type !== 'credit' && !acc.mirror)
+)
+const liquidBalance = computed(() =>
+  liquidAccounts.value.reduce((sum, acc) => sum + convert(acc.balance, acc.currency), 0)
+)
+
+// Runway: liquid balance / average daily expense of the last 3 full months
+// (fallback: current-month pace). null = no expenses, shown as ∞.
 const liquidityDays = computed(() => {
-  if (monthlyExpenses.value === 0 || netWorthValue.value <= 0) return '∞'
-  const dailyBurn = monthlyExpenses.value / new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()
-  return Math.round(netWorthValue.value / dailyBurn)
+  const now = new Date()
+  const history = previousFullMonths(now, 3).map(({ year, month, days }) => ({
+    days,
+    expenses: transactionsStore.transactions.reduce(
+      (sum, t) => sum + convert(expenseAmountForMonth(t, year, month), t.currency),
+      0
+    )
+  }))
+  return runwayDays({
+    liquidBalance: liquidBalance.value,
+    history,
+    monthToDateExpenses: expensesData.value.toDate,
+    dayOfMonth: now.getDate()
+  })
 })
 
 // ponytail: Top Bleeder
