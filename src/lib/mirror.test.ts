@@ -68,3 +68,78 @@ test('rechaza liquidar más de lo pendiente, sin deuda, o en monedas distintas',
   assert.throws(() => planSettlement({ amount: 0, debt: 500000, ...COP4 }), /mayor a cero/)
   assert.throws(() => planSettlement({ amount: 100, debt: 500, ...COP4, toCurrency: 'USD' }), /misma moneda/)
 })
+
+const settlementLegs = () => {
+  const paid = {
+    id: 'paid', workspaceId: 'home', accountId: 'checking', toAccountId: 'bridge',
+    amount: 250, description: 'Liquidación de Cuenta puente', categoryId: '',
+    date: new Date('2025-04-12T12:00:00.000Z'), type: 'transfer', currency: 'COP',
+    mirrorOf: 'received', notes: 'Reembolso pagado desde Cuenta corriente'
+  }
+  const received = {
+    id: 'received', workspaceId: 'personal', accountId: 'receivable', toAccountId: 'savings',
+    amount: 250, description: 'Liquidación de Cuenta puente', categoryId: '',
+    date: new Date('2025-04-12T12:00:00.000Z'), type: 'transfer', currency: 'COP',
+    mirrorOf: 'paid', notes: 'Reembolso recibido en Ahorros'
+  }
+  const accountsById = {
+    checking: { id: 'checking', workspaceId: 'home', currency: 'COP' },
+    bridge: {
+      id: 'bridge', workspaceId: 'home', currency: 'COP',
+      mirror: { workspaceId: 'personal', accountId: 'receivable', sourceAccountId: 'checking' }
+    },
+    receivable: { id: 'receivable', workspaceId: 'personal', currency: 'COP' },
+    savings: { id: 'savings', workspaceId: 'personal', currency: 'COP' }
+  }
+  return { paid, received, accountsById }
+}
+
+test('plans an accounting-only reversal only for a strictly validated settlement pair', async () => {
+  const mirror = await import('./mirror.ts')
+  assert.equal(typeof mirror.planSettlementReversal, 'function', 'settlement reversal planner is required')
+  const { paid, received, accountsById } = settlementLegs()
+  const plan = mirror.planSettlementReversal({ first: received, second: paid, accountsById })
+
+  assert.deepEqual(plan, {
+    amount: 250,
+    paidLegId: 'paid',
+    receivedLegId: 'received',
+    fromAccountId: 'checking',
+    bridgeAccountId: 'bridge',
+    receivableAccountId: 'receivable',
+    toAccountId: 'savings',
+    workspaceId: 'home',
+    mirrorWorkspaceId: 'personal',
+    deltas: { from: 250, bridge: -250, receivable: 250, to: -250 }
+  })
+})
+
+test('does not identify generic mirrorOf activity as a bridge settlement', async () => {
+  const mirror = await import('./mirror.ts')
+  assert.equal(typeof mirror.planSettlementReversal, 'function', 'settlement reversal planner is required')
+  assert.equal(typeof mirror.isSettlementCandidate, 'function', 'settlement candidates must be identified explicitly')
+  const { paid, received, accountsById } = settlementLegs()
+  assert.equal(mirror.isSettlementCandidate(paid), true)
+  assert.equal(mirror.isSettlementCandidate({ ...paid, type: 'expense' }), false)
+  assert.throws(() => mirror.planSettlementReversal({
+    first: { ...received, type: 'expense', amount: -250 }, second: paid, accountsById
+  }), /liquidación|settlement/i)
+  assert.throws(() => mirror.planSettlementReversal({
+    first: received, second: { ...paid, mirrorOf: 'unrelated' }, accountsById
+  }), /vínculos/)
+  assert.throws(() => mirror.planSettlementReversal({
+    first: received, second: { ...paid, currency: 'USD' }, accountsById
+  }), /monedas/)
+})
+
+test('fails closed for ambiguous legacy pairs and already reversed settlements', async () => {
+  const mirror = await import('./mirror.ts')
+  assert.equal(typeof mirror.planSettlementReversal, 'function', 'settlement reversal planner is required')
+  const { paid, received, accountsById } = settlementLegs()
+  assert.throws(() => mirror.planSettlementReversal({
+    first: { ...received, notes: 'Transferencia espejo' }, second: paid, accountsById
+  }), /liquidación|settlement/i)
+  assert.throws(() => mirror.planSettlementReversal({
+    first: { ...received, reversedBy: 'reversal-a' }, second: paid, accountsById
+  }), /reverted|revertid/i)
+})

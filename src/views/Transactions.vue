@@ -149,6 +149,8 @@
               <td class="py-4 px-4 font-medium">
                 <div class="truncate max-w-xs md:max-w-md">{{ tx.description }}</div>
                 <div v-if="tx.notes" class="text-[11px] text-text-muted mt-0.5 max-w-xs md:max-w-md whitespace-pre-wrap break-words">{{ tx.notes }}</div>
+                <div v-if="tx.reversedBy" class="mt-1 text-[10px] font-semibold text-accent-amber">Liquidación revertida en Vault</div>
+                <div v-if="tx.settlementType === 'reversal'" class="mt-1 text-[10px] font-semibold text-accent-amber">Ajuste contable · sin movimiento bancario</div>
                 <div v-if="tx.installments && tx.installments > 1" class="text-[10px] text-accent-amber mt-1">
                   {{ tx.installments }} cuotas · {{ formatCurrency(getMonthlyInstallmentAmount(tx.amount, tx.installments), tx.currency || getAccountCurrency(tx.accountId)) }} / mes
                 </div>
@@ -201,6 +203,15 @@
                   >
                     <PencilIcon class="w-4 h-4" />
                   </button>
+                  <button
+                    v-if="transactionsStore.reversibleSettlementIds.includes(tx.id)"
+                    @click="openSettlementReversal(tx)"
+                    class="opacity-0 group-hover:opacity-100 p-2 rounded-lg text-accent-amber hover:bg-accent-amber/10 transition-all"
+                    title="Revertir liquidación · solo corrige la contabilidad de Vault"
+                    aria-label="Revertir liquidación en Vault"
+                  >
+                    <RotateCcwIcon class="w-4 h-4" />
+                  </button>
                   <button 
                     @click="handleDelete(tx.id)"
                     class="opacity-0 group-hover:opacity-100 p-2 rounded-lg text-text-muted hover:text-accent-rose hover:bg-white/5 transition-all"
@@ -236,6 +247,7 @@
           <div v-for="(totals, curr) in selectionSummary" :key="curr" class="flex space-x-3">
             <span v-if="totals.income > 0" class="text-accent-emerald">Ingresos: +{{ formatCurrency(totals.income, curr) }}</span>
             <span v-if="totals.expense > 0" class="text-accent-rose">Gastos: -{{ formatCurrency(totals.expense, curr) }}</span>
+            <span v-if="totals.transfer > 0" class="text-text-secondary">Transferencias: {{ formatCurrency(totals.transfer, curr) }}</span>
           </div>
         </div>
 
@@ -265,6 +277,8 @@
             <div class="min-w-0">
               <p class="text-sm font-medium text-text-primary break-words">{{ tx.description }}</p>
               <p v-if="tx.notes" class="text-[11px] text-text-muted mt-0.5 whitespace-pre-wrap break-words">{{ tx.notes }}</p>
+              <p v-if="tx.reversedBy" class="mt-1 text-[10px] font-semibold text-accent-amber">Liquidación revertida en Vault</p>
+              <p v-if="tx.settlementType === 'reversal'" class="mt-1 text-[10px] font-semibold text-accent-amber">Ajuste contable · sin movimiento bancario</p>
               <p v-if="tx.installments && tx.installments > 1" class="text-[10px] text-accent-amber mt-1">
                 {{ tx.installments }} cuotas · {{ formatCurrency(getMonthlyInstallmentAmount(tx.amount, tx.installments), tx.currency || getAccountCurrency(tx.accountId)) }} / mes
               </p>
@@ -303,6 +317,15 @@
               title="Editar Transacción"
             >
               <PencilIcon class="w-4 h-4" />
+            </button>
+            <button
+              v-if="transactionsStore.reversibleSettlementIds.includes(tx.id)"
+              @click="openSettlementReversal(tx)"
+              class="p-2 rounded-lg text-accent-amber hover:bg-accent-amber/10 transition-all"
+              title="Revertir liquidación · solo corrige la contabilidad de Vault"
+              aria-label="Revertir liquidación en Vault"
+            >
+              <RotateCcwIcon class="w-4 h-4" />
             </button>
             <button
               @click="handleDelete(tx.id)"
@@ -577,6 +600,51 @@
             </button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <!-- Settlement reversal confirmation -->
+    <div
+      v-if="settlementToReverse"
+      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs"
+      @click.self="settlementToReverse = null"
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settlement-reversal-title"
+        class="w-full max-w-lg glass-panel rounded-3xl p-5 sm:p-7 shadow-2xl border border-accent-amber/20 animate-scale-up"
+      >
+        <div class="flex items-start gap-3 mb-5">
+          <div class="p-2.5 rounded-xl bg-accent-amber/10 text-accent-amber shrink-0">
+            <RotateCcwIcon class="w-5 h-5" />
+          </div>
+          <div>
+            <h3 id="settlement-reversal-title" class="font-display font-bold text-xl text-text-primary">Revertir liquidación en Vault</h3>
+            <p class="text-text-secondary text-xs mt-1">{{ settlementToReverse.description }}</p>
+          </div>
+        </div>
+
+        <div class="rounded-2xl border border-accent-amber/20 bg-accent-amber/[0.05] p-4 space-y-3 text-sm text-text-secondary">
+          <p>Se crearán movimientos compensatorios en Vault para restaurar las proyecciones de las cuentas. <strong class="text-text-primary">{{ formatCurrency(Math.abs(settlementToReverse.amount), settlementToReverse.currency || getAccountCurrency(settlementToReverse.accountId)) }}</strong> volverá a quedar pendiente en la cuenta puente.</p>
+          <p class="font-semibold text-accent-amber">Esto es únicamente una corrección contable de Vault. No deshace ni devuelve el movimiento bancario real y no inicia ningún movimiento de dinero.</p>
+          <p>Después puedes registrar por separado la liquidación ya realizada con las cuentas correctas.</p>
+        </div>
+
+        <div class="flex gap-3 pt-5">
+          <button
+            type="button"
+            @click="settlementToReverse = null"
+            :disabled="reversingSettlement"
+            class="w-1/2 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all disabled:opacity-50"
+          >Cancelar</button>
+          <button
+            type="button"
+            @click="confirmSettlementReversal"
+            :disabled="reversingSettlement"
+            class="w-1/2 py-2.5 rounded-xl bg-accent-amber hover:bg-accent-amber/90 text-background font-display font-semibold text-sm transition-all disabled:opacity-50"
+          >{{ reversingSettlement ? 'Revirtiendo...' : 'Confirmar corrección' }}</button>
+        </div>
       </div>
     </div>
 
@@ -864,7 +932,8 @@ import {
   Utensils, Car, Film, Lightbulb, Heart, GraduationCap, TrendingUp, HelpCircle,
   ShoppingBag, Home, Gift, Coffee, Plane, DollarSign, PiggyBank, Smartphone,
   Activity, Scissors, BookOpen, Wrench, Shield,
-  HandCoins as HandCoinsIcon
+  HandCoins as HandCoinsIcon,
+  RotateCcw as RotateCcwIcon
 } from 'lucide-vue-next'
 
 const accountsStore = useAccountsStore()
@@ -877,6 +946,8 @@ const router = useRouter()
 const showAddModal = ref(false)
 const loading = ref(false)
 const pocketTransferSelection = ref(false)
+const settlementToReverse = ref<Transaction | null>(null)
+const reversingSettlement = ref(false)
 
 // Ponytail: Batch selection state and computed
 const selectedTxIds = ref<string[]>([])
@@ -892,14 +963,15 @@ const toggleSelectAll = (e: Event) => {
   }
 }
 const selectionSummary = computed(() => {
-  const totals: Record<string, { income: number, expense: number }> = {}
+  const totals: Record<string, { income: number, expense: number, transfer: number }> = {}
   for (const id of selectedTxIds.value) {
     const tx = displayedTransactions.value.find(t => t.id === id)
     if (!tx) continue
     const curr = tx.currency || getAccountCurrency(tx.accountId)
-    if (!totals[curr]) totals[curr] = { income: 0, expense: 0 }
+    if (!totals[curr]) totals[curr] = { income: 0, expense: 0, transfer: 0 }
     
-    if (tx.amount >= 0) totals[curr].income += tx.amount
+    if (tx.type === 'transfer') totals[curr].transfer += Math.abs(tx.amount)
+    else if (tx.amount >= 0) totals[curr].income += tx.amount
     else totals[curr].expense += Math.abs(tx.amount)
   }
   return totals
@@ -1339,6 +1411,28 @@ const handleDelete = async (id: string) => {
     } catch (err) {
       console.error('Error al borrar movimiento:', err)
     }
+  }
+}
+
+const openSettlementReversal = (tx: Transaction) => {
+  if (transactionsStore.reversibleSettlementIds.includes(tx.id)) {
+    settlementToReverse.value = tx
+  }
+}
+
+const confirmSettlementReversal = async () => {
+  const tx = settlementToReverse.value
+  if (!tx || reversingSettlement.value) return
+
+  reversingSettlement.value = true
+  try {
+    await transactionsStore.reverseSettlement(tx.id)
+    settlementToReverse.value = null
+  } catch (err: any) {
+    console.error('Error al revertir la liquidación contable:', err)
+    alert(err?.message || 'No se pudo corregir la contabilidad de esta liquidación.')
+  } finally {
+    reversingSettlement.value = false
   }
 }
 

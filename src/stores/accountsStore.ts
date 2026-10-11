@@ -337,7 +337,17 @@ export const useAccountsStore = defineStore('accounts', {
       const userId = auth.currentUser?.uid
       this.loading = true
       try {
-        await updateDoc(doc(db, 'accounts', accountId), { mirror })
+        const accountRef = doc(db, 'accounts', accountId)
+        await runTransaction(db, async (transaction) => {
+          const accountSnap = await transaction.get(accountRef)
+          if (!accountSnap.exists()) throw new Error('La cuenta no existe')
+
+          if (mirror === null && Number(accountSnap.data().balance) !== 0) {
+            throw new Error('No puedes quitar el espejo mientras la cuenta tenga saldo distinto de cero. Liquida la deuda antes de quitarlo.')
+          }
+
+          transaction.update(accountRef, { mirror })
+        })
         if (authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === userId) {
           const index = this.accounts.findIndex(acc => acc.id === accountId)
           if (index !== -1) this.accounts[index] = { ...this.accounts[index], mirror }

@@ -30,7 +30,11 @@ export const PocketOpeningSchema = z.object({
 
 export const TransactionSchema = z.object({
   accountId: z.string().min(1, 'La cuenta de origen es requerida'),
-  amount: z.number().refine(val => val !== 0, {
+  amount: z.number({
+    invalid_type_error: 'El monto debe ser un número'
+  }).refine(Number.isFinite, {
+    message: 'El monto debe ser un número finito'
+  }).refine(val => val !== 0, {
     message: 'El monto no puede ser cero'
   }),
   description: z.string()
@@ -55,6 +59,12 @@ export const TransactionSchema = z.object({
 }, {
   message: 'Las transferencias requieren una cuenta de destino diferente a la de origen',
   path: ['toAccountId']
+}).refine(data => {
+  if (data.type === 'expense' || data.type === 'loan') return data.amount < 0
+  return data.amount > 0
+}, {
+  message: 'Los gastos y préstamos deben tener un monto negativo; los ingresos, transferencias y pagos de préstamos deben tener uno positivo',
+  path: ['amount']
 })
 
 // Statement descriptions come from external bank formats and do not use the

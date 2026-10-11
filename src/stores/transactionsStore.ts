@@ -4,7 +4,14 @@ import { useAccountsStore } from './accountsStore'
 import { useAuthStore } from './authStore'
 import { Account, Transaction, Category, TransactionType } from '@/types'
 import { getTransactionReplacementDeltas, isPocketRelatedAccount } from '@/lib/pockets'
-import { planMirror, planSettlement } from '@/lib/mirror'
+import {
+  isSettlementCandidate,
+  planMirror,
+  planSettlement,
+  planSettlementReversal,
+  SettlementAccountRecord,
+  SettlementLegRecord
+} from '@/lib/mirror'
 import { expenseAmountForDate, getInstallmentCount } from '@/lib/installments'
 import { 
   collection, 
@@ -242,9 +249,19 @@ async function commitPocketMovement(options: {
   })
 }
 
+const normalizeTransactionAmount = (amount: number, type: TransactionType): number => {
+  const numericAmount = Number(amount)
+  if (!Number.isFinite(numericAmount) || numericAmount === 0) {
+    throw new Error('El monto debe ser un número finito distinto de cero')
+  }
+
+  return type === 'expense' || type === 'loan' ? -Math.abs(numericAmount) : Math.abs(numericAmount)
+}
+
 interface TransactionsState {
   transactions: Transaction[];
   categories: Category[];
+  reversibleSettlementIds: string[];
   loading: boolean;
 }
 
@@ -252,6 +269,7 @@ export const useTransactionsStore = defineStore('transactions', {
   state: (): TransactionsState => ({
     transactions: [],
     categories: [],
+    reversibleSettlementIds: [],
     loading: false,
   }),
   getters: {
@@ -393,6 +411,11 @@ export const useTransactionsStore = defineStore('transactions', {
           } as Transaction)
         })
         this.transactions = transactionsList
+        this.reversibleSettlementIds = []
+        const reversibleIds = await Promise.all(
+          transactionsList.map(async tx => await this.canReverseSettlement(tx) ? tx.id : null)
+        )
+        this.reversibleSettlementIds = reversibleIds.filter((id): id is string => id !== null)
       } catch (error) {
         console.error('Error fetching transactions:', error)
       } finally {
@@ -435,11 +458,24 @@ export const useTransactionsStore = defineStore('transactions', {
       const workspaceId = authStore.activeWorkspaceId
       if (!user || !workspaceId) throw new Error('Usuario o Workspace no inicializado')
 
+      const normalizedAmount = normalizeTransactionAmount(amount, type)
       const accountsStore = useAccountsStore()
       const account = accountsStore.getAccountById(accountId)
       if (!account) throw new Error('Cuenta origen no encontrada')
+      if (account.workspaceId !== workspaceId) throw new Error('La cuenta origen no pertenece al workspace activo')
 
-      const candidate = { accountId, toAccountId, type, amount }
+      let destination
+      if (type === 'transfer') {
+        if (!toAccountId || toAccountId === accountId) {
+          throw new Error('Las transferencias requieren una cuenta de destino diferente a la de origen')
+        }
+        destination = accountsStore.getAccountById(toAccountId)
+        if (!destination || destination.workspaceId !== workspaceId) {
+          throw new Error('La cuenta destino no existe en el workspace activo')
+        }
+      }
+
+      const candidate = { accountId, toAccountId, type, amount: normalizedAmount }
       if (transactionTouchesPocket(accountsStore, candidate)) {
         this.loading = true
         try {
@@ -448,7 +484,7 @@ export const useTransactionsStore = defineStore('transactions', {
             workspaceId,
             userId: userId || user.uid,
             accountId,
-            amount: Number(amount),
+            amount: normalizedAmount,
             description,
             categoryId: type === 'income' || type === 'expense' ? categoryId : '',
             date: Timestamp.fromDate(transactionDate),
@@ -479,7 +515,7 @@ export const useTransactionsStore = defineStore('transactions', {
       // Cuenta puente: un gasto contra ella se replica solo en el workspace espejo.
       // Solo gastos: la transferencia de liquidación no debe replicarse.
       if (type === 'expense' && account.mirror) {
-        return this.addMirroredExpense({ accountId, amount, description, categoryId, date, receiptUrl, notes, installments, userId })
+        return this.addMirroredExpense({ accountId, amount: normalizedAmount, description, categoryId, date, receiptUrl, notes, installments, userId })
       }
 
       this.loading = true
@@ -492,7 +528,7 @@ export const useTransactionsStore = defineStore('transactions', {
           workspaceId,
           userId: userId || user.uid,
           accountId,
-          amount: Number(amount),
+          amount: normalizedAmount,
           description,
           categoryId,
           date: Timestamp.fromDate(transactionDate),
@@ -515,10 +551,10 @@ export const useTransactionsStore = defineStore('transactions', {
 
         // 2. Actualizar balances de las cuentas asociadas
         if (type === 'transfer' && toAccountId) {
-          await accountsStore.updateAccountBalance(accountId, -amount)
-          await accountsStore.updateAccountBalance(toAccountId, amount)
+          await accountsStore.updateAccountBalance(accountId, -normalizedAmount)
+          await accountsStore.updateAccountBalance(toAccountId, normalizedAmount)
         } else {
-          await accountsStore.updateAccountBalance(accountId, amount)
+          await accountsStore.updateAccountBalance(accountId, normalizedAmount)
         }
 
         this.transactions.unshift(txWithId)
@@ -553,6 +589,7 @@ export const useTransactionsStore = defineStore('transactions', {
       const workspaceId = authStore.activeWorkspaceId
       if (!user || !workspaceId) throw new Error('Usuario o Workspace no inicializado')
 
+      const normalizedAmount = normalizeTransactionAmount(amount, 'expense')
       const accountsStore = useAccountsStore()
       const bridge = accountsStore.getAccountById(accountId)
       if (!bridge?.mirror) throw new Error('La cuenta no tiene espejo configurado')
@@ -576,7 +613,7 @@ export const useTransactionsStore = defineStore('transactions', {
         }
 
         const deltas = planMirror({
-          amount,
+          amount: normalizedAmount,
           bridgeCurrency: bridge.currency || 'USD',
           sourceCurrency: source.currency || 'USD',
           receivableCurrency: receivable.currency || 'USD'
@@ -732,6 +769,9 @@ export const useTransactionsStore = defineStore('transactions', {
     async deleteMirrorPair(tx: Transaction): Promise<void> {
       const accountsStore = useAccountsStore()
       const twinSnap = await getDoc(doc(db, 'transactions', tx.mirrorOf as string))
+      if (!twinSnap.exists()) {
+        throw new Error('No se encontró la pata espejo; no se eliminó ninguna transacción.')
+      }
 
       const batch = writeBatch(db)
       // Revierte una pata con la misma convención de signos que deleteTransaction.
@@ -746,13 +786,8 @@ export const useTransactionsStore = defineStore('transactions', {
 
       batch.delete(doc(db, 'transactions', tx.id))
       reverse(tx)
-
-      if (twinSnap.exists()) {
-        batch.delete(twinSnap.ref)
-        reverse(twinSnap.data() as any)
-      } else {
-        console.warn('La pata espejo ya no existe: se revierte solo este workspace')
-      }
+      batch.delete(twinSnap.ref)
+      reverse(twinSnap.data() as any)
       await batch.commit()
 
       // Puede haber tocado varias cuentas locales: releer es más corto y más fiable
@@ -778,81 +813,313 @@ export const useTransactionsStore = defineStore('transactions', {
       const accountsStore = useAccountsStore()
       const bridge = accountsStore.getAccountById(bridgeAccountId)
       if (!bridge?.mirror) throw new Error('La cuenta no tiene espejo configurado')
-      const from = accountsStore.getAccountById(fromAccountId)
-      if (!from) throw new Error('Cuenta de pago no encontrada')
-      if (fromAccountId === bridgeAccountId) throw new Error('La cuenta de pago no puede ser la cuenta puente')
+      if (!fromAccountId || !toAccountId) throw new Error('Debes seleccionar las cuentas de pago y destino')
 
-      const { workspaceId: mirrorWorkspaceId, accountId: receivableId } = bridge.mirror
+      const expectedMirror = { ...bridge.mirror }
+      const { workspaceId: mirrorWorkspaceId, accountId: receivableId } = expectedMirror
+      const fromRef = doc(db, 'accounts', fromAccountId)
+      const bridgeRef = doc(db, 'accounts', bridgeAccountId)
+      const receivableRef = doc(db, 'accounts', receivableId)
+      const toRef = doc(db, 'accounts', toAccountId)
+      const expectedBridgeBalance = Number(bridge.balance)
+      const settlementAmount = Number(amount)
+      const transactionDate = date instanceof Date ? date : new Date(date)
+      const localRef = doc(collection(db, 'transactions'))
+      const mirrorRef = doc(collection(db, 'transactions'))
 
       this.loading = true
       try {
-        const [receivableSnap, toSnap] = await Promise.all([
-          getDoc(doc(db, 'accounts', receivableId)),
-          getDoc(doc(db, 'accounts', toAccountId))
-        ])
-        if (!receivableSnap.exists() || !toSnap.exists()) {
-          throw new Error('Las cuentas del workspace espejo no existen')
-        }
-        const receivable = receivableSnap.data()
-        const to = toSnap.data()
-        if (receivable.workspaceId !== mirrorWorkspaceId || to.workspaceId !== mirrorWorkspaceId) {
-          throw new Error('Las cuentas espejo no pertenecen al workspace configurado')
-        }
-        if (toAccountId === receivableId) throw new Error('La cuenta que recibe no puede ser la cuenta por cobrar')
+        await runTransaction(db, async (transaction) => {
+          const [fromSnap, bridgeSnap, receivableSnap, toSnap] = await Promise.all([
+            transaction.get(fromRef),
+            transaction.get(bridgeRef),
+            transaction.get(receivableRef),
+            transaction.get(toRef)
+          ])
 
-        const deltas = planSettlement({
-          amount,
-          debt: -bridge.balance,
-          bridgeCurrency: bridge.currency || 'USD',
-          fromCurrency: from.currency || 'USD',
-          receivableCurrency: receivable.currency || 'USD',
-          toCurrency: to.currency || 'USD'
-        })
+          if (!fromSnap.exists()) throw new Error('La cuenta de pago no existe')
+          if (!bridgeSnap.exists()) throw new Error('La cuenta puente no existe')
+          if (!receivableSnap.exists() || !toSnap.exists()) {
+            throw new Error('Las cuentas del workspace espejo no existen')
+          }
 
-        const transactionDate = date instanceof Date ? date : new Date(date)
-        const localRef = doc(collection(db, 'transactions'))
-        const mirrorRef = doc(collection(db, 'transactions'))
-        const shared = {
-          amount,
-          description: `Liquidación de ${bridge.name}`,
-          categoryId: '',
-          date: Timestamp.fromDate(transactionDate),
-          type: 'transfer' as TransactionType,
-          receiptUrl: null,
-          createdAt: new Date()
-        }
+          const from = fromSnap.data()
+          const bridgeData = bridgeSnap.data()
+          const receivable = receivableSnap.data()
+          const to = toSnap.data()
+          const currentMirror = bridgeData.mirror
+          // Pocket balances only change through version-checked pocket movements.
+          if ([from, bridgeData, receivable, to].some(movementAccountIsPocketRelated)) {
+            throw new Error('Las liquidaciones de cuentas puente no se pueden combinar con bolsillos.')
+          }
 
-        const batch = writeBatch(db)
-        batch.set(localRef, {
-          ...shared,
-          workspaceId,
-          userId: user.uid,
-          accountId: fromAccountId,
-          toAccountId: bridgeAccountId,
-          notes: `Reembolso pagado desde ${from.name}`,
-          mirrorOf: mirrorRef.id,
-          currency: bridge.currency || 'USD'
+          if (
+            !currentMirror ||
+            currentMirror.workspaceId !== expectedMirror.workspaceId ||
+            currentMirror.accountId !== expectedMirror.accountId ||
+            currentMirror.sourceAccountId !== expectedMirror.sourceAccountId
+          ) {
+            throw new Error('El espejo cambió; vuelve a cargar la cuenta antes de liquidar')
+          }
+          if (bridgeData.workspaceId !== workspaceId || from.workspaceId !== workspaceId) {
+            throw new Error('La cuenta puente y la cuenta de pago deben pertenecer al workspace activo')
+          }
+          if (receivable.workspaceId !== mirrorWorkspaceId || to.workspaceId !== mirrorWorkspaceId) {
+            throw new Error('Las cuentas espejo no pertenecen al workspace configurado')
+          }
+          if (fromAccountId === bridgeAccountId) {
+            throw new Error('La cuenta de pago no puede ser la cuenta puente')
+          }
+          if (toAccountId === receivableId) {
+            throw new Error('La cuenta que recibe no puede ser la cuenta por cobrar')
+          }
+
+          const fromBalance = Number(from.balance)
+          const bridgeBalance = Number(bridgeData.balance)
+          const receivableBalance = Number(receivable.balance)
+          const toBalance = Number(to.balance)
+          if (![fromBalance, bridgeBalance, receivableBalance, toBalance].every(Number.isFinite)) {
+            throw new Error('Los saldos de la liquidación no son válidos')
+          }
+
+          const deltas = planSettlement({
+            amount: settlementAmount,
+            debt: -bridgeBalance,
+            bridgeCurrency: bridgeData.currency || 'USD',
+            fromCurrency: from.currency || 'USD',
+            receivableCurrency: receivable.currency || 'USD',
+            toCurrency: to.currency || 'USD'
+          })
+          if (bridgeBalance !== expectedBridgeBalance) {
+            throw new Error('El monto ya no es válido porque cambió el saldo del puente; vuelve a cargar la cuenta')
+          }
+          if (receivableBalance < settlementAmount) {
+            throw new Error('El saldo por cobrar no cubre el monto a liquidar')
+          }
+          const shared = {
+            amount: settlementAmount,
+            description: `Liquidación de ${bridgeData.name}`,
+            categoryId: '',
+            date: Timestamp.fromDate(transactionDate),
+            type: 'transfer' as TransactionType,
+            receiptUrl: null,
+            createdAt: new Date()
+          }
+
+          transaction.set(localRef, {
+            ...shared,
+            workspaceId,
+            userId: user.uid,
+            accountId: fromAccountId,
+            toAccountId: bridgeAccountId,
+            notes: `Reembolso pagado desde ${from.name}`,
+            mirrorOf: mirrorRef.id,
+            settlementType: 'settlement',
+            currency: bridgeData.currency || 'USD'
+          })
+          transaction.set(mirrorRef, {
+            ...shared,
+            workspaceId: mirrorWorkspaceId,
+            userId: user.uid,
+            accountId: receivableId,
+            toAccountId,
+            notes: `Reembolso recibido en ${to.name}`,
+            mirrorOf: localRef.id,
+            settlementType: 'settlement',
+            currency: to.currency || 'USD'
+          })
+          transaction.update(fromRef, { balance: fromBalance + deltas.from })
+          transaction.update(bridgeRef, { balance: bridgeBalance + deltas.bridge })
+          transaction.update(receivableRef, { balance: receivableBalance + deltas.receivable })
+          transaction.update(toRef, { balance: toBalance + deltas.to })
         })
-        batch.set(mirrorRef, {
-          ...shared,
-          workspaceId: mirrorWorkspaceId,
-          userId: user.uid,
-          accountId: receivableId,
-          toAccountId,
-          notes: `Reembolso recibido en ${to.name}`,
-          mirrorOf: localRef.id,
-          currency: to.currency || 'USD'
-        })
-        batch.update(doc(db, 'accounts', fromAccountId), { balance: increment(deltas.from) })
-        batch.update(doc(db, 'accounts', bridgeAccountId), { balance: increment(deltas.bridge) })
-        batch.update(doc(db, 'accounts', receivableId), { balance: increment(deltas.receivable) })
-        batch.update(doc(db, 'accounts', toAccountId), { balance: increment(deltas.to) })
-        await batch.commit()
 
         await accountsStore.fetchAccounts()
         await this.fetchTransactions()
       } catch (error) {
         console.error('Error al liquidar cuenta puente:', error)
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+
+    // Preflight used only to expose the action; reversal validates again inside its atomic transaction.
+    async canReverseSettlement(record: Transaction): Promise<boolean> {
+      const user = auth.currentUser
+      const authStore = useAuthStore()
+      if (!user || !authStore.activeWorkspaceId || record.workspaceId !== authStore.activeWorkspaceId) return false
+      if (!isSettlementCandidate(record)) return false
+
+      try {
+        const currentSnap = await getDoc(doc(db, 'transactions', record.id))
+        if (!currentSnap.exists()) return false
+        const current = { ...currentSnap.data(), id: currentSnap.id } as SettlementLegRecord
+        if (!isSettlementCandidate(current)) return false
+        const twinId = current.mirrorOf
+        if (!twinId) return false
+
+        const twinSnap = await getDoc(doc(db, 'transactions', twinId))
+        if (!twinSnap.exists()) return false
+        const twin = { ...twinSnap.data(), id: twinSnap.id } as SettlementLegRecord
+        const accountIds = [current.accountId, current.toAccountId, twin.accountId, twin.toAccountId]
+        if (!accountIds.every((id): id is string => typeof id === 'string' && id.length > 0) || new Set(accountIds).size !== 4) {
+          return false
+        }
+
+        const accountSnaps = await Promise.all(accountIds.map(id => getDoc(doc(db, 'accounts', id))))
+        const accountData = accountSnaps.map(snap => snap.exists() ? snap.data() : undefined)
+        if (accountData.some(data => !data || !Number.isFinite(data.balance))) return false
+        const accountsById: Record<string, SettlementAccountRecord> = {}
+        for (let index = 0; index < accountSnaps.length; index++) {
+          const data = accountData[index]
+          if (!data) return false
+          accountsById[accountSnaps[index].id] = { ...data, id: accountSnaps[index].id } as SettlementAccountRecord
+        }
+        if (Object.values(accountsById).some(movementAccountIsPocketRelated)) return false
+        planSettlementReversal({ first: current, second: twin, accountsById })
+
+        const workspaceIds = [...new Set([current.workspaceId, twin.workspaceId])]
+        const workspaceSnaps = await Promise.all(workspaceIds.map(id => getDoc(doc(db, 'workspaces', id))))
+        return workspaceSnaps.length === 2 && workspaceSnaps.every(snap => {
+          if (!snap.exists()) return false
+          const data = snap.data()
+          return !!data && Array.isArray(data.members) && data.members.includes(user.uid)
+        })
+      } catch {
+        return false
+      }
+    },
+
+    // Reverses only a validated bridge settlement; it records compensating entries in Vault and never moves bank funds.
+    async reverseSettlement(transactionId: string): Promise<void> {
+      const user = auth.currentUser
+      const authStore = useAuthStore()
+      const activeWorkspaceId = authStore.activeWorkspaceId
+      if (!user || !activeWorkspaceId) throw new Error('Usuario o Workspace no inicializado')
+
+      const paidReversalRef = doc(collection(db, 'transactions'))
+      const receivedReversalRef = doc(collection(db, 'transactions'))
+      const accountsStore = useAccountsStore()
+      this.loading = true
+      try {
+        await runTransaction(db, async (transaction) => {
+          const requestedRef = doc(db, 'transactions', transactionId)
+          const requestedSnap = await transaction.get(requestedRef)
+          if (!requestedSnap.exists()) throw new Error('No se encontró la liquidación que deseas revertir')
+          const requested = { ...requestedSnap.data(), id: requestedSnap.id } as SettlementLegRecord
+          if (requested.workspaceId !== activeWorkspaceId || !isSettlementCandidate(requested)) {
+            throw new Error('La transacción no es una liquidación reversible del workspace activo')
+          }
+          if (!requested.mirrorOf) throw new Error('Falta la pata vinculada de la liquidación')
+
+          const twinRef = doc(db, 'transactions', requested.mirrorOf)
+          const twinSnap = await transaction.get(twinRef)
+          if (!twinSnap.exists()) throw new Error('No se encontró la pata vinculada de la liquidación')
+          const twin = { ...twinSnap.data(), id: twinSnap.id } as SettlementLegRecord
+          const accountIds = [requested.accountId, requested.toAccountId, twin.accountId, twin.toAccountId]
+          if (!accountIds.every((id): id is string => typeof id === 'string' && id.length > 0) || new Set(accountIds).size !== 4) {
+            throw new Error('Las cuentas vinculadas de la liquidación no son válidas')
+          }
+          const workspaceIds = [...new Set([requested.workspaceId, twin.workspaceId])]
+          if (workspaceIds.length !== 2 || workspaceIds.some(id => typeof id !== 'string' || !id)) {
+            throw new Error('Los workspaces de la liquidación no son válidos')
+          }
+
+          const [accountSnaps, workspaceSnaps] = await Promise.all([
+            Promise.all(accountIds.map(id => transaction.get(doc(db, 'accounts', id)))),
+            Promise.all(workspaceIds.map(id => transaction.get(doc(db, 'workspaces', id))))
+          ])
+          const accountData = accountSnaps.map(snap => snap.exists() ? snap.data() : undefined)
+          if (accountData.some(data => !data)) throw new Error('Falta una cuenta asociada a la liquidación')
+          const accountsById: Record<string, SettlementAccountRecord> = {}
+          const balancesById: Record<string, number> = {}
+          for (let index = 0; index < accountSnaps.length; index++) {
+            const snap = accountSnaps[index]
+            const data = accountData[index]
+            if (!data) throw new Error('Falta una cuenta asociada a la liquidación')
+            if (typeof data.balance !== 'number' || !Number.isFinite(data.balance)) {
+              throw new Error('Una cuenta asociada tiene un saldo inválido')
+            }
+            accountsById[snap.id] = { ...data, id: snap.id } as SettlementAccountRecord
+            balancesById[snap.id] = data.balance
+          }
+          if (!workspaceSnaps.every(snap => {
+            if (!snap.exists()) return false
+            const data = snap.data()
+            return !!data && Array.isArray(data.members) && data.members.includes(user.uid)
+          })) {
+            throw new Error('Debes pertenecer a ambos workspaces para revertir esta liquidación')
+          }
+
+          if (Object.values(accountsById).some(movementAccountIsPocketRelated)) {
+            throw new Error('Las liquidaciones de cuentas puente no se pueden combinar con bolsillos.')
+          }
+          const plan = planSettlementReversal({ first: requested, second: twin, accountsById })
+          const paidLeg = requested.id === plan.paidLegId ? requested : twin
+          const receivedLeg = requested.id === plan.receivedLegId ? requested : twin
+          const reversalDate = Timestamp.now()
+          const reversalDescription = `Reversión contable de ${paidLeg.description}`
+          const reversalNotes = 'Ajuste contable de Vault. No representa ni inicia un movimiento bancario.'
+          const sharedReversal = {
+            amount: plan.amount,
+            description: reversalDescription,
+            categoryId: '',
+            date: reversalDate,
+            type: 'transfer' as TransactionType,
+            receiptUrl: null,
+            settlementType: 'reversal' as const,
+            createdAt: reversalDate
+          }
+
+          transaction.set(paidReversalRef, {
+            ...sharedReversal,
+            workspaceId: plan.workspaceId,
+            userId: user.uid,
+            accountId: plan.bridgeAccountId,
+            toAccountId: plan.fromAccountId,
+            notes: reversalNotes,
+            mirrorOf: receivedReversalRef.id,
+            reversalOf: paidLeg.id,
+            currency: paidLeg.currency
+          })
+          transaction.set(receivedReversalRef, {
+            ...sharedReversal,
+            workspaceId: plan.mirrorWorkspaceId,
+            userId: user.uid,
+            accountId: plan.toAccountId,
+            toAccountId: plan.receivableAccountId,
+            notes: reversalNotes,
+            mirrorOf: paidReversalRef.id,
+            reversalOf: receivedLeg.id,
+            currency: receivedLeg.currency
+          })
+          transaction.update(doc(db, 'transactions', plan.paidLegId), {
+            reversedBy: paidReversalRef.id,
+            reversedAt: reversalDate
+          })
+          transaction.update(doc(db, 'transactions', plan.receivedLegId), {
+            reversedBy: receivedReversalRef.id,
+            reversedAt: reversalDate
+          })
+          transaction.update(doc(db, 'accounts', plan.fromAccountId), {
+            balance: balancesById[plan.fromAccountId] + plan.deltas.from
+          })
+          transaction.update(doc(db, 'accounts', plan.bridgeAccountId), {
+            balance: balancesById[plan.bridgeAccountId] + plan.deltas.bridge
+          })
+          transaction.update(doc(db, 'accounts', plan.receivableAccountId), {
+            balance: balancesById[plan.receivableAccountId] + plan.deltas.receivable
+          })
+          transaction.update(doc(db, 'accounts', plan.toAccountId), {
+            balance: balancesById[plan.toAccountId] + plan.deltas.to
+          })
+        })
+
+        this.reversibleSettlementIds = this.reversibleSettlementIds.filter(id => id !== transactionId)
+        await Promise.all([accountsStore.fetchAccounts(), this.fetchTransactions()])
+      } catch (error) {
+        console.error('Error al revertir la liquidación contable:', error)
         throw error
       } finally {
         this.loading = false
@@ -874,6 +1141,9 @@ export const useTransactionsStore = defineStore('transactions', {
       const accountsStore = useAccountsStore()
       const account = accountsStore.getAccountById(accountId)
       if (!account) throw new Error('Cuenta no encontrada')
+      if (account.mirror) {
+        throw new Error('No se pueden importar transacciones directamente a una cuenta puente; registra el gasto para crear sus dos patas espejo.')
+      }
       const parsedRows = StatementImportBatchSchema.parse(rawTxsList)
       const initiatingUserId = user.uid
       const initiatingWorkspaceId = workspaceId
@@ -1070,6 +1340,9 @@ export const useTransactionsStore = defineStore('transactions', {
 
       const authStore = useAuthStore()
       const workspaceId = authStore.activeWorkspaceId
+      if (!workspaceId) throw new Error('Workspace no inicializado')
+      const normalizedAmount = normalizeTransactionAmount(updates.amount, updates.type)
+
       if (transactionTouchesPocket(accountsStore, oldTx, updates)) {
         if (!workspaceId || oldTx.workspaceId !== workspaceId) throw new Error('La transacción no pertenece al workspace activo.')
         const account = accountsStore.getAccountById(updates.accountId)
@@ -1077,13 +1350,12 @@ export const useTransactionsStore = defineStore('transactions', {
         this.loading = true
         try {
           const transactionDate = updates.date instanceof Date ? updates.date : new Date(updates.date)
-          const newAmount = Number(updates.amount)
           const neutral = updates.type !== 'income' && updates.type !== 'expense'
           const next: PocketMovementTransaction = {
             workspaceId,
             userId: updates.userId || oldTx.userId || user.uid,
             accountId: updates.accountId,
-            amount: newAmount,
+            amount: normalizedAmount,
             description: updates.description,
             categoryId: neutral ? '' : updates.categoryId,
             date: Timestamp.fromDate(transactionDate),
@@ -1121,6 +1393,20 @@ export const useTransactionsStore = defineStore('transactions', {
         const transactionDate = updates.date instanceof Date ? updates.date : new Date(updates.date)
         const account = accountsStore.getAccountById(updates.accountId)
         if (!account) throw new Error('Cuenta origen no encontrada')
+        if (account.workspaceId !== workspaceId) throw new Error('La cuenta origen no pertenece al workspace activo')
+        if (account.mirror) {
+          throw new Error('No puedes mover o editar una transacción hacia una cuenta puente fuera de una operación espejo')
+        }
+
+        if (updates.type === 'transfer') {
+          if (!updates.toAccountId || updates.toAccountId === updates.accountId) {
+            throw new Error('Las transferencias requieren una cuenta de destino diferente a la de origen')
+          }
+          const destination = accountsStore.getAccountById(updates.toAccountId)
+          if (!destination || destination.workspaceId !== workspaceId) {
+            throw new Error('La cuenta destino no existe en el workspace activo')
+          }
+        }
         const installmentCount = updates.type === 'expense' && account.type === 'credit'
           ? getInstallmentCount(updates.installments)
           : 1
@@ -1134,12 +1420,11 @@ export const useTransactionsStore = defineStore('transactions', {
         }
 
         // 2. Aplicar balances de las cuentas nuevas
-        const newAmount = Number(updates.amount)
         if (updates.type === 'transfer' && updates.toAccountId) {
-          await accountsStore.updateAccountBalance(updates.accountId, -newAmount)
-          await accountsStore.updateAccountBalance(updates.toAccountId, newAmount)
+          await accountsStore.updateAccountBalance(updates.accountId, -normalizedAmount)
+          await accountsStore.updateAccountBalance(updates.toAccountId, normalizedAmount)
         } else {
-          await accountsStore.updateAccountBalance(updates.accountId, newAmount)
+          await accountsStore.updateAccountBalance(updates.accountId, normalizedAmount)
         }
 
         // 3. Preparar documento de actualización
@@ -1147,7 +1432,7 @@ export const useTransactionsStore = defineStore('transactions', {
         const neutral = updates.type !== 'income' && updates.type !== 'expense'
         const updatedFields = {
           accountId: updates.accountId,
-          amount: newAmount,
+          amount: normalizedAmount,
           description: updates.description,
           categoryId: neutral ? '' : updates.categoryId,
           date: Timestamp.fromDate(transactionDate),
