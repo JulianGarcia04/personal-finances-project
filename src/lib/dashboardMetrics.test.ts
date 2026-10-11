@@ -11,7 +11,10 @@ import {
   spendableUntilMonthEnd,
   projectMonthEndExpenses,
   cardDebtSummary,
-  utilizationLevel
+  utilizationLevel,
+  isSpendableAccount,
+  projectionChecks,
+  cardDebtRows
 } from './dashboardMetrics.ts'
 
 // --- Aligned month-over-month ---
@@ -166,4 +169,51 @@ test('utilization level warns above 30% and alerts above 70%', () => {
   assert.equal(utilizationLevel(30), 'ok')
   assert.equal(utilizationLevel(31), 'warn')
   assert.equal(utilizationLevel(71), 'alert')
+})
+
+// --- Review fixes (T4) ---
+
+test('spendable cash only counts top-level checking and cash accounts', () => {
+  assert.equal(isSpendableAccount({ type: 'checking' }), true)
+  assert.equal(isSpendableAccount({ type: 'cash' }), true)
+  assert.equal(isSpendableAccount({ type: 'savings' }), false)
+  assert.equal(isSpendableAccount({ type: 'credit' }), false)
+  // Pockets are money set aside, mirror accounts are bridges.
+  assert.equal(isSpendableAccount({ type: 'checking', parentAccountId: 'main' }), false)
+  assert.equal(isSpendableAccount({ type: 'checking', mirror: true }), false)
+})
+
+test('projection compares budgeted categories against the budget and all spending against the limit', () => {
+  const checks = projectionChecks({
+    budgetedProjection: 900,
+    budgetTotal: 1000,
+    totalProjection: 8000,
+    expenseLimit: 5000
+  })
+  assert.deepEqual(checks, {
+    budget: { projected: 900, cap: 1000, exceeds: false },
+    limit: { projected: 8000, cap: 5000, exceeds: true }
+  })
+})
+
+test('projection checks are absent when there is no budget nor expense limit', () => {
+  assert.deepEqual(
+    projectionChecks({ budgetedProjection: 0, budgetTotal: 0, totalProjection: 8000, expenseLimit: 0 }),
+    { budget: null, limit: null }
+  )
+})
+
+test('card debt rows report per-card debt and utilization, highest utilization first', () => {
+  const rows = cardDebtRows([
+    { id: 'a', name: 'Visa', balance: -200, limit: 1000 },
+    { id: 'b', name: 'Master', balance: -450, limit: 1000 },
+    { id: 'c', name: 'Sin cupo', balance: -100, limit: 0 },
+    { id: 'd', name: 'Al día', balance: 20, limit: 500 }
+  ])
+  assert.deepEqual(rows, [
+    { id: 'b', name: 'Master', debt: 450, limit: 1000, utilization: 45 },
+    { id: 'a', name: 'Visa', debt: 200, limit: 1000, utilization: 20 },
+    { id: 'd', name: 'Al día', debt: 0, limit: 500, utilization: 0 },
+    { id: 'c', name: 'Sin cupo', debt: 100, limit: 0, utilization: null }
+  ])
 })

@@ -141,3 +141,41 @@ export const utilizationLevel = (utilization: number | null): 'ok' | 'warn' | 'a
   if (utilization === null || utilization <= 30) return 'ok'
   return utilization > 70 ? 'alert' : 'warn'
 }
+
+// Money you can spend right away: top-level checking and cash accounts. Savings,
+// pockets (money set aside), credit cards and mirror bridge accounts are excluded.
+export const isSpendableAccount = (
+  account: { type: string; parentAccountId?: string | null; mirror?: unknown }
+) => (account.type === 'checking' || account.type === 'cash') && !account.parentAccountId && !account.mirror
+
+export interface ProjectionCheck {
+  projected: number;
+  cap: number;
+  exceeds: boolean;
+}
+
+// Compare like with like: the projection of budgeted categories against the budget
+// total, and the projection of all spending against the workspace expense limit.
+// A check is null when its cap is not configured.
+export const projectionChecks = (
+  { budgetedProjection, budgetTotal, totalProjection, expenseLimit }:
+  { budgetedProjection: number; budgetTotal: number; totalProjection: number; expenseLimit: number }
+): { budget: ProjectionCheck | null; limit: ProjectionCheck | null } => {
+  const check = (projected: number, cap: number): ProjectionCheck | null =>
+    cap > 0 ? { projected, cap, exceeds: projected > cap } : null
+  return {
+    budget: check(budgetedProjection, budgetTotal),
+    limit: check(totalProjection, expenseLimit)
+  }
+}
+
+// Per-card debt and utilization (null without a limit), highest utilization first;
+// cards without a limit go last.
+export const cardDebtRows = <T extends { id: string; name: string; balance: number; limit: number }>(cards: T[]) =>
+  cards
+    .map(card => {
+      const debt = Math.max(0, -card.balance)
+      const limit = Math.max(0, card.limit || 0)
+      return { id: card.id, name: card.name, debt, limit, utilization: limit > 0 ? Math.round((debt / limit) * 100) : null }
+    })
+    .sort((a, b) => (b.utilization ?? -1) - (a.utilization ?? -1))
