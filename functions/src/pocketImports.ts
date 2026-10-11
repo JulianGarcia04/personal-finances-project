@@ -2,6 +2,7 @@ import * as admin from 'firebase-admin'
 import { Timestamp } from 'firebase-admin/firestore'
 import { HttpsError, onCall } from 'firebase-functions/v2/https'
 import { z } from 'zod'
+import { roundMoney } from './money'
 
 const rowSchema = z.object({
   date: z.string().min(1).refine(value => Number.isFinite(new Date(value).getTime())),
@@ -71,7 +72,7 @@ export async function importWorkspacePocketStatement(
   if (!input.userId) throw new Error('El usuario es obligatorio.')
 
   const rows: PreparedRow[] = parsed.rows.map(row => ({ ...row, dateValue: new Date(row.date) }))
-  const delta = rows.reduce((sum, row) => sum + row.amount, 0)
+  const delta = roundMoney(rows.reduce((sum, row) => sum + row.amount, 0))
   if (!Number.isFinite(delta)) throw new Error('El total del extracto no es válido.')
 
   const { workspaceId, accountId } = parsed
@@ -146,7 +147,7 @@ export async function importWorkspacePocketStatement(
     }
 
     const currentBalance = Number(account.balance)
-    const nextBalance = currentBalance + delta
+    const nextBalance = roundMoney(currentBalance + delta)
     if (!Number.isFinite(currentBalance) || !Number.isFinite(nextBalance) || nextBalance < 0) {
       throw new Error('El saldo disponible no puede ser negativo.')
     }

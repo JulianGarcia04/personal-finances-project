@@ -900,3 +900,85 @@ test('extracted Admin account path enforces membership and funds pockets atomica
   assert.equal(reversedPocket.balance, 0)
   assert.equal(reversedPocket.openingAllocationId, null)
 })
+
+test('legacy Admin movements reject invalid transfers and cashflow signs without writes', async () => {
+  const { accountsStore, adminDb, identity, workspaceId } = fixture
+  const { mutateWorkspaceTransaction } = functionsRequire('./lib/pockets.js')
+  const source = await accountsStore.addAccount({ name: 'Legacy ledger source', type: 'checking', balance: 500, currency: 'COP' })
+  const target = await accountsStore.addAccount({ name: 'Legacy ledger target', type: 'savings', balance: 100, currency: 'COP' })
+  const foreign = await accountsStore.addAccount({ name: 'Legacy ledger USD', type: 'checking', balance: 40, currency: 'USD' })
+  const balanceOf = async id => (await adminDb.collection('accounts').doc(id).get()).data().balance
+  const countTransactions = async () => (await adminDb.collection('transactions').where('workspaceId', '==', workspaceId).get()).size
+  const transactionsBefore = await countTransactions()
+  const create = movement => mutateWorkspaceTransaction(adminDb, {
+    kind: 'created', userId: identity.user.uid, workspaceId,
+    movement: { description: 'Legacy invalid movement', categoryId: '', ...movement }
+  })
+
+  for (const movement of [
+    { accountId: source.id, toAccountId: source.id, amount: 50, type: 'transfer' },
+    { accountId: source.id, toAccountId: foreign.id, amount: 5, type: 'transfer' },
+    { accountId: source.id, toAccountId: target.id, amount: -50, type: 'transfer' },
+    { accountId: source.id, toAccountId: null, amount: 50, type: 'transfer' },
+    { accountId: source.id, amount: 50, type: 'expense' },
+    { accountId: source.id, amount: -50, type: 'income' },
+    { accountId: source.id, amount: 0, type: 'income' }
+  ]) {
+    await assert.rejects(create(movement), undefined, JSON.stringify(movement))
+  }
+  assert.equal(await countTransactions(), transactionsBefore)
+  assert.equal(await balanceOf(source.id), 500)
+  assert.equal(await balanceOf(target.id), 100)
+  assert.equal(await balanceOf(foreign.id), 40)
+
+  const transfer = await create({ accountId: source.id, toAccountId: target.id, amount: 50, type: 'transfer' })
+  assert.equal(await balanceOf(source.id), 450)
+  assert.equal(await balanceOf(target.id), 150)
+  await assert.rejects(mutateWorkspaceTransaction(adminDb, {
+    kind: 'updated', userId: identity.user.uid, workspaceId, transactionId: transfer.id,
+    movement: { accountId: source.id, toAccountId: source.id, amount: 50, type: 'transfer', description: 'Same account edit', categoryId: '' }
+  }))
+  assert.equal(await balanceOf(source.id), 450)
+  await mutateWorkspaceTransaction(adminDb, { kind: 'deleted', userId: identity.user.uid, workspaceId, transactionId: transfer.id })
+  assert.equal(await balanceOf(source.id), 500)
+  assert.equal(await balanceOf(target.id), 100)
+})
+
+test('legacy Admin balances are rounded to cents', async () => {
+  const { accountsStore, adminDb, identity, workspaceId } = fixture
+  const { mutateWorkspaceTransaction } = functionsRequire('./lib/pockets.js')
+  const account = await accountsStore.addAccount({ name: 'Legacy rounding', type: 'checking', balance: 0, currency: 'USD' })
+  for (const amount of [0.1, 0.2]) {
+    await mutateWorkspaceTransaction(adminDb, {
+      kind: 'created', userId: identity.user.uid, workspaceId,
+      movement: { accountId: account.id, amount, type: 'income', description: 'Cents', categoryId: '' }
+    })
+  }
+  assert.equal((await adminDb.collection('accounts').doc(account.id).get()).data().balance, 0.3)
+})
+
+test('Admin delete refuses one leg of a mirror pair and leaves both legs and balances intact', async () => {
+  const { accountsStore, adminDb, identity, workspaceId } = fixture
+  const { mutateWorkspaceTransaction } = functionsRequire('./lib/pockets.js')
+  const bridge = await accountsStore.addAccount({ name: 'Mirror bridge', type: 'checking', balance: 300, currency: 'COP' })
+  const otherWorkspaceId = `mirror-other-${Date.now()}`
+  const localRef = adminDb.collection('transactions').doc()
+  const twinRef = adminDb.collection('transactions').doc()
+  const base = { userId: identity.user.uid, amount: -60, description: 'Shared expense', categoryId: '', type: 'expense',
+    toAccountId: null, currency: 'COP', installments: 1, date: new Date() }
+  await localRef.set({ ...base, workspaceId, accountId: bridge.id, mirrorOf: twinRef.id })
+  await twinRef.set({ ...base, workspaceId: otherWorkspaceId, accountId: 'mirror-receivable', mirrorOf: localRef.id })
+  const referencedOnlyRef = adminDb.collection('transactions').doc()
+  const referrerRef = adminDb.collection('transactions').doc()
+  await referencedOnlyRef.set({ ...base, workspaceId, accountId: bridge.id })
+  await referrerRef.set({ ...base, workspaceId: otherWorkspaceId, accountId: 'mirror-receivable', mirrorOf: referencedOnlyRef.id })
+
+  for (const transactionId of [localRef.id, referencedOnlyRef.id]) {
+    await assert.rejects(
+      mutateWorkspaceTransaction(adminDb, { kind: 'deleted', userId: identity.user.uid, workspaceId, transactionId }),
+      /desde la app/
+    )
+  }
+  for (const ref of [localRef, twinRef, referencedOnlyRef, referrerRef]) assert.equal((await ref.get()).exists, true)
+  assert.equal((await adminDb.collection('accounts').doc(bridge.id).get()).data().balance, 300)
+})

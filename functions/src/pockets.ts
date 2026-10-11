@@ -1,4 +1,5 @@
 import * as admin from 'firebase-admin'
+import { roundMoney } from './money'
 
 export type WorkspaceAccountInput = {
   userId: string
@@ -123,7 +124,7 @@ export async function createWorkspaceAccount(
     }
     if (input.balance > availableBalance) throw new Error('El saldo disponible es insuficiente para abrir el bolsillo.')
 
-    const parentBalanceAfter = availableBalance - input.balance
+    const parentBalanceAfter = roundMoney(availableBalance - input.balance)
     const childIds = [...registeredIds, accountRef.id]
     const pocket = {
       workspaceId,
@@ -199,16 +200,51 @@ function isPocketRelated(data: admin.firestore.DocumentData): boolean {
     (Array.isArray(data.childAccountIds) && data.childAccountIds.length > 0)
 }
 
-function legacyDeltas(movement: WorkspaceTransactionMovement | admin.firestore.DocumentData, direction: 1 | -1) {
+/** Balance deltas of one movement; accumulates so a same-account transfer nets to zero. */
+export function legacyDeltas(movement: WorkspaceTransactionMovement | admin.firestore.DocumentData, direction: 1 | -1) {
   const deltas: Record<string, number> = {}
   const amount = Number(movement.amount)
+  const add = (accountId: string, value: number) => { deltas[accountId] = (deltas[accountId] ?? 0) + value }
   if (movement.type === 'transfer' && movement.toAccountId) {
-    deltas[movement.accountId] = -amount * direction
-    deltas[movement.toAccountId] = amount * direction
+    add(movement.accountId, -amount * direction)
+    add(movement.toAccountId, amount * direction)
   } else {
-    deltas[movement.accountId] = amount * direction
+    add(movement.accountId, amount * direction)
   }
   return deltas
+}
+
+const POSITIVE_TYPES = new Set(['income', 'loan_payment'])
+const NEGATIVE_TYPES = new Set(['expense', 'loan'])
+
+/**
+ * Validates a new movement on unpocketed accounts with the app's signed-amount
+ * convention: income/loan_payment > 0, expense/loan < 0, transfer > 0 between
+ * two distinct accounts of the same currency.
+ */
+export function assertLegacyMovement(
+  movement: Pick<WorkspaceTransactionMovement, 'accountId' | 'amount'> & { type: string; toAccountId?: string | null },
+  source: admin.firestore.DocumentData,
+  destination?: admin.firestore.DocumentData
+): void {
+  const amount = Number(movement.amount)
+  if (!Number.isFinite(amount) || amount === 0) throw new Error('El monto del movimiento no es válido.')
+  if (movement.type === 'transfer') {
+    if (!movement.toAccountId || !destination) throw new Error('La transferencia requiere una cuenta destino.')
+    if (movement.toAccountId === movement.accountId) {
+      throw new Error('La transferencia requiere cuentas de origen y destino distintas.')
+    }
+    if (!source.currency || source.currency !== destination.currency) {
+      throw new Error('La transferencia requiere cuentas de la misma moneda.')
+    }
+    if (amount < 0) throw new Error('El monto de la transferencia debe ser positivo.')
+  } else if (POSITIVE_TYPES.has(movement.type)) {
+    if (amount < 0) throw new Error('El monto debe ser positivo para ingresos y pagos de préstamo recibidos.')
+  } else if (NEGATIVE_TYPES.has(movement.type)) {
+    if (amount > 0) throw new Error('El monto debe ser negativo para gastos y préstamos dados.')
+  } else {
+    throw new Error('El tipo de movimiento no es válido.')
+  }
 }
 
 function addDeltas(target: Record<string, number>, source: Record<string, number>): void {
@@ -310,6 +346,16 @@ export async function mutateWorkspaceTransaction(
     if (beforeSnap && !beforeSnap.exists) throw new Error('La transacción no existe.')
     const before = beforeSnap?.data() ?? null
     if (before && before.workspaceId !== input.workspaceId) throw new Error('La transacción pertenece a otro workspace.')
+    if (before) {
+      // Mirror pairs (shared expenses, settlements) span two workspaces and must be
+      // reversed together; only the app's pair flow does that, so refuse half-edits here.
+      const referrers = await transaction.get(
+        db.collection('transactions').where('mirrorOf', '==', transactionId).limit(1)
+      )
+      if (before.mirrorOf || before.settlementType || !referrers.empty) {
+        throw new Error('Este movimiento está vinculado a otro workspace (gasto compartido o liquidación); modifícalo o elimínalo desde la app para revertir ambas partes juntas.')
+      }
+    }
     if (before?.pocketAllocation && input.kind === 'updated' &&
         (input.movement?.type !== 'transfer' || input.movement.accountId !== before.accountId ||
          input.movement.toAccountId !== before.toAccountId)) {
@@ -387,7 +433,7 @@ export async function mutateWorkspaceTransaction(
 
     let next: admin.firestore.DocumentData | null = null
     if (input.movement) {
-      const movement = input.movement
+      const movement = { ...input.movement, amount: roundMoney(Number(input.movement.amount)) }
       const source = accountData.get(movement.accountId)
       const destination = movement.toAccountId ? accountData.get(movement.toAccountId) : undefined
       if (!source) throw new Error('La cuenta origen no existe.')
@@ -398,8 +444,8 @@ export async function mutateWorkspaceTransaction(
             movement.userId && !workspaceSnap.data()!.members.includes(movement.userId)) {
           throw new Error('El usuario asociado al movimiento no pertenece al workspace.')
         }
-      } else if (!Number.isFinite(Number(movement.amount))) {
-        throw new Error('El monto del movimiento no es válido.')
+      } else {
+        assertLegacyMovement(movement, source, destination)
       }
       const date = movement.date instanceof Date ? movement.date : new Date()
       if (!Number.isFinite(date.getTime())) throw new Error('La fecha del movimiento no es válida.')
@@ -430,7 +476,7 @@ export async function mutateWorkspaceTransaction(
         const delta = deltas[accountId] ?? 0
         const data = accountData.get(accountId)
         if (!data) throw new Error('Falta una cuenta relacionada con el movimiento.')
-        const balance = Number(data.balance) + delta
+        const balance = roundMoney(Number(data.balance) + delta)
         if (!Number.isFinite(balance) || (isPocketRelated(data) && balance < 0)) {
           throw new Error('El saldo disponible de un bolsillo o cuenta principal no puede ser negativo.')
         }
@@ -451,7 +497,9 @@ export async function mutateWorkspaceTransaction(
       for (const [accountId, delta] of Object.entries(deltas)) {
         const data = accountData.get(accountId)
         if (!data) throw new Error('Una cuenta del movimiento no existe.')
-        transaction.update(accountRefs.get(accountId)!, { balance: Number(data.balance) + delta })
+        const balance = roundMoney(Number(data.balance) + delta)
+        if (!Number.isFinite(balance)) throw new Error('El saldo de la cuenta no es válido.')
+        transaction.update(accountRefs.get(accountId)!, { balance })
       }
     }
 
