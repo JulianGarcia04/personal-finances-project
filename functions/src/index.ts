@@ -352,6 +352,14 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       res.status(400).json({ error: "No hay un workspace activo configurado para el usuario." });
       return;
     }
+    // activeWorkspaceId is user-writable: the Admin SDK bypasses rules, so membership
+    // must be verified here before any tool touches workspace data.
+    const activeWorkspaceDoc = await db.collection("workspaces").doc(activeWorkspaceId).get();
+    const activeMembers = activeWorkspaceDoc.exists ? activeWorkspaceDoc.data()?.members : null;
+    if (!Array.isArray(activeMembers) || !activeMembers.includes(userId)) {
+      res.status(403).json({ error: "No tienes acceso al workspace activo." });
+      return;
+    }
 
     // Obtener API Key activa
     let activeApiKey: string | undefined = undefined;
@@ -892,52 +900,57 @@ export const inviteToWorkspace = onRequest({cors: true}, async (req, res) => {
         return;
       }
 
-      // Verificar que el requester es miembro del workspace
-      const wsRef = db.collection("workspaces").doc(workspaceId);
-      const wsDoc = await wsRef.get();
-      if (!wsDoc.exists) {
-        res.status(404).json({ error: "Workspace no encontrado." });
-        return;
-      }
-      const wsData = wsDoc.data();
-      if (!wsData?.members?.includes(requesterId)) {
-        res.status(403).json({ error: "No tienes permiso para invitar a este workspace." });
+      if (typeof workspaceId !== "string" || typeof email !== "string") {
+        res.status(400).json({ error: "workspaceId y email son requeridos." });
         return;
       }
 
-      // Buscar al usuario por correo
-      let userRecord;
+      // Only the workspace owner may invite.
+      const wsRef = db.collection("workspaces").doc(workspaceId);
+      const wsDoc = await wsRef.get();
+      if (!wsDoc.exists || wsDoc.data()?.ownerId !== requesterId) {
+        res.status(403).json({ error: "Solo el propietario del workspace puede invitar usuarios." });
+        return;
+      }
+
+      // The response never reveals whether the email belongs to a registered user.
+      const genericResponse = {
+        success: true,
+        message: "Si el correo pertenece a una cuenta de Vault, ya tiene acceso al workspace."
+      };
+
+      let inviteeId: string;
       try {
-        userRecord = await admin.auth().getUserByEmail(email);
+        inviteeId = (await admin.auth().getUserByEmail(email.trim())).uid;
       } catch (err: any) {
-        if (err.code === "auth/user-not-found") {
-          res.status(404).json({ error: "El usuario con ese correo no está registrado en Vault." });
+        if (err.code === "auth/user-not-found" || err.code === "auth/invalid-email") {
+          res.status(200).json(genericResponse);
           return;
         }
         throw err;
       }
 
-      const inviteeId = userRecord.uid;
-
-      if (wsData?.members?.includes(inviteeId)) {
-        res.status(400).json({ error: "El usuario ya es miembro de este workspace." });
-        return;
-      }
-
-      // Agregar al workspace
-      await wsRef.update({
-        members: admin.firestore.FieldValue.arrayUnion(inviteeId)
+      // Both writes commit atomically; ownership is re-checked inside the transaction.
+      await db.runTransaction(async (transaction) => {
+        const current = await transaction.get(wsRef);
+        if (!current.exists || current.data()?.ownerId !== requesterId) {
+          throw new Error("WORKSPACE_OWNERSHIP_CHANGED");
+        }
+        transaction.update(wsRef, {
+          members: admin.firestore.FieldValue.arrayUnion(inviteeId)
+        });
+        transaction.set(db.collection("users").doc(inviteeId), {
+          workspaces: admin.firestore.FieldValue.arrayUnion(workspaceId)
+        }, { merge: true });
       });
 
-      // Agregar el workspace al perfil del usuario invitado
-      const userDocRef = db.collection("users").doc(inviteeId);
-      await userDocRef.update({
-        workspaces: admin.firestore.FieldValue.arrayUnion(workspaceId)
-      });
-
-      res.status(200).json({ success: true, message: "Usuario invitado correctamente." });
+      res.status(200).json(genericResponse);
 
     } catch (error: any) {
+      if (error?.message === "WORKSPACE_OWNERSHIP_CHANGED") {
+        res.status(403).json({ error: "Solo el propietario del workspace puede invitar usuarios." });
+        return;
+      }
       console.error("Error en inviteToWorkspace:", error);
       res.status(500).json({ error: error.message });
     }

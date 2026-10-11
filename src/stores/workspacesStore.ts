@@ -114,7 +114,8 @@ export const useWorkspacesStore = defineStore('workspaces', {
       }
     },
 
-    async inviteUser(workspaceId: string, email: string) {
+    // Resolves with the server message; it never reveals whether the email is registered.
+    async inviteUser(workspaceId: string, email: string): Promise<string> {
       const user = auth.currentUser
       if (!user) throw new Error("No autenticado")
 
@@ -132,12 +133,13 @@ export const useWorkspacesStore = defineStore('workspaces', {
           body: JSON.stringify({ workspaceId, email })
         })
         
+        const data = await res.json().catch(() => ({}))
         if (!res.ok) {
-          const data = await res.json()
           throw new Error(data.error || "Error invitando usuario")
         }
-        
+
         await this.fetchMyWorkspaces()
+        return data.message || "Invitación procesada."
       } catch (err) {
         console.error("Error invitando", err)
         throw err

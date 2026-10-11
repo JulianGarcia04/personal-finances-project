@@ -712,8 +712,7 @@ const handleInviteUser = async () => {
   inviteError.value = false
   
   try {
-    await workspacesStore.inviteUser(authStore.activeWorkspaceId, inviteEmail.value.trim())
-    inviteMsg.value = `¡${inviteEmail.value} invitado exitosamente!`
+    inviteMsg.value = await workspacesStore.inviteUser(authStore.activeWorkspaceId, inviteEmail.value.trim())
     inviteEmail.value = ''
   } catch (err: any) {
     console.error('Error invitando usuario', err)
