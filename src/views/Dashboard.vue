@@ -57,8 +57,8 @@
           <div>
             <div class="absolute top-0 right-0 w-24 h-24 bg-accent-emerald/5 rounded-full blur-xl pointer-events-none"></div>
             <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Patrimonio Neto</span>
-            <h4 class="font-display font-bold text-xl sm:text-2xl mt-2 tabular-nums break-words text-text-primary">
-              {{ formatPrimaryCurrency(netWorthValue) }}
+            <h4 class="min-w-0 font-display font-bold text-xl sm:text-2xl lg:text-lg xl:text-xl 2xl:text-2xl tabular-nums mt-2 text-text-primary" :title="formatPrimaryCurrency(netWorthValue)">
+              <span class="whitespace-nowrap">{{ splitMoney(formatPrimaryCurrency(netWorthValue))[0] }}</span> <span class="inline-block max-w-full truncate align-bottom whitespace-nowrap">{{ splitMoney(formatPrimaryCurrency(netWorthValue))[1] }}</span>
             </h4>
             <span class="text-[10px] text-text-muted mt-1 block">Suma de saldos de tus cuentas</span>
           </div>
@@ -73,8 +73,8 @@
             <div class="absolute top-0 right-0 w-24 h-24 bg-accent-emerald/5 rounded-full blur-xl pointer-events-none"></div>
             <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Ingresos del Mes</span>
             <div class="flex flex-wrap items-end gap-x-2 mt-2">
-              <h4 class="min-w-0 font-display font-bold text-xl sm:text-2xl text-accent-emerald tabular-nums break-words">
-                +{{ formatPrimaryCurrency(monthlyIncome) }}
+              <h4 class="min-w-0 max-w-full font-display font-bold text-xl sm:text-2xl lg:text-lg xl:text-xl 2xl:text-2xl tabular-nums text-accent-emerald" :title="'+' + formatPrimaryCurrency(monthlyIncome)">
+                <span class="whitespace-nowrap">+{{ splitMoney(formatPrimaryCurrency(monthlyIncome))[0] }}</span> <span class="inline-block max-w-full truncate align-bottom whitespace-nowrap">{{ splitMoney(formatPrimaryCurrency(monthlyIncome))[1] }}</span>
               </h4>
               <span :class="['text-xs mb-1 font-semibold', incomeData.percent >= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
                 {{ incomeData.percent > 0 ? '+' : '' }}{{ incomeData.percent }}%
@@ -90,8 +90,8 @@
             <div class="absolute top-0 right-0 w-24 h-24 bg-accent-rose/5 rounded-full blur-xl pointer-events-none"></div>
             <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Gastos imputados del Mes</span>
             <div class="flex flex-wrap items-end gap-x-2 mt-2">
-              <h4 class="min-w-0 font-display font-bold text-xl sm:text-2xl text-accent-rose tabular-nums break-words">
-                {{ formatPrimaryCurrency(monthlyExpenses) }}
+              <h4 class="min-w-0 max-w-full font-display font-bold text-xl sm:text-2xl lg:text-lg xl:text-xl 2xl:text-2xl tabular-nums text-accent-rose" :title="formatPrimaryCurrency(monthlyExpenses)">
+                <span class="whitespace-nowrap">{{ splitMoney(formatPrimaryCurrency(monthlyExpenses))[0] }}</span> <span class="inline-block max-w-full truncate align-bottom whitespace-nowrap">{{ splitMoney(formatPrimaryCurrency(monthlyExpenses))[1] }}</span>
               </h4>
               <span :class="['text-xs mb-1 font-semibold', expensesData.percent <= 0 ? 'text-accent-emerald' : 'text-accent-rose']">
                 {{ expensesData.percent > 0 ? '+' : '' }}{{ expensesData.percent }}%
@@ -817,6 +817,13 @@ const formatDate = (dateVal: Date | string) => {
     day: '2-digit',
     month: 'short'
   }).format(d)
+}
+
+// Split a formatted amount at its first (non-breaking) space so a stat value can
+// only wrap between the currency symbol and the number, never between digits.
+const splitMoney = (formatted: string): [string, string] => {
+  const i = formatted.search(/[\s\u00a0\u202f]/)
+  return i < 0 ? ['', formatted] : [formatted.slice(0, i), formatted.slice(i + 1)]
 }
 
 const formatPrimaryCurrency = (val: number) => {

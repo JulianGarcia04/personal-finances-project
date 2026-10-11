@@ -237,7 +237,7 @@
           aria-label="Mensaje para el asesor"
           :enterkeyhint="isCoarsePointer ? 'enter' : 'send'"
           class="flex-1 min-w-0 px-4 py-3 rounded-xl bg-slate-950 border border-white/5 text-base sm:text-sm text-text-primary focus:border-accent-amber/40 focus:outline-hidden transition-colors resize-none max-h-40 overflow-y-auto"
-          placeholder="Pregúntame sobre tus gastos, metas o pídeme crear una cuenta..."
+          :placeholder="inputPlaceholder"
           @input="autoResize"
           @keydown.enter.exact="onEnterKey"
         ></textarea>
@@ -303,6 +303,16 @@ const inputRef = ref<HTMLTextAreaElement | null>(null)
 
 // Touch keyboards: Enter inserts a newline and only the send button sends. Desktop keeps Enter-to-send.
 const isCoarsePointer = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
+
+// The long placeholder wraps (and clips) in the single-row textarea on phones.
+const smQuery = typeof window !== 'undefined' ? window.matchMedia('(min-width: 640px)') : null
+const isSmUp = ref(smQuery?.matches ?? true)
+const onSmChange = (e: MediaQueryListEvent) => { isSmUp.value = e.matches }
+smQuery?.addEventListener('change', onSmChange)
+onBeforeUnmount(() => smQuery?.removeEventListener('change', onSmChange))
+const inputPlaceholder = computed(() =>
+  isSmUp.value ? 'Pregúntame sobre tus gastos, metas o pídeme crear una cuenta...' : 'Pregunta a tu asesor…'
+)
 
 const onEnterKey = (event: KeyboardEvent) => {
   if (isCoarsePointer || event.isComposing) return

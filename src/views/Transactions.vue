@@ -102,7 +102,7 @@
       </div>
 
       <!-- Date From Filter -->
-      <div :class="['space-y-1 min-w-0', showMobileFilters ? '' : 'hidden sm:block']">
+      <div :class="['space-y-1 min-w-0 col-span-2 min-[380px]:col-span-1', showMobileFilters ? '' : 'hidden sm:block']">
         <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Desde</label>
         <input
           v-model="filters.dateFrom"
@@ -112,7 +112,7 @@
       </div>
 
       <!-- Date To Filter -->
-      <div :class="['space-y-1 min-w-0', showMobileFilters ? '' : 'hidden sm:block']">
+      <div :class="['space-y-1 min-w-0 col-span-2 min-[380px]:col-span-1', showMobileFilters ? '' : 'hidden sm:block']">
         <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Hasta</label>
         <input
           v-model="filters.dateTo"
@@ -136,12 +136,12 @@
                   class="rounded border-border bg-slate-900/50 text-accent-emerald focus:ring-accent-emerald cursor-pointer"
                 />
               </th>
-              <th class="py-4 px-4">Detalles / Comercio</th>
-              <th class="py-4 px-4">Cuenta</th>
-              <th class="py-4 px-4">Categoría</th>
-              <th class="py-4 px-4">Fecha</th>
-              <th class="py-4 px-4 text-right">Monto</th>
-              <th class="py-4 px-4 text-center w-24">Acciones</th>
+              <th class="py-4 px-3">Detalles / Comercio</th>
+              <th class="py-4 px-3">Cuenta</th>
+              <th class="py-4 px-3">Categoría</th>
+              <th class="py-4 px-3 whitespace-nowrap">Fecha</th>
+              <th class="py-4 px-3 text-right">Monto</th>
+              <th class="py-4 px-3 text-center w-24">Acciones</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-border/30">
@@ -160,9 +160,9 @@
                 />
               </td>
               <!-- Description -->
-              <td class="py-4 px-4 font-medium">
-                <div class="truncate max-w-xs md:max-w-md">{{ tx.description }}</div>
-                <div v-if="tx.notes" class="text-[11px] text-text-muted mt-0.5 max-w-xs md:max-w-md whitespace-pre-wrap break-words">{{ tx.notes }}</div>
+              <td class="py-4 px-3 font-medium min-w-[10rem] max-w-[14rem] xl:max-w-[18rem] 2xl:max-w-md">
+                <div class="truncate" :title="tx.description">{{ tx.description }}</div>
+                <div v-if="tx.notes" class="text-[11px] text-text-muted mt-0.5 whitespace-pre-wrap break-words">{{ tx.notes }}</div>
                 <div v-if="tx.reversedBy" class="mt-1 text-[10px] font-semibold text-accent-amber">Liquidación revertida en Vault</div>
                 <div v-if="tx.settlementType === 'reversal'" class="mt-1 text-[10px] font-semibold text-accent-amber">Ajuste contable · sin movimiento bancario</div>
                 <div v-if="tx.installments && tx.installments > 1" class="text-[10px] text-accent-amber mt-1">
@@ -173,14 +173,14 @@
                 </div>
               </td>
               <!-- Account -->
-              <td class="py-4 px-4 text-text-secondary">
-                {{ getAccountName(tx.accountId) }}
+              <td class="py-4 px-3 text-text-secondary max-w-[10rem]">
+                <div class="truncate" :title="getAccountName(tx.accountId)">{{ getAccountName(tx.accountId) }}</div>
               </td>
               <!-- Category -->
-              <td class="py-4 px-4">
+              <td class="py-4 px-3">
                 <span 
                   v-if="getCategory(tx.categoryId)"
-                  class="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-semibold"
+                  class="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap"
                   :style="{ backgroundColor: (getCategory(tx.categoryId)?.color || '#94a3b8') + '15', color: getCategory(tx.categoryId)?.color || '#94a3b8' }"
                 >
                   <component :is="getCategoryIcon(getCategory(tx.categoryId)?.icon || 'HelpCircle')" class="w-3.5 h-3.5" />
@@ -189,17 +189,17 @@
                 <span v-else class="text-text-muted text-xs">-</span>
               </td>
               <!-- Date -->
-              <td class="py-4 px-4 text-text-secondary">
+              <td class="py-4 px-3 text-text-secondary whitespace-nowrap">
                 {{ formatDate(tx.date) }}
               </td>
               <!-- Amount -->
-              <td :class="['py-4 px-4 text-right font-display font-semibold', displayOf(tx).amountClass]">
+              <td :class="['py-4 px-3 text-right font-display font-semibold whitespace-nowrap tabular-nums', displayOf(tx).amountClass]">
                 {{ displayOf(tx).prefix }}{{ formatCurrency(displayOf(tx).amount, tx.currency || getAccountCurrency(tx.accountId)) }}
-                <div v-if="displayOf(tx).route" class="text-[10px] text-text-muted mt-0.5">{{ displayOf(tx).route }}</div>
+                <div v-if="displayOf(tx).route" class="text-[10px] text-text-muted mt-0.5 whitespace-normal">{{ displayOf(tx).route }}</div>
               </td>
               <!-- Actions -->
-              <td class="py-4 px-4 text-center">
-                <div class="flex items-center justify-center space-x-2">
+              <td class="py-4 px-3 text-center">
+                <div class="flex items-center justify-center space-x-1">
                   <a 
                     v-if="tx.receiptUrl"
                     :href="tx.receiptUrl"

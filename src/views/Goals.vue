@@ -62,7 +62,7 @@
             <!-- Goal Header -->
             <div class="flex justify-between items-start gap-3">
               <div class="min-w-0">
-                <h4 class="font-display font-bold text-lg text-text-primary truncate">{{ goal.name }}</h4>
+                <h4 class="font-display font-bold text-lg text-text-primary line-clamp-2 break-words" :title="goal.name">{{ goal.name }}</h4>
                 <p class="text-[10px] text-text-muted mt-0.5">Meta: {{ formatDate(goal.targetDate) }}</p>
               </div>
               <div class="flex items-center gap-2 shrink-0">
@@ -104,11 +104,11 @@
               <div class="grid grid-cols-2 gap-2 text-xs pt-1">
                 <div class="min-w-0">
                   <span class="block text-text-muted">Ahorrado</span>
-                  <span class="block text-text-primary font-semibold tabular-nums break-words">{{ formatCurrency(goal.currentAmount, goal.currency) }}</span>
+                  <span class="block text-text-primary font-semibold tabular-nums whitespace-nowrap truncate" :title="formatCurrency(goal.currentAmount, goal.currency)">{{ formatCurrency(goal.currentAmount, goal.currency) }}</span>
                 </div>
                 <div class="min-w-0 text-right">
                   <span class="block text-text-muted">Objetivo</span>
-                  <span class="block text-text-secondary font-semibold tabular-nums break-words">{{ formatCurrency(goal.targetAmount, goal.currency) }}</span>
+                  <span class="block text-text-secondary font-semibold tabular-nums whitespace-nowrap truncate" :title="formatCurrency(goal.targetAmount, goal.currency)">{{ formatCurrency(goal.targetAmount, goal.currency) }}</span>
                 </div>
               </div>
             </div>
