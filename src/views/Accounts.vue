@@ -175,33 +175,35 @@
               <p class="text-[10px] text-text-muted mt-1">Ahorros · {{ pocket.currency }} · ID {{ pocket.id }}</p>
               <p class="text-sm font-display font-semibold text-accent-emerald mt-1">{{ formatCurrency(pocket.balance, pocket.currency) }}</p>
             </div>
-              <div class="flex flex-wrap items-center gap-2">
+            <div class="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 @click="openPocketMovement(group.account, pocket, 'fund')"
                 :aria-label="`Agregar dinero a ${pocket.name}`"
-                class="px-3 py-2 rounded-lg border border-accent-emerald/20 text-accent-emerald hover:bg-accent-emerald/10 text-[11px] font-semibold transition-colors"
+                class="px-2.5 py-2 rounded-lg border border-accent-emerald/20 text-accent-emerald hover:bg-accent-emerald/10 text-[11px] font-semibold transition-colors"
               >Agregar dinero</button>
               <button
                 type="button"
                 @click="openPocketMovement(group.account, pocket, 'withdraw')"
                 :aria-label="`Retirar dinero de ${pocket.name}`"
-                class="px-3 py-2 rounded-lg border border-white/10 text-text-secondary hover:text-text-primary hover:bg-white/5 text-[11px] font-semibold transition-colors"
+                class="px-2.5 py-2 rounded-lg border border-white/10 text-text-secondary hover:text-text-primary hover:bg-white/5 text-[11px] font-semibold transition-colors"
               >Retirar</button>
+              <div class="ml-auto flex items-center gap-0.5">
               <button
                 type="button"
                 @click="openEditModal(pocket)"
                 :aria-label="`Editar bolsillo ${pocket.name}`"
-                class="p-2 rounded-lg text-text-muted hover:text-accent-emerald hover:bg-white/5 transition-colors"
+                class="p-1.5 rounded-lg text-text-muted hover:text-accent-emerald hover:bg-white/5 transition-colors"
                 title="Editar nombre del bolsillo"
               ><PencilIcon class="w-4 h-4" /></button>
               <button
                 type="button"
                 @click="handleDelete(pocket.id, pocket.name)"
                 :aria-label="`Eliminar bolsillo ${pocket.name}`"
-                class="p-2 rounded-lg text-text-muted hover:text-accent-rose hover:bg-white/5 transition-colors"
+                class="p-1.5 rounded-lg text-text-muted hover:text-accent-rose hover:bg-white/5 transition-colors"
                 title="Eliminar solo si está vacío y sin movimientos"
               ><TrashIcon class="w-4 h-4" /></button>
+              </div>
             </div>
           </div>
         </div>
