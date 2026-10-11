@@ -20,7 +20,8 @@ import {
   parseStatementBodySchema,
   sendError,
   timeZoneForCountry,
-  verifyBearerToken
+  verifyBearerToken,
+  zonedYearMonth
 } from "./http";
 import {
   buildAgentContextBlock,
@@ -41,6 +42,19 @@ import {
   PermanentEmbeddingError,
   syncTransactionEmbedding as syncEmbedding
 } from "./embeddings";
+import {
+  alertCategoryFor,
+  BUDGET_ALERTS_COLLECTION,
+  budgetAlertLedgerId,
+  budgetForCategory,
+  BudgetThreshold,
+  categorySpendForMonth,
+  evaluateBudgetThresholds,
+  monthKey,
+  spendFieldsChanged
+} from "./budgetAlerts";
+import { createGmailSender, SMTP_PASS, SMTP_USER, smtpConfigFromEnvironment, uniqueRecipients } from "./mailer";
+import { renderBudgetAlertEmail } from "./templates/budgetAlert";
 export { importPocketStatement } from "./pocketImports";
 
 const corsHandler = cors({ origin: true });
@@ -284,6 +298,130 @@ export const syncTransactionEmbedding = onDocumentWritten(
     }
   }
 );
+
+// 3b. Emails workspace members once per (workspace, category, month, threshold) when a
+// category's month-to-date spend reaches 80% or 100% of workspaces/{id}.categoryBudgets.
+// Month bucketing and the primary currency come from the workspace owner's profile
+// (users/{ownerId}.country -> time zone, .currency -> primary currency), the same sources the
+// agent uses for a user (timeZoneForCountry / resolvePrimaryCurrency), so every member gets
+// one shared, deterministic evaluation. Only the current local month is evaluated.
+export const notifyBudgetThreshold = onDocumentWritten(
+  { document: "transactions/{transactionId}", retry: true, secrets: [SMTP_USER, SMTP_PASS] },
+  async (event) => {
+    const { transactionId } = event.params;
+    if (isEventTooOld(event.time)) {
+      console.error(`Budget alert for ${transactionId} dropped: event from ${event.time} is too old.`);
+      return;
+    }
+    const before = event.data?.before?.exists ? event.data.before.data() : undefined;
+    const after = event.data?.after?.exists ? event.data.after.data() : undefined;
+    // A delete can never newly cross a threshold; lowering edits fall through to the ledger check.
+    if (!after || after.type !== "expense" || typeof after.workspaceId !== "string" || !after.workspaceId) return;
+    if (!spendFieldsChanged(before, after)) return;
+
+    const workspaceId: string = after.workspaceId;
+    const workspaceSnap = await db.collection("workspaces").doc(workspaceId).get();
+    const workspace = workspaceSnap.data();
+    if (!workspace || workspace.budgetAlertsEnabled === false) return;
+    const categoryId = typeof after.categoryId === "string" ? after.categoryId : "";
+    const budget = budgetForCategory(workspace.categoryBudgets, categoryId);
+    if (!categoryId || budget === 0) return;
+
+    const ownerSnap = typeof workspace.ownerId === "string" && workspace.ownerId
+      ? await db.collection("users").doc(workspace.ownerId).get()
+      : null;
+    const ownerData = ownerSnap?.exists ? ownerSnap.data() : null;
+    const timeZone = timeZoneForCountry(ownerData?.country);
+    const primaryCurrency = resolvePrimaryCurrency(ownerData);
+    const month = zonedYearMonth(new Date(event.time), timeZone);
+    if (alertCategoryFor(after, month, { timeZone }) !== categoryId) return;
+
+    const smtp = smtpConfigFromEnvironment();
+    if (!smtp) {
+      console.warn("SMTP_USER / SMTP_PASS are not configured; budget alert email skipped.");
+      return;
+    }
+
+    const txSnap = await db.collection("transactions")
+      .where("workspaceId", "==", workspaceId)
+      .where("categoryId", "==", categoryId)
+      .where("type", "==", "expense")
+      .get();
+    const spent = categorySpendForMonth(txSnap.docs.map((d) => d.data()), categoryId, month, {
+      timeZone,
+      primaryCurrency,
+      exchangeRates: workspace.exchangeRates || {}
+    });
+
+    // Claim atomically so concurrent triggers for the same category send one email.
+    const key = monthKey(month);
+    const ledgerRef = db.collection(BUDGET_ALERTS_COLLECTION).doc(budgetAlertLedgerId(workspaceId, key, categoryId));
+    const claim = await db.runTransaction(async (t) => {
+      const ledger = await t.get(ledgerRef);
+      const notified: number[] = Array.isArray(ledger.get("notified")) ? ledger.get("notified") : [];
+      const result = evaluateBudgetThresholds(spent, budget, notified);
+      if (result.threshold === null) return null;
+      t.set(ledgerRef, {
+        workspaceId,
+        categoryId,
+        month: key,
+        notified: FieldValue.arrayUnion(...result.claim),
+        lastSpent: spent,
+        budget,
+        currency: primaryCurrency,
+        updatedAt: FieldValue.serverTimestamp()
+      }, { merge: true });
+      return result as { threshold: BudgetThreshold; claim: BudgetThreshold[] };
+    });
+    if (!claim) return;
+
+    try {
+      const recipients = await resolveMemberEmails(workspace.members);
+      if (recipients.length === 0) {
+        console.warn(`Budget alert for workspace ${workspaceId} has no recipient emails.`);
+        return;
+      }
+      const categorySnap = await db.collection("categories").doc(categoryId).get();
+      const categoryName = typeof categorySnap.get("name") === "string" && categorySnap.get("name")
+        ? categorySnap.get("name") as string
+        : categoryId;
+      const email = renderBudgetAlertEmail({
+        threshold: claim.threshold,
+        categoryName,
+        workspaceName: typeof workspace.name === "string" ? workspace.name : "",
+        spent,
+        budget,
+        currency: primaryCurrency,
+        monthLabel: new Intl.DateTimeFormat("es", { month: "long", year: "numeric", timeZone: "UTC" })
+          .format(Date.UTC(month.year, month.month, 15))
+      });
+      await createGmailSender(smtp)({ to: recipients, ...email });
+    } catch (error) {
+      // Release the claim so the platform retry can send it again.
+      await ledgerRef.update({ notified: FieldValue.arrayRemove(...claim.claim) }).catch((releaseError) => {
+        console.error(`Could not release budget alert claim ${ledgerRef.id}:`, releaseError);
+      });
+      console.error(`Budget alert email for ${ledgerRef.id} failed.`);
+      throw error;
+    }
+  }
+);
+
+/** Emails of workspace members: users/{uid}.email, falling back to Firebase Auth. */
+async function resolveMemberEmails(members: unknown): Promise<string[]> {
+  const uids = Array.isArray(members) ? members.filter((uid): uid is string => typeof uid === "string" && uid.length > 0) : [];
+  const emails = await Promise.all(uids.map(async (uid) => {
+    const profile = await db.collection("users").doc(uid).get();
+    const stored = profile.get("email");
+    if (typeof stored === "string" && stored) return stored;
+    try {
+      return (await admin.auth().getUser(uid)).email ?? null;
+    } catch {
+      return null;
+    }
+  }));
+  return uniqueRecipients(emails);
+}
 
 // 4. Cloud Function del Chatbot Agente IA
 export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {

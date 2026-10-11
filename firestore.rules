@@ -537,5 +537,10 @@ service cloud.firestore {
     match /transactionEmbeddings/{transactionId} {
       allow read, write: if false;
     }
+
+    // Server-only budget alert dedupe ledger (written by the notifyBudgetThreshold trigger).
+    match /budgetAlerts/{alertId} {
+      allow read, write: if false;
+    }
   }
 }

@@ -6,7 +6,8 @@ import {
   budgetForCategory,
   categorySpendForMonth,
   evaluateBudgetThresholds,
-  monthKey
+  monthKey,
+  spendFieldsChanged
 } from "./budgetAlerts";
 
 const BOGOTA = "America/Bogota";
@@ -118,3 +119,16 @@ test("alertCategoryFor only returns expenses with a share in the evaluated month
 function OCTOBER_DATE() {
   return new Date("2026-10-05T17:00:00.000Z");
 }
+
+test("spendFieldsChanged ignores edits that cannot change category spend", () => {
+  const base = expense(10, { description: "Pan", notes: null });
+  assert.equal(spendFieldsChanged(base, { ...base, description: "Pan integral", notes: "x" }), false);
+  assert.equal(spendFieldsChanged(base, { ...base, date: new Date(base.date.getTime()) }), false);
+  assert.equal(spendFieldsChanged(base, { ...base, amount: -20 }), true);
+  assert.equal(spendFieldsChanged(base, { ...base, categoryId: "fun" }), true);
+  assert.equal(spendFieldsChanged(base, { ...base, currency: "USD" }), true);
+  assert.equal(spendFieldsChanged(base, { ...base, installments: 3 }), true);
+  assert.equal(spendFieldsChanged(base, { ...base, date: new Date("2026-10-11T17:00:00.000Z") }), true);
+  assert.equal(spendFieldsChanged({ ...base, type: "transfer" }, base), true);
+  assert.equal(spendFieldsChanged(undefined, base), true);
+});

@@ -91,3 +91,19 @@ export function evaluateBudgetThresholds(
   if (notified.includes(highest)) return { threshold: null, claim: [] };
   return { threshold: highest, claim: reached.filter((threshold) => !notified.includes(threshold)) };
 }
+
+function timeOf(value: any): number | null {
+  const date = value?.toDate ? value.toDate() : value instanceof Date ? value : value == null ? null : new Date(value);
+  return date && !Number.isNaN(date.getTime()) ? date.getTime() : null;
+}
+
+/** True when a write may change category spend (so edits to description/notes/receipt are skipped). */
+export function spendFieldsChanged(before: Record<string, any> | undefined, after: Record<string, any> | undefined): boolean {
+  if (!before || !after) return true;
+  return before.type !== after.type ||
+    before.categoryId !== after.categoryId ||
+    Number(before.amount) !== Number(after.amount) ||
+    (before.currency ?? null) !== (after.currency ?? null) ||
+    (before.installments ?? null) !== (after.installments ?? null) ||
+    timeOf(before.date) !== timeOf(after.date);
+}

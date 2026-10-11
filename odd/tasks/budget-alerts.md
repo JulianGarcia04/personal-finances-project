@@ -20,7 +20,7 @@ Category caps exist but nothing warns the user; overspending is only visible if 
 
 ## Tasks
 - [x] T1 Pure alert logic (threshold evaluation, month key, spend aggregation) + unit tests (RED first).
-- [ ] T2 Trigger + mailer (nodemailer, secrets, template, dedupe ledger, rules) + tests.
+- [x] T2 Trigger + mailer (nodemailer, secrets, template, dedupe ledger, rules) + tests.
 - [ ] T3 Settings toggle (workspace field) + docs (README/AGENTS env vars).
 
 ## Delivery strategy
@@ -32,5 +32,8 @@ ask-on-risk. Forecast ~400-550 authored lines.
 ## Progress / evidence
 - T1 (delegated writer): `functions/src/budgetAlerts.ts` + `budgetAlerts.test.ts`. RED observed (`pnpm --filter functions test`: TS2307 cannot find module './budgetAlerts'), then GREEN (100/100 pass, 15 new). Spend semantics mirror `transactionsStore.spendingByCategoryThisMonth` (expenses only, |amount|, installments split per month, `convertToPrimary` 1:1 fallback); reuses server ports `http.ts expenseAmountForMonth` and `agentQueries.ts convertToPrimary`. 100% implies 80% (single email); notified thresholds never re-alert within the month.
 
+- T2 (delegated writer): `notifyBudgetThreshold` (onDocumentWritten `transactions/{id}`, retry + `isEventTooOld` guard, secrets `SMTP_USER`/`SMTP_PASS`), `mailer.ts` (nodemailer Gmail, optional `ALERTS_FROM`, skips with a warning when secrets are missing), `templates/budgetAlert.ts` (Spanish copy, HTML-escaped names), server-only ledger `budgetAlerts/{workspaceId}_{YYYY-MM}_{categoryId}` claimed in a Firestore transaction before sending; claim released on send failure so the retry re-sends. Rules: `budgetAlerts` deny-all. RED observed (TS2305/TS2307 missing exports/modules), then GREEN: `pnpm --filter functions test` 109/109; `pnpm test:emulators:rules` 34/34 (no new rules test: `tests/` outside the authorized surface).
+- Decisions: time zone and primary currency from the workspace owner's profile (`timeZoneForCountry(country)`, `resolvePrimaryCurrency`), America/Bogota / COP fallbacks; only the current local month is evaluated; recipients = all `workspace.members` (profile email, Auth fallback) in one message.
+
 ## Next step
-T2.
+T3.
