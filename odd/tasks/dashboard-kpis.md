@@ -30,8 +30,8 @@ A misleading KPI is worse than no KPI. Forward-looking KPIs drive decisions.
 
 ## Tasks
 - [x] T1 Helpers + tests: aligned MoM, runway, spendable, month-end projection, card debt/utilization. Route: delegated (writer; 2+ non-trivial files).
-- [ ] T2 Wire into Dashboard.vue: fix MoM + runway, add 3 KPI cards with hierarchy (spendable as hero). Route: delegated (same writer).
-- [ ] T3 Verify `pnpm test` + `pnpm build`; mobile layout check.
+- [x] T2 Wire into Dashboard.vue: fix MoM + runway, add 3 KPI cards with hierarchy (spendable as hero). Route: delegated (same writer).
+- [x] T3 Verify `pnpm test` + `pnpm build`; mobile layout check (structural only, see evidence).
 
 ## Acceptance criteria
 - MoM on day N compares same N days. Runway uses liquid balance and 3-month avg.
@@ -52,6 +52,12 @@ All inputs are converted to the primary currency with `convert` before reaching 
 ## Progress / evidence
 - T1 RED: `pnpm test` → `ℹ tests 66 / pass 65 / fail 1` — `ERR_MODULE_NOT_FOUND ... src/lib/dashboardMetrics.ts` (tests written before the module).
 - T1 GREEN: `pnpm test` → `ℹ tests 85 / pass 85 / fail 0`. Route: delegated writer.
+- T1 commit: `0563861` feat(dashboard): add pure KPI metrics helpers with tests.
+- T2 fix commit: `2cfa13d` fix(dashboard): align MoM periods and base runway on liquid balance (labels now "vs mismo periodo del mes anterior"; runway shows ∞ when no burn).
+- T2 feat commit: `cbce4b5` feat(dashboard): add spendable, month-end projection and card debt KPIs (hero "Disponible para gastar" md:col-span-2; "Proyección de cierre" with budget/limit warnings; "Deuda en tarjetas" with utilization bar, hidden without credit accounts).
+- T3: `pnpm test` → `ℹ tests 85 / ℹ pass 85 / ℹ fail 0`. `pnpm build` (vue-tsc --noEmit && vite build) → `✓ 1828 modules transformed.` / `✓ built in 402ms`.
+- T3 mobile 360px: structural check only — new cards use `grid-cols-1` base, `min-w-0`, `truncate`, `flex-wrap` and the existing `splitMoney` wrapping pattern. Not visually verified in a browser (requires auth + emulators); pending a manual check.
+- Known caveat (pre-existing): `upcomingCardPayments` statement amount uses the current billing cycle; after the closing day it reflects the next statement. The min(statement, debt) cap bounds the error.
 
 ## Next step
-T1.
+Manual visual check at 360px; then the user decides push/PR.
