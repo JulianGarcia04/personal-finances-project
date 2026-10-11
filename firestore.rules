@@ -532,5 +532,10 @@ service cloud.firestore {
     match /usageQuotas/{quotaId} {
       allow read, write: if false;
     }
+
+    // Server-only semantic vectors (written by the embedding trigger / backfill script).
+    match /transactionEmbeddings/{transactionId} {
+      allow read, write: if false;
+    }
   }
 }

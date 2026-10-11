@@ -190,6 +190,15 @@ test('default-key usage quotas are server-only', async () => {
   await assert.rejects(deleteDoc(doc(owner.db, 'usageQuotas', quotaId)), denied)
 })
 
+test('transaction embeddings are server-only, even for workspace members', async () => {
+  const embeddingId = `tx-${Date.now()}`
+  await adminDb.collection('transactionEmbeddings').doc(embeddingId).set({ workspaceId, embedding: [0.1, 0.2], textHash: 'h' })
+  await assert.rejects(getDoc(doc(owner.db, 'transactionEmbeddings', embeddingId)), denied)
+  await assert.rejects(getDocs(collection(owner.db, 'transactionEmbeddings')), denied)
+  await assert.rejects(setDoc(doc(member.db, 'transactionEmbeddings', embeddingId), { workspaceId, embedding: [0] }), denied)
+  await assert.rejects(deleteDoc(doc(owner.db, 'transactionEmbeddings', embeddingId)), denied)
+})
+
 test('only the owner can delete the workspace', async () => {
   await assert.rejects(deleteDoc(doc(member.db, 'workspaces', workspaceId)), denied)
   await deleteDoc(doc(owner.db, 'workspaces', workspaceId))

@@ -168,6 +168,13 @@ function zonedParts(date: Date, timeZone: string): Record<string, number> {
   return parts;
 }
 
+/** Local calendar day (YYYY-MM-DD) of `date` in `timeZone`. */
+export function zonedDateKey(date: Date, timeZone: string = DEFAULT_TIME_ZONE): string {
+  const parts = zonedParts(date, timeZone);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${parts.year}-${pad(parts.month)}-${pad(parts.day)}`;
+}
+
 export function zonedYearMonth(date: Date, timeZone: string): YearMonth {
   const parts = zonedParts(date, timeZone);
   return { year: parts.year, month: parts.month - 1 };

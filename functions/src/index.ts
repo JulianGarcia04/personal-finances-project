@@ -2,7 +2,7 @@
 // function below or in re-exported modules is defined.
 import "./options";
 import { onRequest } from "firebase-functions/v2/https";
-import { onDocumentCreated } from "firebase-functions/v2/firestore";
+import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import * as admin from "firebase-admin";
 import cors from "cors";
 import { GoogleGenerativeAI } from "@google/generative-ai";
@@ -25,6 +25,22 @@ import {
 } from "./http";
 import { ApiKeyDecryptError, decryptApiKey, encryptApiKey, getEncryptionSecret, MissingEncryptionSecretError } from "./crypto";
 import { assertStatementSize, consumeDefaultKeyQuota, QuotaKind } from "./quota";
+import {
+  buildEmbeddingText,
+  cosineSimilarity,
+  createGeminiEmbedder,
+  createNameResolver,
+  decideEmbeddingSync,
+  documentEmbeddingInput,
+  EMBEDDINGS_COLLECTION,
+  hashEmbeddingText,
+  isEmbeddable,
+  isEventTooOld,
+  PermanentEmbeddingError,
+  queryEmbeddingInput,
+  syncTransactionEmbedding as syncEmbedding,
+  toVectorArray
+} from "./embeddings";
 export { importPocketStatement } from "./pocketImports";
 
 const corsHandler = cors({ origin: true });
@@ -33,8 +49,6 @@ admin.initializeApp();
 const db = admin.firestore();
 
 const GEMINI_MODEL = "gemini-2.5-flash";
-const EMBEDDING_MODEL = "gemini-embedding-2";
-const LEGACY_EMBEDDING_DIM = 768; // text-embedding-004, apagado en enero 2026
 
 // Firebase loads functions/.env natively, so no dotenv bootstrap is needed.
 function authenticate(authorization: string | undefined): Promise<string> {
@@ -43,17 +57,6 @@ function authenticate(authorization: string | undefined): Promise<string> {
 
 function getDefaultGeminiApiKey(): string | undefined {
   return process.env.GOOGLE_GENAI_API_KEY || process.env.GEMINI_API_KEY;
-}
-
-async function embedText(apiKey: string, text: string): Promise<number[]> {
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: EMBEDDING_MODEL });
-  const result = await model.embedContent(text);
-  const values = result.embedding?.values;
-  if (!values?.length) {
-    throw new Error("La respuesta de embeddings no contiene valores válidos.");
-  }
-  return values;
 }
 
 function requireEncryptionSecret(): string {
@@ -250,67 +253,37 @@ export const parseStatement = onRequest({cors: true}, async (req, res) => {
   });
 });
 
-// Helper: Similitud Coseno para búsqueda semántica vectorial
-function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length !== b.length) return 0;
-  let dotProduct = 0;
-  let mA = 0;
-  let mB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dotProduct += a[i] * b[i];
-    mA += a[i] * a[i];
-    mB += b[i] * b[i];
-  }
-  if (mA === 0 || mB === 0) return 0;
-  return dotProduct / (Math.sqrt(mA) * Math.sqrt(mB));
-}
-
-// 3. Trigger de Firestore para generar embeddings al crear una transacción
-export const onTransactionCreated = onDocumentCreated("transactions/{transactionId}", async (event) => {
-  const snapshot = event.data;
-  if (!snapshot) {
-    console.log("No snapshot data available.");
-    return;
-  }
-  const data = snapshot.data();
-  if (!data) return;
-
-  // Evitar bucle o sobreescritura si ya tiene embedding
-  if (data.embedding && Array.isArray(data.embedding) && data.embedding.length > 0) {
-    console.log(`La transacción ${event.params.transactionId} ya cuenta con embedding.`);
-    return;
-  }
-
-  const description = data.description || "";
-  const type = data.type || "";
-  const amount = data.amount || 0;
-  const currency = data.currency || "USD";
-  
-  let dateStr = "";
-  if (data.date) {
-    try {
-      dateStr = data.date.toDate ? data.date.toDate().toISOString().split('T')[0] : new Date(data.date).toISOString().split('T')[0];
-    } catch (e) {
-      dateStr = String(data.date);
-    }
-  }
-
-  const textToEmbed = `Descripción: ${description}. Tipo: ${type}. Monto: ${amount} ${currency}. Fecha: ${dateStr}.`;
-
-  try {
-    const apiKey = getDefaultGeminiApiKey();
-    if (!apiKey) {
-      console.warn("GOOGLE_GENAI_API_KEY no está configurada en las funciones.");
+// 3. Keeps transactionEmbeddings/{id} in sync with every transaction write (create, edit, delete).
+// Replaces the former create-only `onTransactionCreated` (removed on the next deploy).
+export const syncTransactionEmbedding = onDocumentWritten(
+  { document: "transactions/{transactionId}", retry: true },
+  async (event) => {
+    const { transactionId } = event.params;
+    if (isEventTooOld(event.time)) {
+      console.error(`Embedding sync for ${transactionId} dropped: event from ${event.time} is too old.`);
       return;
     }
-
-    const values = await embedText(apiKey, textToEmbed);
-    await snapshot.ref.update({ embedding: values });
-    console.log(`Embedding generado y guardado exitosamente para la transacción ${event.params.transactionId}.`);
-  } catch (err) {
-    console.error("Error al generar o guardar el embedding:", err);
+    const after = event.data?.after;
+    const tx = after?.exists ? after.data() : undefined;
+    const apiKey = getDefaultGeminiApiKey();
+    try {
+      const outcome = await syncEmbedding(
+        { db, names: createNameResolver(db), embed: apiKey ? createGeminiEmbedder(apiKey) : null },
+        transactionId,
+        tx
+      );
+      if (outcome === "no-key") {
+        console.error("GEMINI_API_KEY / GOOGLE_GENAI_API_KEY is not configured; embedding skipped.");
+      }
+    } catch (error) {
+      if (error instanceof PermanentEmbeddingError) {
+        console.error(`Embedding for ${transactionId} failed permanently:`, error);
+        return;
+      }
+      throw error; // transient: let the platform retry
+    }
   }
-});
+);
 
 // 4. Cloud Function del Chatbot Agente IA
 export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
@@ -598,38 +571,51 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
         description: 'Busca transacciones mediante búsqueda semántica (embeddings). Útil para preguntas libres del usuario, como: "¿Cuándo fue la última vez que compré ropa?" o "¿Cuánto gasté en el regalo?".',
         inputSchema: z.object({
           query: z.string().describe('El término o concepto semántico a buscar'),
-          limit: z.number().optional().describe('Cantidad máxima de resultados (por defecto 5)'),
+          limit: z.number().optional().describe('Cantidad máxima de resultados (por defecto 5, máximo 20)'),
         }),
         outputSchema: z.any(),
       },
       async ({ query: queryText, limit }) => {
         if (!activeApiKey) return { matches: [], error: "API Key no disponible para embeddings." };
         try {
-          const queryVector = await embedText(activeApiKey, queryText);
-
-          const snapshot = await db.collection('transactions').where('workspaceId', '==', activeWorkspaceId).get();
-          const matches: any[] = [];
+          const queryVector = await createGeminiEmbedder(activeApiKey)(queryEmbeddingInput(queryText));
+          // 3072 dims exceed Firestore's 2048-dim vector limit (values and indexes), so rank in memory over
+          // this workspace's server-only embeddings (only the vector field is read).
+          const snapshot = await db.collection(EMBEDDINGS_COLLECTION)
+            .where('workspaceId', '==', activeWorkspaceId)
+            .select('embedding')
+            .get();
+          const ranked: { id: string; similarity: number }[] = [];
           snapshot.forEach(docSnap => {
-            const data = docSnap.data();
-            if (data.embedding && Array.isArray(data.embedding) && data.embedding.length === queryVector.length) {
-              const similarity = cosineSimilarity(queryVector, data.embedding);
-              matches.push({
-                id: docSnap.id,
-                description: data.description,
-                amount: data.amount,
-                currency: data.currency,
-                type: data.type,
-                date: data.date ? data.date.toDate().toISOString() : null,
-                similarity
-              });
+            const vector = toVectorArray(docSnap.get('embedding'));
+            if (vector && vector.length === queryVector.length) {
+              ranked.push({ id: docSnap.id, similarity: cosineSimilarity(queryVector, vector) });
             }
           });
+          ranked.sort((a, b) => b.similarity - a.similarity);
 
-          matches.sort((a, b) => b.similarity - a.similarity);
-          return matches.slice(0, limit || 5);
+          const max = Math.min(Math.max(Math.trunc(limit || 5), 1), 20);
+          const top = ranked.slice(0, max * 2); // headroom for deleted/mirror rows
+          if (top.length === 0) return [];
+          const transactions = await db.getAll(...top.map(match => db.collection('transactions').doc(match.id)));
+          const matches: any[] = [];
+          transactions.forEach((docSnap, index) => {
+            const data = docSnap.data();
+            if (!data || data.workspaceId !== activeWorkspaceId || !isEmbeddable(data) || matches.length >= max) return;
+            matches.push({
+              id: docSnap.id,
+              description: data.description,
+              amount: data.amount,
+              currency: data.currency,
+              type: data.type,
+              date: data.date?.toDate ? data.date.toDate().toISOString() : null,
+              similarity: top[index].similarity
+            });
+          });
+          return matches;
         } catch (err: any) {
           console.error("Error en búsqueda semántica:", err);
-          return { matches: [], error: err.message };
+          return { matches: [], error: "No se pudo completar la búsqueda semántica." };
         }
       }
     );
@@ -637,45 +623,38 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
     const indexTransactionsTool = ai.defineTool(
       {
         name: 'indexTransactions',
-        description: 'Genera o actualiza embeddings vectoriales de transacciones. Llama a esto si la búsqueda semántica no devuelve resultados o si hay embeddings antiguos (text-embedding-004).',
+        description: 'Genera o actualiza embeddings vectoriales de transacciones que no tienen uno vigente (máximo 20 por llamada). Llama a esto si la búsqueda semántica no devuelve resultados esperados.',
         inputSchema: z.object({}),
         outputSchema: z.any(),
       },
       async () => {
         if (!activeApiKey) return { indexedCount: 0, error: "API Key no disponible." };
-        const snapshot = await db.collection('transactions').where('workspaceId', '==', activeWorkspaceId).get();
+        const deps = { db, names: createNameResolver(db), embed: createGeminiEmbedder(activeApiKey) };
+        const [snapshot, embeddings] = await Promise.all([
+          db.collection('transactions').where('workspaceId', '==', activeWorkspaceId).get(),
+          db.collection(EMBEDDINGS_COLLECTION).where('workspaceId', '==', activeWorkspaceId)
+            .select('workspaceId', 'textHash', 'model', 'dim').get()
+        ]);
+        const existing = new Map(embeddings.docs.map(docSnap => [docSnap.id, docSnap.data()]));
         let count = 0;
-
+        let failed = 0;
         for (const docSnap of snapshot.docs) {
+          if (count >= 20 || failed >= 3) break;
           const data = docSnap.data();
-          const needsReindex = !data.embedding || data.embedding.length === LEGACY_EMBEDDING_DIM;
-          if (!needsReindex) continue;
-
-          const description = data.description || "";
-          const type = data.type || "";
-          const amount = data.amount || 0;
-          const currency = data.currency || "USD";
-
-          let dateStr = "";
-          if (data.date) {
-            try {
-              dateStr = data.date.toDate ? data.date.toDate().toISOString().split('T')[0] : new Date(data.date).toISOString().split('T')[0];
-            } catch (e) {
-              dateStr = String(data.date);
-            }
-          }
-
-          const textToEmbed = `Descripción: ${description}. Tipo: ${type}. Monto: ${amount} ${currency}. Fecha: ${dateStr}.`;
+          if (!isEmbeddable(data)) continue;
+          const input = documentEmbeddingInput(buildEmbeddingText(data, await deps.names.resolve(data)));
+          const textHash = hashEmbeddingText(input);
+          const decision = decideEmbeddingSync(data, existing.get(docSnap.id), textHash);
+          if (decision.action !== 'embed') continue;
           try {
-            const values = await embedText(activeApiKey, textToEmbed);
-            await docSnap.ref.update({ embedding: values });
-            count++;
-            if (count >= 20) break;
+            const plan = { decision, input, textHash, hasLegacyField: data.embedding !== undefined };
+            if (await syncEmbedding(deps, docSnap.id, data, plan) === 'embedded') count++;
           } catch (err) {
+            failed++;
             console.error("Error indexando transacción:", docSnap.id, err);
           }
         }
-        return { indexedCount: count };
+        return { indexedCount: count, failedCount: failed };
       }
     );
 
