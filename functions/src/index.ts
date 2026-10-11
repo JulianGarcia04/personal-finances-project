@@ -26,6 +26,7 @@ import {
   buildAgentContextBlock,
   checkAgentAnswer,
   fallbackAnswer,
+  PENDING_LOOKUP_NOTE,
   relaxJsonSchema,
   UNBACKED_ACTION_NOTE,
   userConfirmedPendingAction
@@ -390,6 +391,9 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       - Propón límites mensuales realistas basados en los promedios reales (redondeados, con un pequeño margen o recorte según el objetivo del usuario).
       - Presenta la propuesta y pide confirmación. SOLO después de que el usuario confirme explícitamente, llama a saveCategoryBudgets con confirmed: true.
 
+      CONSULTAS:
+      - Nunca anuncies consultas futuras ("voy a consultar", "déjame revisar", "espera un momento"): llama a las herramientas necesarias en este mismo turno y responde directamente con los resultados.
+
       ACCIONES (CREAR, ACTUALIZAR, ELIMINAR):
       - Nunca digas que registraste, creaste, actualizaste o eliminaste algo a menos que la herramienta correspondiente haya devuelto success: true en este mismo turno. Si no la llamaste o devolvió error, dilo con claridad.
       - Para registrar un movimiento basta con monto, cuenta, tipo y fecha: llama a createTransaction directamente. categoryId es opcional: usa la categoría de listCategories que mejor coincida y, si ninguna coincide, crea el movimiento sin categoría y menciónalo en tu respuesta (no le pidas la categoría al usuario).
@@ -440,15 +444,18 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       if (check.reason === "empty") {
         console.error("chatWithAgent: empty answer, retrying.", { finishReason: attempts[0].finishReason, finishMessage: attempts[0].finishMessage });
       }
-      const retry = check.reason === "unbacked_action"
-        ? await generate(systemInstruction + UNBACKED_ACTION_NOTE, THINKING_BUDGET)
-        : await generate(systemInstruction, 0);
+      const retry = check.reason === "empty"
+        ? await generate(systemInstruction, 0)
+        : await generate(systemInstruction + (check.reason === "unbacked_action" ? UNBACKED_ACTION_NOTE : PENDING_LOOKUP_NOTE), THINKING_BUDGET);
       attempts.push(retry);
       check = checkAgentAnswer({ userText: lastMessage, text: retry.text, messages: retry.messages });
     }
     const final = attempts[attempts.length - 1];
     let answer = final.text;
-    if (!check.ok) {
+    if (!check.ok && check.reason === "pending_lookup") {
+      // Nothing to fabricate: keep the model's words, but make the miss visible.
+      console.warn("chatWithAgent: answer announced a lookup without calling tools.", { attempts: attempts.length });
+    } else if (!check.ok && check.reason !== "pending_lookup") {
       if (check.reason === "empty") {
         console.error("chatWithAgent: empty answer, returning fallback.", { finishReason: final.finishReason, finishMessage: final.finishMessage, attempts: attempts.length });
       } else {

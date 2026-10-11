@@ -82,7 +82,7 @@ export async function seedAgentFixture(db, { workspaceId, userId, now = FIXED_NO
 
   const account = (id, data, ws = workspaceId) => set('accounts', id, { workspaceId: ws, userId, limit: 0, createdAt, ...data })
   account(a.bank, { name: 'Banco Principal', type: 'checking', balance: 2_000_000, currency: 'COP', childAccountIds: [a.pocket] })
-  account(a.pocket, { name: 'Bolsillo Viaje', type: 'savings', balance: 500_000, currency: 'COP', parentAccountId: a.bank })
+  account(a.pocket, { name: 'Bolsillo Viaje', type: 'savings', balance: 500_000, currency: 'COP', parentAccountId: a.bank, pocketActivity: true })
   account(a.cash, { name: 'Efectivo', type: 'cash', balance: 100_000, currency: 'COP' })
   account(a.usd, { name: 'Cuenta USD', type: 'savings', balance: 1_000, currency: 'USD' })
   account(a.card, { name: 'Visa', type: 'credit', balance: -300_000, limit: 3_000_000, currency: 'COP', statementClosingDay: 25, paymentDueDay: 5 })

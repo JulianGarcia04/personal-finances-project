@@ -268,9 +268,6 @@ async function runChild() {
     assert.ok(signUp.idToken, 'auth emulator sign-up failed')
     const now = new Date()
     const ids = await seedAgentFixture(db, { workspaceId: `ws-eval-${runId}`, userId: signUp.localId, now })
-    // The app always stores pocketActivity on pockets (pockets.ts / accountsStore); the shared
-    // fixture omits it, which makes every movement on the parent account fail the pocket audit.
-    await db.collection('accounts').doc(ids.accounts.pocket).update({ pocketActivity: true })
     const user = (await db.collection('users').doc(signUp.localId).get()).data()
     const tools = buildAgentTools(db, {
       workspaceId: ids.workspaceId, userId: signUp.localId, timeZone: TIME_ZONE, primaryCurrency: resolvePrimaryCurrency(user)

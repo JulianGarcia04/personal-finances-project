@@ -286,15 +286,28 @@ const CLAIMED_ACTION = new RegExp([
 // First-person preterite needs its accent: "guardé" is a claim, "que guarde" is not.
 const CLAIMED_PRETERITE = /(?<![\p{L}])(registré|eliminé|borré|guardé|actualicé|agregué|añadí|anoté|transferí)(?![\p{L}])/u;
 
+// "Voy a consultar…", "espera un momento": the turn ended before the lookup it announces.
+const PENDING_LOOKUP = new RegExp([
+  String.raw`\b(voy a|procedo a|dejame|permiteme|primero) (consultar|revisar|buscar|analizar|obtener|verificar|calcular|mirar|ver)\b`,
+  String.raw`\bestoy (consultando|revisando|buscando|analizando|calculando|verificando)\b`,
+  String.raw`\b(espera|esperame|dame|un) (un )?(momento|segundo|instante)\b`
+].join("|"));
+
+function calledAnyTool(messages: readonly MessageLike[] | undefined): boolean {
+  return (messages ?? []).some(message => (message?.content ?? []).some(part => part && "toolRequest" in part && part.toolRequest));
+}
+
+export type AnswerReason = "empty" | "unbacked_action" | "pending_lookup";
+
 export type AnswerCheck =
   | { ok: true; writes: string[] }
-  | { ok: false; reason: "empty" | "unbacked_action"; retryable: boolean; writes: string[] };
+  | { ok: false; reason: AnswerReason; retryable: boolean; writes: string[] };
 
 /**
  * Decides whether the agent's final answer can be returned: it must not be empty,
  * and when the user asked for a change it must not claim one that no write tool
- * backed in this generation. Empty answers are only retried when nothing was
- * written (a full retry would duplicate the write).
+ * backed in this generation, nor announce a lookup it never made. Retries only
+ * happen when nothing was written (a full retry would duplicate the write).
  */
 export function checkAgentAnswer({ userText, text, messages }: {
   userText: string;
@@ -309,6 +322,9 @@ export function checkAgentAnswer({ userText, text, messages }: {
   if (writes.length === 0 && claimsAction && ACTION_REQUEST.test(fold(userText))) {
     return { ok: false, reason: "unbacked_action", retryable: true, writes };
   }
+  if (writes.length === 0 && !calledAnyTool(messages) && PENDING_LOOKUP.test(answer)) {
+    return { ok: false, reason: "pending_lookup", retryable: true, writes };
+  }
   return { ok: true, writes };
 }
 
@@ -317,8 +333,13 @@ export const UNBACKED_ACTION_NOTE = `
       NOTA CORRECTIVA: en un intento anterior respondiste que habías realizado una acción sin que ninguna herramienta de escritura la confirmara. Si el usuario pidió registrar, crear, actualizar o eliminar algo y tienes los datos necesarios, llama ahora a la herramienta correspondiente (categoryId es opcional). Si falta un dato imprescindible, pregúntalo. Nunca afirmes que algo se guardó si la herramienta no devolvió success: true.
   `;
 
+/** System note appended on the retry after an announced lookup with no tool call. */
+export const PENDING_LOOKUP_NOTE = `
+      NOTA CORRECTIVA: en un intento anterior anunciaste que ibas a consultar datos ("voy a consultar", "espera un momento") y terminaste sin llamar ninguna herramienta. No anuncies consultas: llama ahora mismo a las herramientas necesarias y responde con los resultados.
+  `;
+
 /** User-facing replacement when the answer cannot be returned as is (never empty). */
-export function fallbackAnswer(reason: "empty" | "unbacked_action", writes: readonly string[]): string {
+export function fallbackAnswer(reason: Exclude<AnswerReason, "pending_lookup">, writes: readonly string[]): string {
   if (reason === "unbacked_action") {
     return "No pude completar la acción: no se guardó ningún cambio. Intenta de nuevo indicando los datos (monto, cuenta y fecha).";
   }

@@ -281,3 +281,22 @@ test("userConfirmedPendingAction requires a confirmation request right before th
   assert.equal(userConfirmedPendingAction([ask, { role: "user", content: "No, déjalo así" }]), false);
   assert.equal(userConfirmedPendingAction([]), false);
 });
+
+test("checkAgentAnswer retries an announced lookup that called no tool", () => {
+  const userText = "Ayúdame a crear presupuestos mensuales por categoría según mis gastos reales";
+  for (const text of [
+    "¡Claro que sí! Para ayudarte, primero necesito conocer tus gastos promedio. Voy a consultar tus gastos de los últimos 3 meses completos. Por favor, espera un momento.",
+    "Déjame revisar tus movimientos.",
+    "Un momento, por favor, estoy consultando tus cuentas.",
+    "Permíteme buscar esa transacción."
+  ]) {
+    assert.deepEqual(checkAgentAnswer({ userText, text, messages: [] }), { ok: false, reason: "pending_lookup", retryable: true, writes: [] }, text);
+  }
+});
+
+test("checkAgentAnswer accepts lookup wording once a tool ran, and plain answers without tools", () => {
+  const userText = "¿Cómo van mis metas?";
+  const ran = [requestTurn("listGoals"), toolTurn("listGoals", [])];
+  assert.deepEqual(checkAgentAnswer({ userText, text: "Voy a revisar tus metas: no tienes metas activas.", messages: ran }), { ok: true, writes: [] });
+  assert.deepEqual(checkAgentAnswer({ userText: "¿Qué es el 4x1000?", text: "El 4x1000 es el GMF, un impuesto del 0,4 %.", messages: [] }), { ok: true, writes: [] });
+});
