@@ -1,469 +1,264 @@
 <template>
-  <div class="max-w-4xl mx-auto space-y-8">
+  <div class="max-w-5xl mx-auto space-y-6 sm:space-y-8">
     <!-- Header -->
     <div>
       <h2 class="font-display font-bold text-2xl sm:text-3xl text-text-primary tracking-tight">Configuración</h2>
-      <p class="text-text-secondary text-sm mt-1">Administra los módulos del sistema y tus llaves de inteligencia artificial.</p>
+      <p class="text-text-secondary text-sm mt-1">Ajusta tu espacio de trabajo, preferencias y módulos inteligentes.</p>
     </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
-      <!-- Left: Description -->
-      <div class="md:col-span-1">
-        <h3 class="font-display font-semibold text-lg text-text-primary">Módulo de IA</h3>
-        <p class="text-text-secondary text-xs mt-2 leading-relaxed">
-          Vault te permite subir archivos de extractos bancarios y procesar su contenido de manera autónoma utilizando Gemini 1.5. 
-          Aquí puedes prender o apagar la funcionalidad, y decidir si usas la API Key del sistema o una clave personal.
-        </p>
-      </div>
+    <div class="lg:grid lg:grid-cols-[230px_minmax(0,1fr)] lg:gap-8 lg:items-start">
+      <!-- Section navigation: horizontal pills on mobile, sticky vertical list on desktop -->
+      <nav
+        role="tablist"
+        aria-label="Secciones de configuración"
+        class="flex gap-2 overflow-x-auto -mx-4 px-4 pb-1 mb-6 [scrollbar-width:none] lg:mx-0 lg:px-0 lg:pb-0 lg:mb-0 lg:flex-col lg:gap-1 lg:sticky lg:top-6 lg:overflow-visible"
+      >
+        <button
+          v-for="tab in tabs"
+          :key="tab.id"
+          :id="`settings-tab-${tab.id}`"
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === tab.id"
+          :aria-controls="`settings-panel-${tab.id}`"
+          @click="selectTab(tab.id)"
+          :class="[
+            'shrink-0 min-h-11 flex items-center gap-3 rounded-xl border px-4 py-2 lg:px-3 lg:py-2.5 text-left transition-all cursor-pointer',
+            activeTab === tab.id
+              ? 'border-accent-emerald/30 bg-accent-emerald/10 text-text-primary'
+              : 'border-white/5 bg-slate-900/30 lg:bg-transparent lg:border-transparent text-text-secondary hover:text-text-primary hover:bg-white/5'
+          ]"
+        >
+          <component
+            :is="tab.icon"
+            :class="['w-4 h-4 shrink-0', activeTab === tab.id ? 'text-accent-emerald' : '']"
+          />
+          <span class="min-w-0">
+            <span class="block text-sm font-display font-medium whitespace-nowrap">{{ tab.label }}</span>
+            <span class="hidden lg:block text-[11px] text-text-muted truncate">{{ tab.hint }}</span>
+          </span>
+        </button>
+      </nav>
 
-      <!-- Right: Settings Panel -->
-      <div class="md:col-span-2 space-y-6">
-        <!-- Main Toggle Card -->
-        <div class="glass-panel rounded-2xl p-4 sm:p-6 space-y-6">
-          <!-- Whole row toggles the switch (bigger tap target on mobile) -->
-          <label class="flex items-start justify-between gap-4 min-h-11 cursor-pointer">
-            <span class="min-w-0 space-y-1">
-              <span class="block font-display font-medium text-text-primary">Importador de Extractos Bancarios</span>
-              <span class="block text-text-muted text-xs">Habilita o deshabilita la importación automatizada mediante IA.</span>
+      <!-- Active section -->
+      <section
+        :id="`settings-panel-${activeTab}`"
+        role="tabpanel"
+        :aria-labelledby="`settings-tab-${activeTab}`"
+        class="min-w-0 space-y-6 animate-fade-in"
+        :key="activeTab"
+      >
+        <!-- Section header -->
+        <header class="flex items-start gap-3">
+          <span class="w-10 h-10 shrink-0 rounded-xl bg-accent-emerald/10 border border-accent-emerald/20 flex items-center justify-center">
+            <component :is="currentTab.icon" class="w-5 h-5 text-accent-emerald" />
+          </span>
+          <div class="min-w-0">
+            <h3 class="font-display font-semibold text-lg text-text-primary">{{ currentTab.label }}</h3>
+            <p class="text-text-secondary text-xs mt-1 leading-relaxed">{{ currentTab.description }}</p>
+          </div>
+        </header>
+
+        <!-- ───────────── Workspace ───────────── -->
+        <template v-if="activeTab === 'workspace'">
+          <!-- Current workspace summary -->
+          <div class="glass-panel rounded-2xl p-4 sm:p-5 flex items-center gap-3">
+            <span class="w-10 h-10 shrink-0 rounded-full bg-slate-800 flex items-center justify-center font-display font-semibold text-accent-emerald uppercase">
+              {{ (currentWorkspaceName || '?').charAt(0) }}
             </span>
-            <span class="relative inline-flex items-center shrink-0 min-h-11 -mt-2.5">
-              <input 
-                type="checkbox" 
-                v-model="aiEnabled" 
-                @change="handleGeneralSettingsChange"
-                class="sr-only peer"
-              >
-              <div class="relative w-11 h-6 bg-slate-800 rounded-full peer peer-focus:ring-2 peer-focus:ring-accent-emerald/20 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-slate-400 after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent-emerald peer-checked:after:bg-background"></div>
-            </span>
-          </label>
-
-          <!-- Sub-options if AI is enabled -->
-          <div v-if="aiEnabled" class="pt-6 border-t border-border/50 space-y-6 animate-fade-in">
-            <!-- Selector de tipo de llave -->
-            <div class="space-y-3">
-              <span class="text-xs font-semibold text-text-secondary uppercase tracking-wider">Método de API Key</span>
-              
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <!-- Option A: Project Key -->
-                <label 
-                  :class="[
-                    'p-4 rounded-xl border flex flex-col justify-between cursor-pointer transition-all duration-200',
-                    !useCustomKey ? 'border-accent-emerald/40 bg-accent-emerald/[0.02]' : 'border-border bg-slate-900/30 hover:bg-slate-900/50'
-                  ]"
-                >
-                  <input 
-                    type="radio" 
-                    :value="false" 
-                    v-model="useCustomKey" 
-                    @change="handleGeneralSettingsChange"
-                    class="sr-only"
-                  />
-                  <div>
-                    <h5 class="text-sm font-semibold text-text-primary">API Key del Proyecto</h5>
-                    <p class="text-text-muted text-xs mt-1">Usa la API Key centralizada. Las consultas corren por cuenta del sistema.</p>
-                  </div>
-                  <span class="text-[10px] text-accent-emerald font-semibold mt-3 flex items-center space-x-1" v-if="!useCustomKey">
-                    <span>✓ Activo</span>
-                  </span>
-                </label>
-
-                <!-- Option B: Custom Key -->
-                <label 
-                  :class="[
-                    'p-4 rounded-xl border flex flex-col justify-between cursor-pointer transition-all duration-200',
-                    useCustomKey ? 'border-accent-emerald/40 bg-accent-emerald/[0.02]' : 'border-border bg-slate-900/30 hover:bg-slate-900/50'
-                  ]"
-                >
-                  <input 
-                    type="radio" 
-                    :value="true" 
-                    v-model="useCustomKey" 
-                    @change="handleGeneralSettingsChange"
-                    class="sr-only"
-                  />
-                  <div>
-                    <h5 class="text-sm font-semibold text-text-primary">API Key Personal</h5>
-                    <p class="text-text-muted text-xs mt-1">Usa tus propios créditos de Google AI Studio. Las consultas corren por tu cuenta.</p>
-                  </div>
-                  <span class="text-[10px] text-accent-emerald font-semibold mt-3 flex items-center space-x-1" v-if="useCustomKey">
-                    <span>✓ Activo</span>
-                  </span>
-                </label>
-              </div>
+            <div class="min-w-0">
+              <p class="text-[11px] uppercase tracking-wider text-text-muted font-semibold">Workspace activo</p>
+              <p class="font-display font-medium text-text-primary truncate">{{ currentWorkspaceName || 'Sin workspace' }}</p>
             </div>
+          </div>
 
-            <!-- Custom Key Configuration Panel -->
-            <div v-if="useCustomKey" class="bg-slate-900/40 border border-border rounded-xl p-4 sm:p-5 space-y-4">
-              <div class="flex flex-wrap items-center justify-between gap-2">
-                <div class="min-w-0">
-                  <h5 class="text-sm font-semibold text-text-primary">Tu Gemini API Key</h5>
-                  <p class="text-text-muted text-xs mt-0.5">Se guardará encriptada con AES-256 en Firestore.</p>
-                </div>
-                <!-- Status Badge -->
-                <span 
-                  :class="[
-                    'text-[10px] px-2 py-0.5 rounded-full font-semibold border',
-                    settingsStore.hasCustomKey 
-                      ? 'bg-accent-emerald/10 border-accent-emerald/20 text-accent-emerald' 
-                      : 'bg-accent-rose/10 border-accent-rose/20 text-accent-rose'
-                  ]"
-                >
-                  {{ settingsStore.hasCustomKey ? 'Configurada' : 'Sin Configurar' }}
-                </span>
+          <div class="glass-panel rounded-2xl divide-y divide-border/50">
+            <!-- Invite -->
+            <div class="p-4 sm:p-6 space-y-3">
+              <div>
+                <h4 class="font-display font-medium text-sm text-text-primary">Invitar miembro</h4>
+                <p class="text-text-muted text-xs mt-1">Comparte este workspace con alguien ya registrado en Vault usando su correo.</p>
               </div>
-
-              <form @submit.prevent="saveApiKey" class="flex flex-col sm:flex-row gap-3">
-                <input 
-                  type="password" 
-                  v-model="customKeyInput"
+              <form @submit.prevent="handleInviteUser" class="flex flex-col sm:flex-row gap-3">
+                <input
+                  type="email"
+                  v-model="inviteEmail"
                   required
-                  placeholder="AIzaSy..."
-                  autocomplete="off"
-                  aria-label="Gemini API Key"
+                  placeholder="correo@ejemplo.com"
+                  aria-label="Correo del miembro"
+                  autocomplete="email"
+                  autocapitalize="none"
+                  inputmode="email"
                   class="field flex-1"
                 />
-                <button 
+                <button
                   type="submit"
-                  :disabled="loadingKey"
-                  class="min-h-11 px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2"
+                  :disabled="invitingUser"
+                  class="sm:w-36 min-h-11 px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
                 >
-                  <span v-if="loadingKey" class="w-3.5 h-3.5 border-2 border-background border-t-transparent rounded-full animate-spin"></span>
-                  <span>{{ settingsStore.hasCustomKey ? 'Actualizar' : 'Guardar Llave' }}</span>
+                  <MailIcon class="w-4 h-4" />
+                  <span>Invitar</span>
                 </button>
               </form>
-
-              <p v-if="successMsg" class="text-xs text-accent-emerald font-medium">{{ successMsg }}</p>
-              <p v-if="errorMsg" class="text-xs text-accent-rose font-medium">{{ errorMsg }}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Módulo de Gestión de Workspace -->
-    <div class="border-t border-white/5 pt-8 grid grid-cols-1 md:grid-cols-3 gap-8">
-      <div class="md:col-span-1">
-        <h3 class="font-display font-semibold text-lg text-text-primary">Gestión de Workspace</h3>
-        <p class="text-text-secondary text-xs mt-2 leading-relaxed">
-          Administra tu espacio de trabajo actual. Crea nuevos espacios o invita a otros usuarios a colaborar (se requiere su correo electrónico registrado).
-        </p>
-      </div>
-
-      <div class="md:col-span-2 space-y-6">
-        <div class="glass-panel rounded-2xl p-4 sm:p-6 space-y-6">
-          
-          <div class="space-y-4">
-            <h4 class="font-display font-medium text-sm text-text-primary">Crear nuevo Workspace</h4>
-            <form @submit.prevent="handleCreateWorkspace" class="flex flex-col sm:flex-row gap-3">
-              <input 
-                type="text" 
-                v-model="newWorkspaceName"
-                required
-                placeholder="Nombre del Workspace (ej. Casa)"
-                aria-label="Nombre del Workspace"
-                class="field flex-1"
-              />
-              <button 
-                type="submit"
-                :disabled="creatingWorkspace"
-                class="min-h-11 px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2"
-              >
-                <PlusIcon class="w-4 h-4" />
-                <span>Crear</span>
-              </button>
-            </form>
-          </div>
-
-          <div class="pt-6 border-t border-border/50 space-y-4">
-            <h4 class="font-display font-medium text-sm text-text-primary">
-              Invitar Miembro al Workspace actual 
-              <span class="text-accent-emerald">({{ currentWorkspaceName }})</span>
-            </h4>
-            <form @submit.prevent="handleInviteUser" class="flex flex-col sm:flex-row gap-3">
-              <input 
-                type="email" 
-                v-model="inviteEmail"
-                required
-                placeholder="correo@ejemplo.com"
-                aria-label="Correo del miembro"
-                autocomplete="email"
-                autocapitalize="none"
-                inputmode="email"
-                class="field flex-1"
-              />
-              <button 
-                type="submit"
-                :disabled="invitingUser"
-                class="min-h-11 px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2"
-              >
-                <MailIcon class="w-4 h-4" />
-                <span>Invitar</span>
-              </button>
-            </form>
-            <p v-if="inviteMsg" :class="inviteError ? 'text-accent-rose' : 'text-accent-emerald'" class="text-xs font-medium">{{ inviteMsg }}</p>
-          </div>
-
-          <!-- ponytail: Limit setter -->
-          <div class="pt-6 border-t border-border/50 space-y-4">
-            <h4 class="font-display font-medium text-sm text-text-primary">
-              Límite de Gastos 
-              <span class="text-accent-emerald">({{ currentWorkspaceName }})</span>
-            </h4>
-            <form @submit.prevent="handleUpdateLimit" class="flex flex-col sm:flex-row gap-3">
-              <input 
-                type="number" 
-                inputmode="decimal"
-                v-model="expenseLimitInput"
-                placeholder="Ej. 1500000"
-                aria-label="Límite de gastos"
-                class="field flex-1"
-              />
-              <button 
-                type="submit"
-                class="min-h-11 px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2"
-              >
-                <PlusIcon class="w-4 h-4" />
-                <span>Actualizar</span>
-              </button>
-            </form>
-          </div>
-
-        </div>
-      </div>
-    </div>
-
-    <!-- Módulo de Preferencias Regionales -->
-    <div class="border-t border-white/5 pt-8 grid grid-cols-1 md:grid-cols-3 gap-8">
-      <!-- Left: Description -->
-      <div class="md:col-span-1">
-        <h3 class="font-display font-semibold text-lg text-text-primary">Preferencias Regionales</h3>
-        <p class="text-text-secondary text-xs mt-2 leading-relaxed">
-          Configura tu país de residencia y moneda principal. Esto permitirá al Asesor IA contextualizar sus recomendaciones financieras y tributarias de forma precisa.
-        </p>
-      </div>
-
-      <!-- Right: Selectors Panel -->
-      <div class="md:col-span-2 space-y-6">
-        <div class="glass-panel rounded-2xl p-4 sm:p-6 space-y-6">
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <!-- Country Selector -->
-            <div class="space-y-1.5">
-              <label for="settings-country" class="block text-xs font-semibold text-text-secondary">País de Residencia</label>
-              <select 
-                id="settings-country"
-                v-model="country" 
-                @change="handleCountryChange"
-                class="field font-semibold cursor-pointer"
-              >
-                <option value="CO">Colombia</option>
-                <option value="MX">México</option>
-                <option value="ES">España</option>
-                <option value="US">Estados Unidos</option>
-                <option value="CL">Chile</option>
-                <option value="AR">Argentina</option>
-                <option value="PE">Perú</option>
-              </select>
+              <p v-if="inviteMsg" :class="inviteError ? 'text-accent-rose' : 'text-accent-emerald'" class="text-xs font-medium">{{ inviteMsg }}</p>
             </div>
 
-            <!-- Currency Selector -->
-            <div class="space-y-1.5">
-              <label for="settings-currency" class="block text-xs font-semibold text-text-secondary">Moneda Principal</label>
-              <select 
-                id="settings-currency"
-                v-model="currency" 
-                @change="handleGeneralSettingsChange"
-                class="field font-semibold cursor-pointer"
-              >
-                <option value="COP">COP ($)</option>
-                <option value="MXN">MXN ($)</option>
-                <option value="EUR">EUR (€)</option>
-                <option value="USD">USD ($)</option>
-                <option value="CLP">CLP ($)</option>
-                <option value="ARS">ARS ($)</option>
-                <option value="PEN">PEN (S/.)</option>
-              </select>
+            <!-- Expense limit -->
+            <div class="p-4 sm:p-6 space-y-3">
+              <div>
+                <h4 class="font-display font-medium text-sm text-text-primary">Límite de gastos mensual</h4>
+                <p class="text-text-muted text-xs mt-1">Tope de egresos para este workspace, en tu moneda principal ({{ currency }}).</p>
+              </div>
+              <form @submit.prevent="handleUpdateLimit" class="flex flex-col sm:flex-row gap-3">
+                <input
+                  type="number"
+                  inputmode="decimal"
+                  v-model="expenseLimitInput"
+                  placeholder="Ej. 1500000"
+                  aria-label="Límite de gastos"
+                  class="field flex-1"
+                />
+                <button
+                  type="submit"
+                  class="sm:w-36 min-h-11 px-5 py-2.5 rounded-xl border border-accent-emerald/40 text-accent-emerald hover:bg-accent-emerald/10 font-display font-semibold text-sm cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  <CheckIcon class="w-4 h-4" />
+                  <span>Guardar</span>
+                </button>
+              </form>
+            </div>
+
+            <!-- Create workspace -->
+            <div class="p-4 sm:p-6 space-y-3">
+              <div>
+                <h4 class="font-display font-medium text-sm text-text-primary">Crear nuevo workspace</h4>
+                <p class="text-text-muted text-xs mt-1">Separa finanzas en espacios independientes (ej. Casa, Negocio).</p>
+              </div>
+              <form @submit.prevent="handleCreateWorkspace" class="flex flex-col sm:flex-row gap-3">
+                <input
+                  type="text"
+                  v-model="newWorkspaceName"
+                  required
+                  placeholder="Nombre del workspace (ej. Casa)"
+                  aria-label="Nombre del Workspace"
+                  class="field flex-1"
+                />
+                <button
+                  type="submit"
+                  :disabled="creatingWorkspace"
+                  class="sm:w-36 min-h-11 px-5 py-2.5 rounded-xl border border-accent-emerald/40 text-accent-emerald hover:bg-accent-emerald/10 font-display font-semibold text-sm cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  <PlusIcon class="w-4 h-4" />
+                  <span>Crear</span>
+                </button>
+              </form>
+            </div>
+          </div>
+        </template>
+
+        <!-- ───────────── Region & currency ───────────── -->
+        <template v-else-if="activeTab === 'regional'">
+          <div class="glass-panel rounded-2xl p-4 sm:p-6">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div class="space-y-1.5">
+                <label for="settings-country" class="block text-xs font-semibold text-text-secondary">País de residencia</label>
+                <select
+                  id="settings-country"
+                  v-model="country"
+                  @change="handleCountryChange"
+                  class="field font-semibold cursor-pointer"
+                >
+                  <option value="CO">Colombia</option>
+                  <option value="MX">México</option>
+                  <option value="ES">España</option>
+                  <option value="US">Estados Unidos</option>
+                  <option value="CL">Chile</option>
+                  <option value="AR">Argentina</option>
+                  <option value="PE">Perú</option>
+                </select>
+              </div>
+
+              <div class="space-y-1.5">
+                <label for="settings-currency" class="block text-xs font-semibold text-text-secondary">Moneda principal</label>
+                <select
+                  id="settings-currency"
+                  v-model="currency"
+                  @change="handleGeneralSettingsChange"
+                  class="field font-semibold cursor-pointer"
+                >
+                  <option value="COP">COP ($)</option>
+                  <option value="MXN">MXN ($)</option>
+                  <option value="EUR">EUR (€)</option>
+                  <option value="USD">USD ($)</option>
+                  <option value="CLP">CLP ($)</option>
+                  <option value="ARS">ARS ($)</option>
+                  <option value="PEN">PEN (S/.)</option>
+                </select>
+              </div>
             </div>
           </div>
 
-          <!-- Exchange Rates (para consolidar KPIs multimoneda) -->
-          <div class="pt-6 border-t border-border/50 space-y-4">
+          <!-- Exchange rates (consolidate multi-currency KPIs) -->
+          <div class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
             <div>
-              <h4 class="font-display font-medium text-sm text-text-primary">Tasas de Cambio</h4>
+              <h4 class="font-display font-medium text-sm text-text-primary">Tasas de cambio</h4>
               <p class="text-text-muted text-xs mt-1">
-                Define cuántos <span class="font-semibold text-text-secondary">{{ currency }}</span> vale 1 unidad de cada otra moneda de tus cuentas.
-                Se usan para consolidar tu patrimonio y KPIs en tu moneda principal.
+                Cuántos <span class="font-semibold text-text-secondary">{{ currency }}</span> vale 1 unidad de cada otra moneda de tus cuentas.
+                Se usan para consolidar tu patrimonio y KPIs.
               </p>
             </div>
 
-            <div v-if="foreignCurrencies.length === 0" class="text-xs text-text-muted py-2">
+            <div v-if="foreignCurrencies.length === 0" class="text-xs text-text-muted rounded-xl border border-dashed border-white/10 px-4 py-3">
               Todas tus cuentas usan {{ currency }}. No se necesitan tasas de cambio.
             </div>
 
             <div v-else class="space-y-3">
-              <div
-                v-for="cur in foreignCurrencies"
-                :key="cur"
-                class="flex items-center gap-2 sm:gap-3"
-              >
-                <span class="text-sm font-semibold text-text-primary shrink-0 whitespace-nowrap">1 {{ cur }}</span>
-                <span class="text-text-muted text-sm shrink-0">=</span>
-                <div class="relative flex-1 min-w-0">
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div
+                  v-for="cur in foreignCurrencies"
+                  :key="cur"
+                  class="flex items-center gap-2 rounded-xl border border-white/5 bg-slate-900/30 p-2 pl-3"
+                >
+                  <span class="text-sm font-semibold text-text-primary shrink-0 whitespace-nowrap">1 {{ cur }} =</span>
                   <input
                     type="number"
                     inputmode="decimal"
                     step="any"
                     min="0"
                     :value="rateInputs[cur] ?? ''"
-                    :placeholder="`Ej. tasa a ${currency}`"
+                    :placeholder="`Tasa a ${currency}`"
                     :aria-label="`Tasa de 1 ${cur} en ${currency}`"
-                    class="field"
+                    class="field flex-1 min-w-0"
                     @change="(e) => saveExchangeRate(cur, (e.target as HTMLInputElement).value)"
                   />
+                  <span class="text-xs font-semibold text-text-secondary shrink-0 pr-1">{{ currency }}</span>
                 </div>
-                <span class="text-sm font-semibold text-text-secondary shrink-0">{{ currency }}</span>
               </div>
               <p v-if="ratesMsg" class="text-xs text-accent-emerald font-medium">{{ ratesMsg }}</p>
             </div>
           </div>
-        </div>
-      </div>
-    </div>
+        </template>
 
-    <!-- Módulo de Categorías Personalizadas -->
-    <div class="border-t border-white/5 pt-8 grid grid-cols-1 md:grid-cols-3 gap-8">
-      <!-- Left: Description -->
-      <div class="md:col-span-1">
-        <h3 class="font-display font-semibold text-lg text-text-primary">Categorías</h3>
-        <p class="text-text-secondary text-xs mt-2 leading-relaxed">
-          Crea nuevas categorías personalizadas para tus ingresos y egresos. Las categorías por defecto no se pueden eliminar.
-        </p>
-      </div>
-
-      <!-- Right: Content Panel -->
-      <div class="md:col-span-2 space-y-6">
-        <div class="glass-panel rounded-2xl p-4 sm:p-6 space-y-6">
-          
-          <!-- Nueva Categoría Form -->
-          <form @submit.prevent="createCategory" class="space-y-4">
-            <h4 class="font-display font-medium text-sm text-text-primary">Nueva Categoría</h4>
-            
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <!-- Name Input -->
-              <div class="space-y-1.5">
-                <label for="settings-cat-name" class="block text-xs font-semibold text-text-secondary">Nombre de la Categoría</label>
-                <input 
-                  id="settings-cat-name"
-                  type="text" 
-                  v-model="newCatName"
-                  required
-                  placeholder="Ej. Mascotas, Gimnasio"
-                  class="field"
-                />
-              </div>
-
-              <!-- Type Selector -->
-              <div class="space-y-1.5">
-                <label for="settings-cat-type" class="block text-xs font-semibold text-text-secondary">Tipo de Movimiento</label>
-                <select 
-                  id="settings-cat-type"
-                  v-model="newCatType" 
-                  class="field font-semibold cursor-pointer"
-                >
-                  <option value="expense">Solo Gastos (Egreso)</option>
-                  <option value="income">Solo Ingresos (Ingreso)</option>
-                  <option value="both">Ambos (Ingreso y Egreso)</option>
-                </select>
-              </div>
+        <!-- ───────────── Categories ───────────── -->
+        <template v-else-if="activeTab === 'categories'">
+          <!-- Existing categories -->
+          <div class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
+            <div class="flex items-center justify-between gap-2">
+              <h4 class="font-display font-medium text-sm text-text-primary">Tus categorías</h4>
+              <span class="text-[11px] text-text-muted">{{ transactionsStore.categories.length }} en total</span>
             </div>
-
-            <!-- Color Palette Selector -->
-            <div class="space-y-2">
-              <label class="block text-xs font-semibold text-text-secondary">Color de la Categoría</label>
-              <div class="flex flex-wrap gap-3 items-center">
-                <button 
-                  v-for="color in presetColors" 
-                  :key="color"
-                  type="button"
-                  :aria-label="`Color ${color}`"
-                  :aria-pressed="newCatColor === color"
-                  @click="newCatColor = color"
-                  :style="{ backgroundColor: color }"
-                  :class="[
-                    'w-9 h-9 rounded-full transition-all border cursor-pointer',
-                    newCatColor === color ? 'border-white scale-110 shadow-lg' : 'border-transparent hover:scale-105'
-                  ]"
-                ></button>
-                <!-- Custom Color Picker -->
-                <label aria-label="Color personalizado" class="relative w-9 h-9 rounded-full border border-white/10 flex items-center justify-center cursor-pointer overflow-hidden hover:scale-105 transition-all">
-                  <input 
-                    type="color" 
-                    v-model="newCatColor" 
-                    class="absolute inset-0 opacity-0 cursor-pointer" 
-                  />
-                  <span 
-                    class="w-full h-full" 
-                    :style="{ backgroundColor: newCatColor }"
-                  ></span>
-                </label>
-                <span class="text-xs text-text-muted font-mono">{{ newCatColor }}</span>
-              </div>
-            </div>
-
-            <!-- Icon Selector -->
-            <div class="space-y-2">
-              <label class="block text-xs font-semibold text-text-secondary">Icono de la Categoría</label>
-              <div class="grid grid-cols-5 min-[400px]:grid-cols-6 sm:grid-cols-7 gap-2 p-3 rounded-xl bg-slate-950/50 border border-white/5 max-h-48 overflow-y-auto custom-scrollbar">
-                <button 
-                  v-for="icon in availableIcons" 
-                  :key="icon.name"
-                  type="button"
-                  @click="newCatIcon = icon.name"
-                  :title="icon.label"
-                  :aria-label="icon.label"
-                  :aria-pressed="newCatIcon === icon.name"
-                  :class="[
-                    'min-h-11 p-2 rounded-lg flex items-center justify-center border transition-all cursor-pointer hover:bg-white/5',
-                    newCatIcon === icon.name 
-                      ? 'border-accent-emerald/40 bg-accent-emerald/10 text-accent-emerald' 
-                      : 'border-transparent text-text-secondary hover:text-text-primary'
-                  ]"
-                >
-                  <component :is="getIconComponent(icon.name)" class="w-5 h-5 sm:w-4 sm:h-4" />
-                </button>
-              </div>
-            </div>
-
-            <!-- Submit Button -->
-            <button 
-              type="submit"
-              :disabled="loadingCategory"
-              class="w-full min-h-11 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2 transition-all"
-            >
-              <PlusIcon class="w-4 h-4" />
-              <span>Crear Categoría</span>
-            </button>
-          </form>
-
-          <!-- List of Existing Categories -->
-          <div class="pt-6 border-t border-border/50 space-y-3">
-            <h4 class="font-display font-medium text-sm text-text-primary">Tus Categorías</h4>
             <div class="flex flex-wrap gap-2.5">
-              <span 
-                v-for="cat in transactionsStore.categories" 
+              <span
+                v-for="cat in transactionsStore.categories"
                 :key="cat.id"
-                class="max-w-full inline-flex items-center space-x-2 px-3 py-1.5 rounded-full text-xs font-semibold border border-white/5 bg-slate-900/40 text-text-primary"
+                class="max-w-full inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border border-white/5 bg-slate-900/40 text-text-primary"
               >
-                <!-- Dot for color -->
-                <span class="w-2.5 h-2.5 shrink-0 rounded-full" :style="{ backgroundColor: cat.color }"></span>
-                <!-- Icon -->
                 <component :is="getIconComponent(cat.icon)" class="w-3.5 h-3.5 shrink-0" :style="{ color: cat.color }" />
                 <span class="min-w-0 truncate">{{ cat.name }}</span>
-                <!-- Badge for Type -->
                 <span class="shrink-0 text-[10px] px-1.5 py-0.5 rounded-md bg-white/5 text-text-muted font-normal">
                   {{ cat.type === 'expense' ? 'Gasto' : cat.type === 'income' ? 'Ingreso' : 'Ambos' }}
                 </span>
-                <!-- Delete button (if custom) -->
-                <button 
+                <button
                   v-if="!isDefaultCategory(cat.name)"
                   type="button"
                   @click="deleteCategory(cat.id)"
@@ -475,16 +270,224 @@
                 </button>
               </span>
             </div>
+            <p class="text-[11px] text-text-muted">Las categorías por defecto no se pueden eliminar.</p>
           </div>
 
-        </div>
-      </div>
+          <!-- New category -->
+          <form @submit.prevent="createCategory" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-5">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <h4 class="font-display font-medium text-sm text-text-primary">Nueva categoría</h4>
+              <!-- Live preview -->
+              <span class="max-w-full inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border border-white/10 bg-slate-900/60 text-text-primary">
+                <component :is="getIconComponent(newCatIcon)" class="w-3.5 h-3.5 shrink-0" :style="{ color: newCatColor }" />
+                <span class="min-w-0 truncate">{{ newCatName || 'Vista previa' }}</span>
+              </span>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div class="space-y-1.5">
+                <label for="settings-cat-name" class="block text-xs font-semibold text-text-secondary">Nombre</label>
+                <input
+                  id="settings-cat-name"
+                  type="text"
+                  v-model="newCatName"
+                  required
+                  placeholder="Ej. Mascotas, Gimnasio"
+                  class="field"
+                />
+              </div>
+
+              <div class="space-y-1.5">
+                <label for="settings-cat-type" class="block text-xs font-semibold text-text-secondary">Tipo de movimiento</label>
+                <select
+                  id="settings-cat-type"
+                  v-model="newCatType"
+                  class="field font-semibold cursor-pointer"
+                >
+                  <option value="expense">Solo gastos</option>
+                  <option value="income">Solo ingresos</option>
+                  <option value="both">Ambos</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="space-y-2">
+              <span class="block text-xs font-semibold text-text-secondary">Color</span>
+              <div class="flex flex-wrap gap-3 items-center">
+                <button
+                  v-for="color in presetColors"
+                  :key="color"
+                  type="button"
+                  :aria-label="`Color ${color}`"
+                  :aria-pressed="newCatColor === color"
+                  @click="newCatColor = color"
+                  :style="{ backgroundColor: color }"
+                  :class="[
+                    'w-9 h-9 rounded-full transition-all border cursor-pointer',
+                    newCatColor === color ? 'border-white scale-110 shadow-lg' : 'border-transparent hover:scale-105'
+                  ]"
+                ></button>
+                <label aria-label="Color personalizado" class="relative w-9 h-9 rounded-full border border-white/10 flex items-center justify-center cursor-pointer overflow-hidden hover:scale-105 transition-all">
+                  <input
+                    type="color"
+                    v-model="newCatColor"
+                    class="absolute inset-0 opacity-0 cursor-pointer"
+                  />
+                  <span class="w-full h-full" :style="{ backgroundColor: newCatColor }"></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="space-y-2">
+              <span class="block text-xs font-semibold text-text-secondary">Icono</span>
+              <div class="grid grid-cols-5 min-[400px]:grid-cols-6 sm:grid-cols-8 md:grid-cols-11 gap-2 p-3 rounded-xl bg-slate-950/50 border border-white/5">
+                <button
+                  v-for="icon in availableIcons"
+                  :key="icon.name"
+                  type="button"
+                  @click="newCatIcon = icon.name"
+                  :title="icon.label"
+                  :aria-label="icon.label"
+                  :aria-pressed="newCatIcon === icon.name"
+                  :class="[
+                    'min-h-11 p-2 rounded-lg flex items-center justify-center border transition-all cursor-pointer hover:bg-white/5',
+                    newCatIcon === icon.name
+                      ? 'border-accent-emerald/40 bg-accent-emerald/10 text-accent-emerald'
+                      : 'border-transparent text-text-secondary hover:text-text-primary'
+                  ]"
+                >
+                  <component :is="getIconComponent(icon.name)" class="w-5 h-5 sm:w-4 sm:h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div class="flex justify-end">
+              <button
+                type="submit"
+                :disabled="loadingCategory"
+                class="w-full sm:w-auto min-h-11 px-6 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2 transition-all"
+              >
+                <PlusIcon class="w-4 h-4" />
+                <span>Crear categoría</span>
+              </button>
+            </div>
+          </form>
+        </template>
+
+        <!-- ───────────── AI ───────────── -->
+        <template v-else-if="activeTab === 'ai'">
+          <div class="glass-panel rounded-2xl p-4 sm:p-6">
+            <!-- Whole row toggles the switch (bigger tap target on mobile) -->
+            <label class="flex items-start justify-between gap-4 min-h-11 cursor-pointer">
+              <span class="min-w-0 space-y-1">
+                <span class="block font-display font-medium text-text-primary">Importador de extractos bancarios</span>
+                <span class="block text-text-muted text-xs">Sube extractos o pega notificaciones y Gemini los convierte en movimientos.</span>
+              </span>
+              <span class="relative inline-flex items-center shrink-0 min-h-11 -mt-2.5">
+                <input
+                  type="checkbox"
+                  v-model="aiEnabled"
+                  @change="handleGeneralSettingsChange"
+                  class="sr-only peer"
+                >
+                <div class="relative w-11 h-6 bg-slate-800 rounded-full peer peer-focus:ring-2 peer-focus:ring-accent-emerald/20 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-slate-400 after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent-emerald peer-checked:after:bg-background"></div>
+              </span>
+            </label>
+          </div>
+
+          <div v-if="aiEnabled" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-5 animate-fade-in">
+            <div>
+              <h4 class="font-display font-medium text-sm text-text-primary">Origen de la API Key</h4>
+              <p class="text-text-muted text-xs mt-1">Elige quién paga las consultas a Gemini.</p>
+            </div>
+
+            <div role="radiogroup" aria-label="Origen de la API Key" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label
+                v-for="option in keyOptions"
+                :key="option.label"
+                :class="[
+                  'p-4 rounded-xl border flex items-start gap-3 cursor-pointer transition-all duration-200 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent-emerald/30',
+                  useCustomKey === option.value ? 'border-accent-emerald/40 bg-accent-emerald/[0.04]' : 'border-border bg-slate-900/30 hover:bg-slate-900/50'
+                ]"
+              >
+                <input
+                  type="radio"
+                  :value="option.value"
+                  v-model="useCustomKey"
+                  @change="handleGeneralSettingsChange"
+                  class="sr-only"
+                />
+                <!-- Radio indicator -->
+                <span
+                  :class="[
+                    'mt-0.5 w-4 h-4 shrink-0 rounded-full border-2 flex items-center justify-center',
+                    useCustomKey === option.value ? 'border-accent-emerald' : 'border-slate-600'
+                  ]"
+                >
+                  <span v-if="useCustomKey === option.value" class="w-1.5 h-1.5 rounded-full bg-accent-emerald"></span>
+                </span>
+                <span class="min-w-0">
+                  <span class="block text-sm font-semibold text-text-primary">{{ option.label }}</span>
+                  <span class="block text-text-muted text-xs mt-1">{{ option.description }}</span>
+                </span>
+              </label>
+            </div>
+
+            <!-- Custom key configuration -->
+            <div v-if="useCustomKey" class="bg-slate-900/40 border border-border rounded-xl p-4 sm:p-5 space-y-4">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="min-w-0">
+                  <h5 class="text-sm font-semibold text-text-primary flex items-center gap-2">
+                    <KeyRoundIcon class="w-4 h-4 text-text-secondary" />
+                    Tu Gemini API Key
+                  </h5>
+                  <p class="text-text-muted text-xs mt-0.5">Se guarda encriptada (AES-256) y nunca se expone en el navegador.</p>
+                </div>
+                <span
+                  :class="[
+                    'text-[10px] px-2 py-0.5 rounded-full font-semibold border',
+                    settingsStore.hasCustomKey
+                      ? 'bg-accent-emerald/10 border-accent-emerald/20 text-accent-emerald'
+                      : 'bg-accent-rose/10 border-accent-rose/20 text-accent-rose'
+                  ]"
+                >
+                  {{ settingsStore.hasCustomKey ? 'Configurada' : 'Sin configurar' }}
+                </span>
+              </div>
+
+              <form @submit.prevent="saveApiKey" class="flex flex-col sm:flex-row gap-3">
+                <input
+                  type="password"
+                  v-model="customKeyInput"
+                  required
+                  placeholder="AIzaSy..."
+                  autocomplete="off"
+                  aria-label="Gemini API Key"
+                  class="field flex-1"
+                />
+                <button
+                  type="submit"
+                  :disabled="loadingKey"
+                  class="sm:w-36 min-h-11 px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  <span v-if="loadingKey" class="w-3.5 h-3.5 border-2 border-background border-t-transparent rounded-full animate-spin"></span>
+                  <span>{{ settingsStore.hasCustomKey ? 'Actualizar' : 'Guardar' }}</span>
+                </button>
+              </form>
+
+              <p v-if="successMsg" class="text-xs text-accent-emerald font-medium">{{ successMsg }}</p>
+              <p v-if="errorMsg" class="text-xs text-accent-rose font-medium">{{ errorMsg }}</p>
+            </div>
+          </div>
+        </template>
+      </section>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, type Component } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
@@ -496,7 +499,8 @@ import {
   Utensils, Car, Film, Lightbulb, Heart, GraduationCap, TrendingUp, HelpCircle,
   ShoppingBag, Home, Gift, Coffee, Plane, DollarSign, PiggyBank, Smartphone,
   Activity, Scissors, BookOpen, Wrench, Shield,
-  Trash2 as TrashIcon, Plus as PlusIcon, Mail as MailIcon
+  Trash2 as TrashIcon, Plus as PlusIcon, Mail as MailIcon, Check as CheckIcon,
+  KeyRound as KeyRoundIcon, Sparkles, Users, Globe, Tags
 } from 'lucide-vue-next'
 
 const authStore = useAuthStore()
@@ -505,6 +509,45 @@ const workspacesStore = useWorkspacesStore()
 const transactionsStore = useTransactionsStore()
 const accountsStore = useAccountsStore()
 const goalsStore = useGoalsStore()
+
+// Section tabs (synced to ?tab= so sections are linkable and survive reloads)
+type SettingsTab = 'workspace' | 'regional' | 'categories' | 'ai'
+interface TabDef { id: SettingsTab; label: string; hint: string; description: string; icon: Component }
+
+const tabs: TabDef[] = [
+  {
+    id: 'workspace', label: 'Workspace', hint: 'Miembros, límites y espacios', icon: Users,
+    description: 'Administra tu espacio de trabajo actual: invita colaboradores, define un límite de gastos o crea nuevos espacios.'
+  },
+  {
+    id: 'regional', label: 'Región y moneda', hint: 'País, moneda y tasas', icon: Globe,
+    description: 'Tu país y moneda principal permiten al Asesor IA contextualizar recomendaciones financieras y tributarias.'
+  },
+  {
+    id: 'categories', label: 'Categorías', hint: 'Organiza tus movimientos', icon: Tags,
+    description: 'Crea categorías personalizadas para clasificar tus ingresos y egresos.'
+  },
+  {
+    id: 'ai', label: 'Inteligencia Artificial', hint: 'Importador y API Key', icon: Sparkles,
+    description: 'Activa el importador de extractos con Gemini y decide si usas la API Key del sistema o una personal.'
+  }
+]
+
+const route = useRoute()
+const router = useRouter()
+const isTab = (v: unknown): v is SettingsTab => tabs.some(t => t.id === v)
+const activeTab = ref<SettingsTab>(isTab(route.query.tab) ? route.query.tab : 'workspace')
+const currentTab = computed(() => tabs.find(t => t.id === activeTab.value) ?? tabs[0])
+
+const selectTab = (id: SettingsTab) => {
+  activeTab.value = id
+  router.replace({ query: { ...route.query, tab: id } })
+}
+
+const keyOptions = [
+  { value: false, label: 'API Key del proyecto', description: 'Usa la clave centralizada. Las consultas corren por cuenta del sistema.' },
+  { value: true, label: 'API Key personal', description: 'Usa tus propios créditos de Google AI Studio.' }
+]
 
 const aiEnabled = ref(true)
 const useCustomKey = ref(false)
