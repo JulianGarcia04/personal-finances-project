@@ -5,7 +5,12 @@ import {
   AgentToolError,
   buildAgentContextBlock,
   buildDateContext,
+  checkAgentAnswer,
+  EMPTY_ANSWER_FALLBACK,
+  fallbackAnswer,
   GENERIC_TOOL_ERROR,
+  succeededWriteTools,
+  userConfirmedPendingAction,
   localDayRange,
   parseLocalDate,
   relaxJsonSchema,
@@ -180,4 +185,99 @@ test("resolvePrimaryCurrency uses the dashboard source: users.currency with a CO
   assert.equal(resolvePrimaryCurrency({ currency: "" }), "COP");
   assert.equal(resolvePrimaryCurrency(null), "COP");
   assert.match(buildAgentContextBlock({ now: new Date("2026-10-11T15:00:00-05:00"), timeZone: "America/Bogota", currency: "USD" }), /Moneda principal del usuario \(la del panel de control\): USD/);
+});
+
+const toolTurn = (name: string, output: unknown) => ({ role: "tool", content: [{ toolResponse: { name, output } }] });
+const requestTurn = (name: string) => ({ role: "model", content: [{ toolRequest: { name, input: {} } }] });
+
+test("succeededWriteTools lists only write tools that returned success", () => {
+  const messages = [
+    { role: "user", content: [{ text: "Registra un gasto" }] },
+    requestTurn("listAccounts"),
+    toolTurn("listAccounts", { accounts: [] }),
+    toolTurn("createTransaction", { error: "El registro contiene un bolsillo inválido." }),
+    toolTurn("deleteTransaction", { needsConfirmation: true, summary: {} }),
+    toolTurn("createGoal", { success: true, id: "g1" }),
+    { role: "model", content: [{ text: "Listo" }] }
+  ];
+  assert.deepEqual(succeededWriteTools(messages), ["createGoal"]);
+  assert.deepEqual(succeededWriteTools([]), []);
+  assert.deepEqual(succeededWriteTools(undefined), []);
+});
+
+test("checkAgentAnswer flags empty answers and retries only when nothing was written", () => {
+  assert.deepEqual(checkAgentAnswer({ userText: "¿Cómo van mis metas?", text: "  \n", messages: [] }), { ok: false, reason: "empty", retryable: true, writes: [] });
+  const written = [toolTurn("createTransaction", { success: true, id: "t1" })];
+  // Retrying after a successful write would duplicate the movement.
+  assert.deepEqual(checkAgentAnswer({ userText: "Registra 20000 en taxi", text: "", messages: written }), { ok: false, reason: "empty", retryable: false, writes: ["createTransaction"] });
+});
+
+test("checkAgentAnswer rejects a claimed action that no write tool backs", () => {
+  const readOnly = [toolTurn("listAccounts", { accounts: [] }), toolTurn("listCategories", [])];
+  for (const text of [
+    "He registrado tu gasto de 20.000 COP en taxi.",
+    "¡Listo! Registré el gasto en Efectivo.",
+    "Listo, tu meta fue creada.",
+    "He eliminado la transacción.",
+    "He guardado los presupuestos.",
+    "He actualizado el monto de tu meta.",
+    "He registrado tu gasto. ¿Quieres algo más?",
+    "Guardé tu meta de ahorro."
+  ]) {
+    assert.deepEqual(
+      checkAgentAnswer({ userText: "Ayer gasté 20.000 en taxi, pagué en efectivo. Regístralo.", text, messages: readOnly }),
+      { ok: false, reason: "unbacked_action", retryable: true, writes: [] },
+      text
+    );
+  }
+});
+
+test("checkAgentAnswer accepts backed actions, questions, failures reported honestly and read-only requests", () => {
+  const userText = "Registra un gasto de 20000 en taxi ayer";
+  const backed = [toolTurn("createTransaction", { success: true, id: "t1" })];
+  assert.deepEqual(checkAgentAnswer({ userText, text: "He registrado tu gasto.", messages: backed }), { ok: true, writes: ["createTransaction"] });
+  for (const text of [
+    "¿En qué cuenta lo pagaste?",
+    "No pude registrar el gasto: la cuenta no existe.",
+    "Encontré el gasto. ¿Confirmas que quieres eliminarlo?"
+  ]) {
+    assert.deepEqual(checkAgentAnswer({ userText, text, messages: [] }), { ok: true, writes: [] }, text);
+  }
+  // Not an action request: past-tense wording about existing data is fine.
+  assert.deepEqual(
+    checkAgentAnswer({ userText: "¿Cuánto gasté este mes?", text: "Este mes has registrado gastos por 500.000 COP.", messages: [] }),
+    { ok: true, writes: [] }
+  );
+});
+
+test("checkAgentAnswer does not treat proposals awaiting confirmation as completed actions", () => {
+  const userText = "Ayúdame a crear presupuestos mensuales por categoría según mis gastos reales";
+  for (const text of [
+    "He creado una propuesta de presupuestos basada en tus promedios:\n\n| Categoría | Límite |\n|---|---|\n| Comida | 300.000 |",
+    "Listo, aquí tienes la propuesta. ¿Quieres que guarde estos presupuestos?",
+    "He preparado este plan. ¿Confirmas que lo guarde?",
+    // Subjunctive "guarde" (a question) is not the preterite "guardé" (a claim).
+    "He revisado tus gastos. **Te gustaría que guarde estos nuevos presupuestos?** Si es así, confirma.",
+    "Si quieres, puedo hacer que registre la meta cuando confirmes."
+  ]) {
+    assert.deepEqual(checkAgentAnswer({ userText, text, messages: [] }), { ok: true, writes: [] }, text);
+  }
+});
+
+test("fallbackAnswer never returns empty text and is honest about writes", () => {
+  assert.equal(fallbackAnswer("empty", []), EMPTY_ANSWER_FALLBACK);
+  assert.match(fallbackAnswer("empty", ["createTransaction"]), /se completó/);
+  assert.match(fallbackAnswer("unbacked_action", []), /no se guardó ningún cambio/i);
+});
+
+test("userConfirmedPendingAction requires a confirmation request right before the user's reply", () => {
+  const ask = { role: "model", content: "Encontré **Mercado Éxito**, -200.000 COP. ¿Confirmas que quieres eliminarlo?" };
+  assert.equal(userConfirmedPendingAction([{ role: "user", content: "Elimina el gasto 'Mercado Éxito'" }, ask, { role: "user", content: "Sí, elimínalo" }]), true);
+  assert.equal(userConfirmedPendingAction([ask, { role: "user", content: "Confirmo" }]), true);
+  assert.equal(userConfirmedPendingAction([{ role: "assistant", content: "¿Quieres que guarde estos presupuestos?" }, { role: "user", content: "dale" }]), true);
+  // A single request is not a confirmation, nor a reply to an unrelated answer or a refusal.
+  assert.equal(userConfirmedPendingAction([{ role: "user", content: "Elimina el gasto 'Mercado Éxito' de hoy, confirmado" }]), false);
+  assert.equal(userConfirmedPendingAction([{ role: "model", content: "Tu saldo es 100.000 COP." }, { role: "user", content: "Sí, elimínalo" }]), false);
+  assert.equal(userConfirmedPendingAction([ask, { role: "user", content: "No, déjalo así" }]), false);
+  assert.equal(userConfirmedPendingAction([]), false);
 });

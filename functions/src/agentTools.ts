@@ -238,3 +238,108 @@ export function relaxJsonSchema(schema: unknown): unknown {
   }
   return out;
 }
+
+// --- Final answer guard ---------------------------------------------------------
+
+export const EMPTY_ANSWER_FALLBACK = "No pude generar una respuesta, intenta reformular la pregunta.";
+
+/** Tools that change data; only their `success: true` outputs back a claimed action. */
+export const WRITE_TOOLS = new Set([
+  "createAccount", "createTransaction", "deleteTransaction", "createGoal", "updateGoalAmount", "saveCategoryBudgets"
+]);
+
+interface MessageLike {
+  role?: string;
+  content?: Array<{ toolResponse?: { name?: string; output?: unknown } } & Record<string, unknown>>;
+}
+
+/** Names of write tools that returned `success: true` in these generation messages. */
+export function succeededWriteTools(messages: readonly MessageLike[] | undefined): string[] {
+  const names: string[] = [];
+  for (const message of messages ?? []) {
+    for (const part of message?.content ?? []) {
+      const response = part?.toolResponse;
+      const output = response?.output as { success?: unknown } | null | undefined;
+      if (response?.name && WRITE_TOOLS.has(response.name) && output && typeof output === "object" && output.success === true) {
+        names.push(response.name);
+      }
+    }
+  }
+  return names;
+}
+
+const fold = (text: string) => text.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+
+const ACTION_REQUEST = /\b(registr|anot|agreg|anad|crea|crear|elimin|borr|guard|actualiz|transfier|abon)/;
+const NEGATED_ACTION = /\bno (he|hemos|pude|puedo|se pudo|fue posible|logre|se guardo|se registro)\b/;
+// "He creado una propuesta/tabla..." describes the answer itself, not a saved change.
+const ANSWER_ARTIFACT = String.raw`(?!\s+(?:una?|el|la|este|esta)\s+(?:propuesta|plan|resumen|tabla|lista|borrador))`;
+// A question asking to confirm a pending change means nothing was claimed as done.
+const PENDING_CONFIRMATION = /¿[^?]*\b(confirm\w*|procedo|(quieres|deseas|prefieres) que (?:\w+ )?(guarde|registre|cree|elimine|borre|actualice|aplique))\b/;
+const CLAIMED_ACTION = new RegExp([
+  String.raw`\b(he|hemos|ya)\s+(registrado|creado${ANSWER_ARTIFACT}|eliminado|borrado|guardado|actualizado|agregado|anadido|anotado|transferido)\b`,
+
+  String.raw`\blisto\b`,
+  String.raw`\b(fue|ha sido|quedo|quedaron|fueron)\s+(registrad|cread|eliminad|borrad|guardad|actualizad|agregad|anotad)[oa]s?\b`
+].join("|"));
+
+// First-person preterite needs its accent: "guardé" is a claim, "que guarde" is not.
+const CLAIMED_PRETERITE = /(?<![\p{L}])(registré|eliminé|borré|guardé|actualicé|agregué|añadí|anoté|transferí)(?![\p{L}])/u;
+
+export type AnswerCheck =
+  | { ok: true; writes: string[] }
+  | { ok: false; reason: "empty" | "unbacked_action"; retryable: boolean; writes: string[] };
+
+/**
+ * Decides whether the agent's final answer can be returned: it must not be empty,
+ * and when the user asked for a change it must not claim one that no write tool
+ * backed in this generation. Empty answers are only retried when nothing was
+ * written (a full retry would duplicate the write).
+ */
+export function checkAgentAnswer({ userText, text, messages }: {
+  userText: string;
+  text: string | undefined;
+  messages: readonly MessageLike[] | undefined;
+}): AnswerCheck {
+  const writes = succeededWriteTools(messages);
+  const answer = fold(text ?? "").trim();
+  if (!answer) return { ok: false, reason: "empty", retryable: writes.length === 0, writes };
+  const claimsAction = (CLAIMED_ACTION.test(answer) || CLAIMED_PRETERITE.test((text ?? "").normalize("NFC").toLowerCase())) &&
+    !NEGATED_ACTION.test(answer) && !PENDING_CONFIRMATION.test(answer);
+  if (writes.length === 0 && claimsAction && ACTION_REQUEST.test(fold(userText))) {
+    return { ok: false, reason: "unbacked_action", retryable: true, writes };
+  }
+  return { ok: true, writes };
+}
+
+/** System note appended on the retry after an unbacked action claim. */
+export const UNBACKED_ACTION_NOTE = `
+      NOTA CORRECTIVA: en un intento anterior respondiste que habías realizado una acción sin que ninguna herramienta de escritura la confirmara. Si el usuario pidió registrar, crear, actualizar o eliminar algo y tienes los datos necesarios, llama ahora a la herramienta correspondiente (categoryId es opcional). Si falta un dato imprescindible, pregúntalo. Nunca afirmes que algo se guardó si la herramienta no devolvió success: true.
+  `;
+
+/** User-facing replacement when the answer cannot be returned as is (never empty). */
+export function fallbackAnswer(reason: "empty" | "unbacked_action", writes: readonly string[]): string {
+  if (reason === "unbacked_action") {
+    return "No pude completar la acción: no se guardó ningún cambio. Intenta de nuevo indicando los datos (monto, cuenta y fecha).";
+  }
+  if (writes.length > 0) {
+    return "La operación se completó, pero no pude generar el resumen de la respuesta. Revisa los cambios en la app.";
+  }
+  return EMPTY_ANSWER_FALLBACK;
+}
+
+const CONFIRMATION_REQUEST = /confirm|\b(quieres|deseas|prefieres|te gustaria) que (?:\w+ )?(elimine|borre|guarde|aplique|actualice)\b/;
+const REFUSAL = /^\W*(no|nop|cancela|cancelar|mejor no|todavia no|aun no)\b/;
+
+/**
+ * Server-side gate for destructive tools: `confirmed: true` only counts when the
+ * assistant's previous message asked for confirmation and the user's reply is not
+ * a refusal. A single "elimina X" request is never its own confirmation.
+ */
+export function userConfirmedPendingAction(messages: ReadonlyArray<{ role: string; content: string }>): boolean {
+  if (messages.length < 2) return false;
+  const reply = messages[messages.length - 1];
+  const previous = messages[messages.length - 2];
+  if (reply.role !== "user" || (previous.role !== "model" && previous.role !== "assistant")) return false;
+  return CONFIRMATION_REQUEST.test(fold(previous.content)) && !REFUSAL.test(fold(reply.content).trim());
+}

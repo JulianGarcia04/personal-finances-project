@@ -1,5 +1,5 @@
 {
-  "description": "Manual LLM eval for chatWithAgent (scripts/agent-eval.mjs). Each case: question (Spanish), expectTools (tool names that must be called), optional expectArgs (partial match on one call of that tool; '$group.key' resolves to fixture ids), optional expectNumbers (values computed at run time by running the named tool deterministically on the seeded fixture; the answer must mention each within ±1%). Mutating cases go last.",
+  "description": "Manual LLM eval for chatWithAgent (scripts/agent-eval.mjs). Each case: question (Spanish), expectTools (tool names that must be called; 'a|b' accepts either), optional expectArgs (partial match on one call of that tool; '$group.key' resolves to fixture ids), optional history (prior turns), expectSuccess/forbidSuccess (write tools that must/must not succeed), expectAnswer (case-insensitive regex), optional expectNumbers (values computed at run time by running the named tool deterministically on the seeded fixture; the answer must mention each within ±1%). Mutating cases go last.",
   "cases": [
     { "id": "q01", "intent": "resumen del mes", "question": "Dame un resumen de mis gastos de este mes",
       "expectTools": ["getFinancialSummary"],
@@ -99,19 +99,31 @@
     { "id": "q32", "intent": "propuesta de presupuestos", "question": "Ayúdame a crear presupuestos mensuales por categoría según mis gastos reales",
       "expectTools": ["getFinancialSummary"],
       "expectArgs": [{ "tool": "getFinancialSummary", "args": { "groupBy": "category" } }] },
-    { "id": "q33", "intent": "eliminar con confirmación", "question": "Elimina el gasto 'Mercado Éxito' de hoy",
-      "expectTools": ["deleteTransaction"],
-      "forbidArgs": [{ "tool": "deleteTransaction", "args": { "confirmed": true } }] },
+    { "id": "q33", "intent": "eliminar pide confirmación", "question": "Elimina el gasto 'Mercado Éxito' de hoy",
+      "expectTools": ["listTransactions|semanticSearchTransactions"],
+      "forbidSuccess": ["deleteTransaction"],
+      "expectAnswer": "confirm" },
     { "id": "q34", "intent": "gasto en cuenta puente", "question": "Registra un gasto de 30.000 pesos en la cuenta Gastos con Pareja por una cena",
-      "expectTools": [] },
+      "expectTools": [],
+      "forbidSuccess": ["createTransaction"] },
     { "id": "q35", "intent": "registrar gasto con fecha relativa", "question": "Ayer gasté 20.000 pesos en taxi, pagué en efectivo. Regístralo.",
       "expectTools": ["createTransaction"],
-      "expectArgs": [{ "tool": "createTransaction", "args": { "accountId": "$accounts.cash", "type": "expense", "amount": 20000, "date": "$dates.yesterday" } }] },
+      "expectArgs": [{ "tool": "createTransaction", "args": { "accountId": "$accounts.cash", "type": "expense", "amount": 20000, "date": "$dates.yesterday" } }],
+      "expectSuccess": ["createTransaction"] },
     { "id": "q36", "intent": "registrar préstamo", "question": "Le presté 50.000 pesos a Ana desde el Banco Principal hoy. Regístralo.",
       "expectTools": ["createTransaction"],
       "expectArgs": [{ "tool": "createTransaction", "args": { "accountId": "$accounts.bank", "type": "loan", "amount": 50000 } }] },
     { "id": "q37", "intent": "crear meta", "question": "Crea una meta de ahorro 'Carro' de 40.000.000 COP para el 31 de diciembre del próximo año",
       "expectTools": ["createGoal"],
-      "expectArgs": [{ "tool": "createGoal", "args": { "targetAmount": 40000000, "currency": "COP" } }] }
+      "expectArgs": [{ "tool": "createGoal", "args": { "targetAmount": 40000000, "currency": "COP" } }],
+      "expectSuccess": ["createGoal"] },
+    { "id": "q38", "intent": "eliminar tras confirmar (dos turnos)", "question": "Sí, elimínalo",
+      "history": [
+        { "role": "user", "content": "Elimina el gasto 'Mercado Éxito' de hoy" },
+        { "role": "assistant", "content": "Encontré este gasto de hoy: **Mercado Éxito**, -200.000 COP en Banco Principal (Comida). ¿Confirmas que quieres eliminarlo?" }
+      ],
+      "expectTools": ["deleteTransaction"],
+      "expectArgs": [{ "tool": "deleteTransaction", "args": { "confirmed": true } }],
+      "expectSuccess": ["deleteTransaction"] }
   ]
 }

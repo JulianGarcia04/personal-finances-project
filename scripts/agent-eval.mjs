@@ -4,6 +4,10 @@
 // scripts/agent-eval.questions.json to the emulated chatWithAgent with a real Gemini
 // key, and reports pass/fail per case (tool calls, partial args, numbers ±1%).
 //
+// `expectTools` entries may list alternatives as "a|b". Optional per case: `history` (prior {role, content} turns sent before the question),
+// `expectSuccess` / `forbidSuccess` (write tools that must / must not return success)
+// and `expectAnswer` (case-insensitive regex the answer must match).
+//
 //   GEMINI_API_KEY=... node scripts/agent-eval.mjs [--only q01,q16]
 //   node scripts/agent-eval.mjs --dry-run      # no key: validates cases + seeding
 //
@@ -50,7 +54,8 @@ function loadCases() {
     seen.add(c.id)
     assert.equal(typeof c.question, 'string', `${c.id}: question must be a string`)
     assert.ok(Array.isArray(c.expectTools), `${c.id}: expectTools must be an array`)
-    for (const name of c.expectTools) assert.ok(TOOL_NAMES.has(name), `${c.id}: unknown tool ${name}`)
+    // "a|b" accepts any of the alternatives.
+    for (const name of c.expectTools.flatMap(entry => entry.split('|'))) assert.ok(TOOL_NAMES.has(name), `${c.id}: unknown tool ${name}`)
     for (const key of ['expectArgs', 'forbidArgs', 'expectNumbers']) {
       if (c[key] === undefined) continue
       assert.ok(Array.isArray(c[key]), `${c.id}: ${key} must be an array`)
@@ -58,6 +63,18 @@ function loadCases() {
         assert.ok(TOOL_NAMES.has(spec.tool), `${c.id}: ${key} names unknown tool ${spec.tool}`)
         assert.equal(typeof spec.args, 'object', `${c.id}: ${key} needs args`)
         if (key === 'expectNumbers') assert.equal(typeof spec.path, 'string', `${c.id}: expectNumbers needs a path`)
+      }
+    }
+    for (const key of ['expectSuccess', 'forbidSuccess']) {
+      if (c[key] === undefined) continue
+      assert.ok(Array.isArray(c[key]), `${c.id}: ${key} must be an array`)
+      for (const name of c[key]) assert.ok(TOOL_NAMES.has(name), `${c.id}: ${key} names unknown tool ${name}`)
+    }
+    if (c.expectAnswer !== undefined) new RegExp(c.expectAnswer, 'i')
+    if (c.history !== undefined) {
+      assert.ok(Array.isArray(c.history), `${c.id}: history must be an array`)
+      for (const turn of c.history) {
+        assert.ok(['user', 'assistant'].includes(turn?.role) && typeof turn.content === 'string', `${c.id}: invalid history turn`)
       }
     }
   }
@@ -251,6 +268,9 @@ async function runChild() {
     assert.ok(signUp.idToken, 'auth emulator sign-up failed')
     const now = new Date()
     const ids = await seedAgentFixture(db, { workspaceId: `ws-eval-${runId}`, userId: signUp.localId, now })
+    // The app always stores pocketActivity on pockets (pockets.ts / accountsStore); the shared
+    // fixture omits it, which makes every movement on the parent account fail the pocket audit.
+    await db.collection('accounts').doc(ids.accounts.pocket).update({ pocketActivity: true })
     const user = (await db.collection('users').doc(signUp.localId).get()).data()
     const tools = buildAgentTools(db, {
       workspaceId: ids.workspaceId, userId: signUp.localId, timeZone: TIME_ZONE, primaryCurrency: resolvePrimaryCurrency(user)
@@ -307,14 +327,14 @@ async function runChild() {
       const response = await fetch(`${functionsBase}/chatWithAgent`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${signUp.idToken}` },
-        body: JSON.stringify({ messages: [{ role: 'user', content: c.question }], useDefaultKey: true, debugTrace: true })
+        body: JSON.stringify({ messages: [...(c.history ?? []), { role: 'user', content: c.question }], useDefaultKey: true, debugTrace: true })
       })
       const body = await response.json().catch(() => ({}))
       const calls = body.debugTrace?.toolCalls ?? []
       if (response.status !== 200) failures.push(`HTTP ${response.status}: ${body.error ?? 'sin cuerpo'}`)
       else if (!body.debugTrace) failures.push('debugTrace missing (is FUNCTIONS_EMULATOR set?)')
       for (const name of c.expectTools) {
-        if (!calls.some(call => call.name === name)) failures.push(`tool ${name} not called`)
+        if (!calls.some(call => name.split('|').includes(call.name))) failures.push(`tool ${name} not called`)
       }
       for (const spec of resolvePlaceholder(c.expectArgs ?? [], vars)) {
         if (!calls.some(call => call.name === spec.tool && argsMatch(call.input, spec.args))) {
@@ -326,6 +346,17 @@ async function runChild() {
           failures.push(`${spec.tool} called with forbidden ${JSON.stringify(spec.args)}`)
         }
       }
+      const toolResults = body.debugTrace?.toolResults ?? []
+      for (const name of c.expectSuccess ?? []) {
+        if (!toolResults.some(r => r.name === name && r.success)) failures.push(`tool ${name} never succeeded`)
+      }
+      for (const name of c.forbidSuccess ?? []) {
+        if (toolResults.some(r => r.name === name && r.success)) failures.push(`tool ${name} succeeded but must not`)
+      }
+      if (c.expectAnswer && !new RegExp(c.expectAnswer, 'i').test(String(body.response ?? ''))) {
+        failures.push(`answer does not match /${c.expectAnswer}/i`)
+      }
+      if (!String(body.response ?? '').trim()) failures.push('empty answer')
       const mentioned = numbersIn(String(body.response ?? ''))
       for (const { path, value } of numbers) {
         if (value === 0) continue // a zero cannot be told apart from other zeros in prose
@@ -333,7 +364,12 @@ async function runChild() {
         if (!mentioned.some(n => Math.abs(n - target) <= target * 0.01)) failures.push(`number ${path}=${value} not in answer`)
       }
       results.push({ id: c.id, pass: failures.length === 0 })
-      console.log(`${failures.length === 0 ? 'PASS' : 'FAIL'} ${c.id} ${c.intent}  [${calls.map(call => call.name).join(', ') || 'sin herramientas'}]`)
+      const guard = body.debugTrace?.guard ? `  guard=${body.debugTrace.guard}` : ''
+      const retried = body.debugTrace?.attempts > 1 ? `  attempts=${body.debugTrace.attempts}` : ''
+      const toolErrors = toolResults.filter(r => r.error).map(r => `${r.name}: ${r.error}`)
+      console.log(`${failures.length === 0 ? 'PASS' : 'FAIL'} ${c.id} ${c.intent}  [${calls.map(call => call.name).join(', ') || 'sin herramientas'}]${retried}${guard}`)
+      for (const toolError of toolErrors) console.log(`     ! ${toolError}`)
+      for (const rejected of body.debugTrace?.rejectedAnswers ?? []) console.log(`     ~ rejected: ${String(rejected).slice(0, 400).replace(/\s+/g, ' ') || '(vacía)'}`)
       for (const failure of failures) console.log(`     - ${failure}`)
       if (failures.length) console.log(`     answer: ${String(body.response ?? '').slice(0, 400).replace(/\s+/g, ' ')}`)
     }

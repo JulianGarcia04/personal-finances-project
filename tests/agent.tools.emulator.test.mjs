@@ -165,6 +165,39 @@ test('destructive tools without confirmed return needsConfirmation and write not
   assert.equal(workspace.categoryBudgets[ids.categories.food], 300_000)
 })
 
+test('confirmed: true without a confirmation turn still only returns the summary', async () => {
+  const deletion = await call('deleteTransaction', { transactionId: ids.transactions.market, confirmed: true })
+  assert.equal(deletion.needsConfirmation, true)
+  assert.match(deletion.message, /Aún no hay confirmación/)
+  assert.ok((await db.collection('transactions').doc(ids.transactions.market).get()).exists)
+
+  const budgets = await call('saveCategoryBudgets', { budgets: [{ categoryId: ids.categories.food, monthlyLimit: 999 }], confirmed: true })
+  assert.equal(budgets.needsConfirmation, true)
+  const workspace = (await db.collection('workspaces').doc(ids.workspaceId).get()).data()
+  assert.equal(workspace.categoryBudgets[ids.categories.food], 300_000)
+})
+
+test('confirmed: true after a confirmation turn writes', async () => {
+  const user = (await db.collection('users').doc(userId).get()).data()
+  const granted = buildAgentTools(db, {
+    workspaceId: ids.workspaceId, userId, timeZone: TIME_ZONE, primaryCurrency: resolvePrimaryCurrency(user),
+    now: () => FIXED_NOW, confirmationGranted: true
+  })
+  const save = granted.find(tool => tool.name === 'saveCategoryBudgets')
+  // Same limit as the fixture, so later tests see unchanged budgets.
+  const result = await save.run({ budgets: [{ categoryId: ids.categories.tech, monthlyLimit: 50_000 }], confirmed: true })
+  assert.equal(result.success, true)
+  assert.equal(result.savedBudgets, 1)
+})
+
+test('deleteTransaction with an unknown or guessed id returns a lookup hint instead of failing', async () => {
+  for (const confirmed of [undefined, true]) {
+    const result = await call('deleteTransaction', { transactionId: 'Mercado Éxito', confirmed })
+    assert.match(result.error, /no existe en el workspace activo.*listTransactions/)
+  }
+  assert.ok((await db.collection('transactions').doc(ids.transactions.market).get()).exists)
+})
+
 test('createTransaction keeps a date-only value on the same local day and signs expenses negative', async () => {
   const result = await call('createTransaction', {
     accountId: ids.accounts.cash, amount: 15_000, type: 'expense', description: 'Taxi', categoryId: ids.categories.food, date: '2026-10-01'

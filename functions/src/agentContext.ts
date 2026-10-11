@@ -29,6 +29,12 @@ export interface AgentToolContext {
   now?: () => Date;
   /** Query embedder for semanticSearchTransactions (Gemini in production). */
   embedQuery?: (input: string) => Promise<number[]>;
+  /**
+   * Whether the user's last message answers a confirmation request
+   * (`userConfirmedPendingAction`). Without it, `confirmed: true` on destructive
+   * tools only returns the summary. Defaults to false.
+   */
+  confirmationGranted?: boolean;
 }
 
 export interface AgentToolDefinition {
@@ -47,6 +53,10 @@ export function resolvePrimaryCurrency(userData: admin.firestore.DocumentData | 
 export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolContext): AgentToolDefinition[] {
   const { workspaceId, userId, timeZone, primaryCurrency } = ctx;
   const clock = ctx.now ?? (() => new Date());
+  const isConfirmed = (confirmed: boolean | undefined) => confirmed === true && ctx.confirmationGranted === true;
+  const awaitingConfirmation = (confirmed: boolean | undefined, ask: string) => confirmed === true
+    ? "Aún no hay confirmación del usuario: muestra este resumen y pídele que confirme explícitamente en su próximo mensaje. No digas que la acción se realizó."
+    : ask;
   const tools: AgentToolDefinition[] = [];
   const define = <S extends z.ZodTypeAny>(name: string, description: string, inputSchema: S, fn: (input: z.output<S>) => Promise<unknown>) => {
     tools.push({ name, description, inputSchema, run: safeTool(name, inputSchema, fn) });
@@ -194,7 +204,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
 
   define(
     'createTransaction',
-    'Registra un movimiento de dinero (ingreso, gasto, transferencia interna entre cuentas, préstamo dado a alguien o pago de préstamo recibido). Actualiza automáticamente el saldo de las cuentas.',
+    'Registra un movimiento de dinero (ingreso, gasto, transferencia interna entre cuentas, préstamo dado a alguien o pago de préstamo recibido). Actualiza automáticamente el saldo de las cuentas. Usa el id de cuenta exacto que devuelve listAccounts. Los bolsillos y las cuentas que tienen bolsillos solo admiten ingresos, gastos y transferencias: los préstamos (loan, loan_payment) deben registrarse en otra cuenta.',
     z.object({
       accountId: z.string().min(1).describe('El ID de la cuenta de origen'),
       amount: z.number().describe('El monto en valor absoluto (siempre positivo). El servidor aplica el signo según el tipo.'),
@@ -246,20 +256,24 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
 
   define(
     'deleteTransaction',
-    'Elimina una transacción existente y revierte automáticamente su impacto en los saldos. Sin confirmed: true solo devuelve un resumen para pedir confirmación.',
+    'Elimina una transacción existente y revierte automáticamente su impacto en los saldos. Sin confirmed: true solo devuelve un resumen para pedir confirmación. El transactionId debe ser el id exacto que devolvió listTransactions o semanticSearchTransactions en esta conversación; si no lo tienes, búscalo primero (nunca inventes ids).',
     z.object({
       transactionId: z.string().min(1).describe('El ID de la transacción a eliminar'),
       confirmed: confirmedParam,
     }),
     async ({ transactionId, confirmed }) => {
-      if (confirmed !== true) {
-        const docSnap = await db.collection('transactions').doc(transactionId).get();
-        const data = docSnap.data();
-        if (!docSnap.exists || !data || data.workspaceId !== workspaceId) {
-          throw new AgentToolError("La transacción no existe en el workspace activo.");
-        }
+      const docSnap = await db.collection('transactions').doc(transactionId).get();
+      const data = docSnap.data();
+      if (!docSnap.exists || !data || data.workspaceId !== workspaceId) {
+        throw new AgentToolError("La transacción no existe en el workspace activo. Búscala con listTransactions (o semanticSearchTransactions) y usa el id exacto que devuelve.");
+      }
+      if (!isConfirmed(confirmed)) {
         const [summary] = await lean([{ id: docSnap.id, data }]);
-        return { needsConfirmation: true, summary, message: "Muestra este resumen y pide confirmación explícita antes de eliminar." };
+        return {
+          needsConfirmation: true,
+          summary,
+          message: awaitingConfirmation(confirmed, "Muestra este resumen y pide confirmación explícita antes de eliminar.")
+        };
       }
       await mutateWorkspaceTransaction(db, { kind: 'deleted', transactionId, userId, workspaceId });
       return { success: true, message: "Transacción eliminada y saldos restaurados." };
@@ -540,7 +554,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
 
       // Last entry wins when the model repeats a category (duplicate field paths are rejected).
       const limits = new Map(budgets.map(b => [b.categoryId, Number(b.monthlyLimit)]));
-      if (confirmed !== true) {
+      if (!isConfirmed(confirmed)) {
         const categoryNames = new Map(categoryDocs.map(docSnap => [docSnap.id, docSnap.data()?.name || 'Sin nombre']));
         return {
           needsConfirmation: true,
@@ -549,7 +563,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
             monthlyLimit,
             currency: primaryCurrency
           })),
-          message: "Muestra esta propuesta y pide confirmación explícita antes de guardar."
+          message: awaitingConfirmation(confirmed, "Muestra esta propuesta y pide confirmación explícita antes de guardar.")
         };
       }
 
