@@ -37,5 +37,11 @@ ask-on-risk. Forecast ~400-550 authored lines.
 
 - T3 (delegated writer): `goalsStore.budgetAlertsEnabled` (absent → true) + `saveBudgetAlertsEnabled`; toggle in Settings → Workspace (same switch markup as the AI importer toggle, reverts on save error); `budgetAlertsEnabled` added to `workspaceSettingsKeys()` in firestore.rules; AGENTS.md documents `functions/.secret.local` for emulators, `firebase functions:secrets:set SMTP_USER|SMTP_PASS` for production, Gmail app password and optional `ALERTS_FROM`. README.md is a 5-line Vite stub with no setup section, so it was left unchanged. No runnable RED for the Vue toggle (no component test harness); checks: `pnpm exec vue-tsc --noEmit` exit 0, `pnpm --filter functions test` 109/109, `pnpm test:emulators:rules` 34/34.
 
+## Commits
+- T1 `acb1804` feat(functions): add pure budget threshold alert logic
+- T2 `0775742` feat(functions): email members when a category budget hits 80% or 100%
+- T3 `b49b32a` feat(settings): add budget alert email toggle and SMTP setup docs
+- Parent spot check: `pnpm --filter functions test` 109/109 pass.
+
 ## Next step
 Parent: native review assessment of the three work-unit commits; manual smoke test with real Gmail app password.
