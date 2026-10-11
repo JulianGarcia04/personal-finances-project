@@ -1,0 +1,36 @@
+# Budget category alerts by email
+
+## Objective
+Email workspace members when a monthly category budget (`workspaces/{id}.categoryBudgets`) is about to be reached (>= 80%) or reached (>= 100%), so they know to stop spending in that category.
+
+## Problem / Why
+Category caps exist but nothing warns the user; overspending is only visible if they open the app.
+
+## Scope
+- Firestore trigger on `transactions` writes: recompute month-to-date spend for the affected category, compare with its budget, email once per (workspace, category, month, threshold).
+- Email via own Cloud Function + `nodemailer` over Gmail SMTP (app password as Functions secret). NOT the Firebase "Trigger Email" extension: Firebase Extensions shut down 2027-03-31 (extensions.dev).
+- HTML email template versioned in repo (Spanish user-facing copy, matches app UI language).
+- Server-only dedupe ledger so each threshold notifies once per month.
+- Settings toggle to enable/disable alerts (default on).
+
+## Constraints
+- Spend computation must match how the app already computes category spend vs budget (sign, transfers excluded, currency conversion with workspace `exchangeRates`).
+- SMTP credentials never reach the client or logs.
+- Firestore rules: dedupe ledger server-only.
+
+## Tasks
+- [x] T1 Pure alert logic (threshold evaluation, month key, spend aggregation) + unit tests (RED first).
+- [ ] T2 Trigger + mailer (nodemailer, secrets, template, dedupe ledger, rules) + tests.
+- [ ] T3 Settings toggle (workspace field) + docs (README/AGENTS env vars).
+
+## Delivery strategy
+ask-on-risk. Forecast ~400-550 authored lines.
+
+## Route declaration
+- T1-T3: delegated direct (writer trigger: 2+ non-trivial files).
+
+## Progress / evidence
+- T1 (delegated writer): `functions/src/budgetAlerts.ts` + `budgetAlerts.test.ts`. RED observed (`pnpm --filter functions test`: TS2307 cannot find module './budgetAlerts'), then GREEN (100/100 pass, 15 new). Spend semantics mirror `transactionsStore.spendingByCategoryThisMonth` (expenses only, |amount|, installments split per month, `convertToPrimary` 1:1 fallback); reuses server ports `http.ts expenseAmountForMonth` and `agentQueries.ts convertToPrimary`. 100% implies 80% (single email); notified thresholds never re-alert within the month.
+
+## Next step
+T2.
