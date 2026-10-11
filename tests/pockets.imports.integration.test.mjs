@@ -27,8 +27,226 @@ function request(workspaceId, accountId, rows, expectedCurrency = 'COP') {
   return { workspaceId, accountId, expectedCurrency, rows }
 }
 
+function withDeadline(promise, label, timeoutMs = 20_000) {
+  let timer
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), timeoutMs)
+    })
+  ]).finally(() => clearTimeout(timer))
+}
+
 async function transactionCount(adminDb, workspaceId) {
   return (await adminDb.collection('transactions').where('workspaceId', '==', workspaceId).get()).size
+}
+
+async function readPocketRaceState(adminDb, workspaceId, parentId) {
+  const [parent, children, transactions] = await Promise.all([
+    adminDb.collection('accounts').doc(parentId).get(),
+    adminDb.collection('accounts').where('workspaceId', '==', workspaceId).where('parentAccountId', '==', parentId).get(),
+    adminDb.collection('transactions').where('workspaceId', '==', workspaceId).get()
+  ])
+  const childIds = new Set(children.docs.map(snapshot => snapshot.id))
+  const relevant = transactions.docs.filter(snapshot => {
+    const data = snapshot.data()
+    return data.accountId === parentId || childIds.has(data.toAccountId)
+  })
+  return {
+    parentExists: parent.exists,
+    parentBalance: parent.data()?.balance ?? null,
+    parentWorkspaceId: parent.data()?.workspaceId ?? null,
+    parentUserId: parent.data()?.userId ?? null,
+    parentUpdateTime: parent.updateTime?.toDate().toISOString() ?? null,
+    registryIds: parent.data()?.childAccountIds ?? [],
+    children: children.docs.map(snapshot => ({
+      id: snapshot.id,
+      balance: snapshot.data().balance,
+      workspaceId: snapshot.data().workspaceId,
+      userId: snapshot.data().userId
+    })),
+    allocationCount: relevant.filter(snapshot => snapshot.data().pocketAllocation === true).length,
+    importCount: relevant.filter(snapshot => String(snapshot.data().description).startsWith('pocket-before-import ') ||
+      String(snapshot.data().description).startsWith('import-before-pocket ')).length
+  }
+}
+
+function describeOutcome(result) {
+  if (result.status === 'fulfilled') {
+    const value = result.value
+    return {
+      status: result.status,
+      accountId: value?.id ?? null,
+      resultCount: Array.isArray(value) ? value.length : null
+    }
+  }
+  return {
+    status: result.status,
+    errorName: result.reason?.name ?? null,
+    errorCode: result.reason?.code ?? null,
+    errorMessage: (result.reason?.message ?? String(result.reason)).slice(0, 180)
+  }
+}
+
+async function runOrderedPocketImportRace(order) {
+  const { accountsStore, adminDb, identity, transactionsStore, transactionBarrier, workspaceId } = fixture
+  const parent = await accountsStore.addAccount({
+    name: `Concurrent hierarchy import root ${order}`,
+    type: 'checking',
+    balance: 1_000,
+    currency: 'COP'
+  })
+  const beforeCount = await transactionCount(adminDb, workspaceId)
+  const beforeParentSnapshot = await adminDb.collection('accounts').doc(parent.id).get()
+  transactionBarrier.reset()
+  const barrierKind = order === 'pocket-before-import' ? 'pocket-opening' : 'ordinary-import'
+  const hold = transactionBarrier.holdNext(barrierKind)
+  const operations = {}
+  let harnessError = null
+  let barrierHeldEvent = null
+  let interleavedReadback = null
+
+  try {
+    if (order === 'pocket-before-import') {
+      operations.pocket = accountsStore.addAccount({
+        name: `Pocket opened during import ${order}`,
+        type: 'savings',
+        balance: 300,
+        currency: 'COP',
+        parentAccountId: parent.id
+      })
+      barrierHeldEvent = await withDeadline(hold.reached, `${order} opening transaction barrier`)
+      operations.imported = transactionsStore.addTransactionsBatch(parent.id, [
+        { date: '2026-10-10T12:00:00.000Z', description: `${order} income`, amount: 50, categorySuggestion: 'Income' },
+        { date: '2026-10-10T13:00:00.000Z', description: `${order} expense`, amount: -20, categorySuggestion: 'Expense' }
+      ])
+      await withDeadline(Promise.allSettled([operations.imported]), `${order} import commit`)
+      interleavedReadback = await readPocketRaceState(adminDb, workspaceId, parent.id)
+      hold.release()
+    } else {
+      operations.imported = transactionsStore.addTransactionsBatch(parent.id, [
+        { date: '2026-10-10T12:00:00.000Z', description: `${order} income`, amount: 50, categorySuggestion: 'Income' },
+        { date: '2026-10-10T13:00:00.000Z', description: `${order} expense`, amount: -20, categorySuggestion: 'Expense' }
+      ])
+      barrierHeldEvent = await withDeadline(hold.reached, `${order} import transaction barrier`)
+      operations.pocket = accountsStore.addAccount({
+        name: `Pocket opened during import ${order}`,
+        type: 'savings',
+        balance: 300,
+        currency: 'COP',
+        parentAccountId: parent.id
+      })
+      await withDeadline(Promise.allSettled([operations.pocket]), `${order} opening commit`)
+      interleavedReadback = await readPocketRaceState(adminDb, workspaceId, parent.id)
+      hold.release()
+    }
+  } catch (error) {
+    harnessError = { name: error?.name ?? null, message: error?.message ?? String(error) }
+  } finally {
+    hold.release()
+    transactionBarrier.releaseAll()
+  }
+
+  const settled = await withDeadline(Promise.allSettled(Object.values(operations)), `${order} operation settlement`)
+  const afterCount = await transactionCount(adminDb, workspaceId)
+  const [parentSnapshot, childrenSnapshot, transactionSnapshot] = await Promise.all([
+    adminDb.collection('accounts').doc(parent.id).get(),
+    adminDb.collection('accounts').where('workspaceId', '==', workspaceId).where('parentAccountId', '==', parent.id).get(),
+    adminDb.collection('transactions').where('workspaceId', '==', workspaceId).get()
+  ])
+  const childDocs = childrenSnapshot.docs
+  const relevantTransactions = transactionSnapshot.docs.filter(snapshot => {
+    const data = snapshot.data()
+    return data.accountId === parent.id || data.toAccountId === childDocs[0]?.id
+  })
+  const importTransactions = relevantTransactions
+    .filter(snapshot => String(snapshot.data().description).startsWith(`${order} `))
+    .map(snapshot => ({ id: snapshot.id, ...snapshot.data() }))
+  const openingAllocations = relevantTransactions
+    .filter(snapshot => snapshot.data().pocketAllocation === true)
+    .map(snapshot => ({ id: snapshot.id, ...snapshot.data() }))
+  const parentData = parentSnapshot.data()
+  const childData = childDocs.map(snapshot => ({ id: snapshot.id, ...snapshot.data() }))
+  const localParent = accountsStore.getAccountById(parent.id)
+  const localPocketIds = accountsStore.accounts
+    .filter(account => account.parentAccountId === parent.id)
+    .map(account => account.id)
+  const events = transactionBarrier.events()
+  transactionBarrier.reset()
+
+  return {
+    order,
+    workspaceId,
+    userId: identity.user.uid,
+    parentId: parent.id,
+    beforeTransactionCount: beforeCount,
+    afterTransactionCount: afterCount,
+    beforeParentUpdateTime: beforeParentSnapshot.updateTime?.toDate().toISOString() ?? null,
+    afterParentUpdateTime: parentSnapshot.updateTime?.toDate().toISOString() ?? null,
+    parent: parentData,
+    children: childData,
+    localState: {
+      parentBalance: localParent?.balance ?? null,
+      childAccountIds: localParent?.childAccountIds ?? [],
+      pocketIds: localPocketIds,
+      totals: fixture.pockets.getAccountPocketTotals(parent.id, accountsStore.accounts)
+    },
+    importTransactions,
+    openingAllocations,
+    outcomes: settled.map(describeOutcome),
+    barrierHeldEvent,
+    interleavedReadback,
+    callbackAttempts: events,
+    harnessError
+  }
+}
+
+function summarizeRaceScenario(scenario) {
+  const parentReads = event => event.reads.find(read => read.path === `accounts/${scenario.parentId}`) ?? null
+  const summarizeAttempt = event => ({
+    invocationId: event.invocationId,
+    attempt: event.attempt,
+    kind: event.kind,
+    outcome: event.outcome,
+    errorCode: event.errorCode,
+    errorMessage: event.errorMessage?.slice(0, 180) ?? null,
+    readParent: parentReads(event),
+    readWorkspaceMembers: event.reads.find(read => read.path === `workspaces/${scenario.workspaceId}`)?.members ?? null,
+    stagedParentBalance: event.writes.find(write => write.path === `accounts/${scenario.parentId}`)?.balance ?? null,
+    callbackResult: event.callbackResult
+  })
+  const transactions = [...scenario.importTransactions, ...scenario.openingAllocations]
+
+  return {
+    order: scenario.order,
+    harnessError: scenario.harnessError,
+    identity: {
+      expectedUserId: scenario.userId,
+      parentUserIdMatches: scenario.parent.userId === scenario.userId,
+      childUserIdsMatch: scenario.children.every(child => child.userId === scenario.userId),
+      transactionUserIdsMatch: transactions.every(transaction => transaction.userId === scenario.userId),
+      expectedWorkspaceId: scenario.workspaceId,
+      parentWorkspaceMatches: scenario.parent.workspaceId === scenario.workspaceId,
+      childWorkspaceIdsMatch: scenario.children.every(child => child.workspaceId === scenario.workspaceId),
+      transactionWorkspaceIdsMatch: transactions.every(transaction => transaction.workspaceId === scenario.workspaceId),
+      observedMembership: scenario.callbackAttempts.flatMap(event => event.reads)
+        .find(read => read.path === `workspaces/${scenario.workspaceId}`)?.members?.includes(scenario.userId) ?? null
+    },
+    outcomes: scenario.outcomes,
+    intermediate: scenario.interleavedReadback,
+    durable: {
+      transactionCountDelta: scenario.afterTransactionCount - scenario.beforeTransactionCount,
+      parentBalance: scenario.parent.balance,
+      parentUpdateTime: scenario.afterParentUpdateTime,
+      childCount: scenario.children.length,
+      registryIds: scenario.parent.childAccountIds ?? [],
+      allocationCount: scenario.openingAllocations.length,
+      importCount: scenario.importTransactions.length
+    },
+    localState: scenario.localState,
+    heldCallback: scenario.barrierHeldEvent ? summarizeAttempt(scenario.barrierHeldEvent) : null,
+    callbackAttempts: scenario.callbackAttempts.map(summarizeAttempt)
+  }
 }
 
 test('extracted Admin import helper validates membership and commits all related cashflows together', async () => {
@@ -223,28 +441,47 @@ test('stale ordinary client cache routes a newly pocket-related root through the
   assert.equal((await adminDb.collection('accounts').doc(pocket.id).get()).data().balance, 30)
 })
 
-test('a root gaining a pocket during an import keeps both atomic outcomes and the total balance', async () => {
-  const { accountsStore, adminDb, transactionsStore, workspaceId } = fixture
-  const parent = await accountsStore.addAccount({ name: 'Concurrent hierarchy import root', type: 'checking', balance: 1_000, currency: 'COP' })
-  const beforeCount = await transactionCount(adminDb, workspaceId)
-  const importPromise = transactionsStore.addTransactionsBatch(parent.id, [
-    { date: '2026-10-10T12:00:00.000Z', description: 'Racing import income', amount: 50, categorySuggestion: 'Income' },
-    { date: '2026-10-10T13:00:00.000Z', description: 'Racing import expense', amount: -20, categorySuggestion: 'Expense' }
-  ])
-  const pocketPromise = accountsStore.addAccount({
-    name: 'Pocket opened during import', type: 'savings', balance: 300, currency: 'COP', parentAccountId: parent.id
-  })
-  const [imported, pocket] = await Promise.all([importPromise, pocketPromise])
+test('pocket opening and ordinary import retain both outcomes in either commit order', async () => {
+  const scenarios = [
+    await runOrderedPocketImportRace('pocket-before-import'),
+    await runOrderedPocketImportRace('import-before-pocket')
+  ]
+  const evidence = JSON.stringify(scenarios.map(summarizeRaceScenario), null, 2)
+  for (const scenario of scenarios) {
+    process.stdout.write(`POCKET_RACE_READBACK ${JSON.stringify(summarizeRaceScenario(scenario))}\n`)
+  }
 
-  assert.equal(imported.length, 2)
-  assert.equal(await transactionCount(adminDb, workspaceId), beforeCount + 3)
-  const [storedParent, storedPocket] = await Promise.all([
-    adminDb.collection('accounts').doc(parent.id).get(),
-    adminDb.collection('accounts').doc(pocket.id).get()
-  ])
-  assert.equal(storedParent.data().balance, 730)
-  assert.equal(storedPocket.data().balance, 300)
-  assert.equal(storedParent.data().balance + storedPocket.data().balance, 1_030)
+  for (const scenario of scenarios) {
+    assert.equal(scenario.harnessError, null, `Barrier scheduling failed: ${evidence}`)
+    assert.deepEqual(scenario.outcomes.map(result => result.status), ['fulfilled', 'fulfilled'], evidence)
+    assert.equal(scenario.afterTransactionCount, scenario.beforeTransactionCount + 3, evidence)
+    assert.equal(scenario.parent.workspaceId, scenario.workspaceId, evidence)
+    assert.equal(scenario.parent.userId, scenario.userId, evidence)
+    assert.equal(scenario.parent.balance, 730, evidence)
+    assert.equal(scenario.children.length, 1, evidence)
+    assert.equal(scenario.children[0].balance, 300, evidence)
+    assert.equal(scenario.children[0].workspaceId, scenario.workspaceId, evidence)
+    assert.equal(scenario.children[0].userId, scenario.userId, evidence)
+    assert.deepEqual(scenario.parent.childAccountIds, [scenario.children[0].id], evidence)
+    assert.equal(scenario.parent.balance + scenario.children.reduce((sum, child) => sum + child.balance, 0), 1_030, evidence)
+    assert.equal(scenario.localState.parentBalance, 730, evidence)
+    assert.deepEqual(scenario.localState.childAccountIds, [scenario.children[0].id], evidence)
+    assert.deepEqual(scenario.localState.pocketIds, [scenario.children[0].id], evidence)
+    assert.deepEqual(scenario.localState.totals, { availableBalance: 730, pocketBalance: 300, totalBalance: 1_030 }, evidence)
+    assert.equal(scenario.importTransactions.length, 2, evidence)
+    assert.deepEqual(scenario.importTransactions.map(transaction => transaction.amount).sort((a, b) => a - b), [-20, 50], evidence)
+    assert.ok(scenario.importTransactions.every(transaction => transaction.workspaceId === scenario.workspaceId && transaction.userId === scenario.userId && transaction.accountId === scenario.parentId), evidence)
+    assert.equal(scenario.openingAllocations.length, 1, evidence)
+    assert.equal(scenario.openingAllocations[0].amount, 300, evidence)
+    assert.equal(scenario.openingAllocations[0].type, 'transfer', evidence)
+    assert.equal(scenario.openingAllocations[0].pocketAllocation, true, evidence)
+    assert.equal(scenario.openingAllocations[0].accountId, scenario.parentId, evidence)
+    assert.equal(scenario.openingAllocations[0].toAccountId, scenario.children[0].id, evidence)
+    assert.equal(scenario.openingAllocations[0].workspaceId, scenario.workspaceId, evidence)
+    assert.equal(scenario.openingAllocations[0].userId, scenario.userId, evidence)
+    assert.ok(scenario.callbackAttempts.some(event => event.kind === 'pocket-opening' && event.outcome === 'staged'), evidence)
+    assert.ok(scenario.callbackAttempts.some(event => event.kind === 'ordinary-import' && event.outcome === 'staged'), evidence)
+  }
 })
 
 test('ordinary batch import keeps its established balance and transaction behavior atomically', async () => {

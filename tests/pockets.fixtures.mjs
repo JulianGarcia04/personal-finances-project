@@ -29,12 +29,28 @@ export async function createPocketFixture() {
   const admin = requireFunctions('firebase-admin')
   const adminApp = admin.initializeApp({ projectId }, `pockets-${Date.now()}-${Math.random()}`)
   const adminDb = adminApp.firestore()
+  const { createTransactionBarrier } = await import('./pockets.transaction-barrier.mjs')
+  const transactionBarrier = createTransactionBarrier()
+  const barrierModulePath = resolve(repositoryRoot, 'tests/pockets.transaction-barrier.mjs')
+  const transactionBarrierPlugin = {
+    name: 'pockets-real-transaction-barrier',
+    enforce: 'pre',
+    transform(source, id) {
+      if (id !== resolve(repositoryRoot, 'src/stores/accountsStore.ts') &&
+          id !== resolve(repositoryRoot, 'src/stores/transactionsStore.ts')) return null
+      return source.replace(
+        /from\s+(['"])firebase\/firestore\1/,
+        `from ${JSON.stringify(barrierModulePath)}`
+      )
+    }
+  }
   const vite = await createServer({
     configFile: false,
     envDir: false,
     root: repositoryRoot,
     mode: 'test',
     logLevel: 'error',
+    plugins: [transactionBarrierPlugin],
     resolve: { alias: { '@': resolve(repositoryRoot, 'src') } },
     define: {
       'import.meta.env': JSON.stringify({
@@ -63,6 +79,7 @@ export async function createPocketFixture() {
     const authStoreModule = await vite.ssrLoadModule('/src/stores/authStore.ts')
     const accountsStoreModule = await vite.ssrLoadModule('/src/stores/accountsStore.ts')
     const transactionsStoreModule = await vite.ssrLoadModule('/src/stores/transactionsStore.ts')
+    const pocketsModule = await vite.ssrLoadModule('/src/lib/pockets.ts')
     const identity = await createUserWithEmailAndPassword(
       auth,
       `pockets-${Date.now()}@example.test`,
@@ -136,13 +153,17 @@ export async function createPocketFixture() {
       authStore,
       accountsStore,
       transactionsStore,
+      pockets: pocketsModule,
       db,
       identity,
       workspaceId,
       outsiderApp,
       outsiderAuth,
       outsiderDb,
+      transactionBarrier,
       async close() {
+        transactionBarrier.releaseAll()
+        transactionBarrier.reset()
         const cleanups = [
           signOut(auth),
           signOut(outsiderAuth),
@@ -159,6 +180,8 @@ export async function createPocketFixture() {
       }
     }
   } catch (error) {
+    transactionBarrier.releaseAll()
+    transactionBarrier.reset()
     await vite.close()
     await adminApp.delete()
     throw error

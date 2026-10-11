@@ -15,7 +15,8 @@ import {
   updateDoc,
   runTransaction,
   getDoc,
-  Timestamp
+  Timestamp,
+  increment
 } from 'firebase/firestore'
 
 interface AccountsState {
@@ -209,7 +210,7 @@ export const useAccountsStore = defineStore('accounts', {
           }
 
           transaction.update(parentRef, {
-            balance: plan.parentBalanceAfter,
+            balance: increment(-amount),
             childAccountIds: childIds,
             lastPocketChildId: pocketRef.id,
             lastPocketChange: 'created'
@@ -250,12 +251,22 @@ export const useAccountsStore = defineStore('accounts', {
               createdAt: date
             })
           }
-          return { pocket, parentBalanceAfter: plan.parentBalanceAfter }
+          return {
+            pocket,
+            parentBalanceAfter: plan.parentBalanceAfter,
+            parentChildAccountIds: childIds
+          }
         })
 
         if (authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === userId) {
           const parentIndex = this.accounts.findIndex(account => account.id === parentAccountId)
-          if (parentIndex !== -1) this.accounts[parentIndex].balance = result.parentBalanceAfter
+          if (parentIndex !== -1) {
+            this.accounts[parentIndex] = {
+              ...this.accounts[parentIndex],
+              balance: result.parentBalanceAfter,
+              childAccountIds: result.parentChildAccountIds
+            }
+          }
           this.accounts.push(result.pocket)
         }
         return result.pocket

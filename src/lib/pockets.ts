@@ -6,6 +6,12 @@ export interface AccountPocketTotals {
   totalBalance: number
 }
 
+export interface AccountPocketGroup {
+  account: Account
+  pockets: Account[]
+  isOrphan: boolean
+}
+
 export interface PocketOpeningPlan {
   parentBalanceAfter: number
   pocketBalance: number
@@ -29,6 +35,78 @@ export function isPocketAccount(account: Pick<Account, 'parentAccountId'>): bool
 
 export function isPocketRelatedAccount(account: Pick<Account, 'parentAccountId' | 'childAccountIds'>): boolean {
   return isPocketAccount(account) || (account.childAccountIds?.length ?? 0) > 0
+}
+
+function isEligiblePocketParent(account: Account): boolean {
+  return !isPocketAccount(account) && !account.mirror && ['checking', 'savings'].includes(account.type)
+}
+
+function validPocketChildren(accounts: Account[], activeWorkspaceId?: string): Map<string, Account[]> {
+  const byId = new Map(accounts.map(account => [account.id, account]))
+  const children = new Map<string, Account[]>()
+
+  for (const child of accounts) {
+    const parentId = child.parentAccountId
+    if (!parentId || child.type !== 'savings') continue
+    const parent = byId.get(parentId)
+    if (!parent || !isEligiblePocketParent(parent) || parent.workspaceId !== child.workspaceId ||
+        parent.currency !== child.currency ||
+        (activeWorkspaceId && child.workspaceId !== activeWorkspaceId) ||
+        !parent.childAccountIds?.includes(child.id)) continue
+    children.set(parentId, [...(children.get(parentId) ?? []), child])
+  }
+
+  return children
+}
+
+/** Group only registered, one-level pockets whose actual workspace and currency match their parent. */
+export function groupAccountsByPocket(accounts: Account[], activeWorkspaceId?: string): AccountPocketGroup[] {
+  const childrenByParent = validPocketChildren(accounts, activeWorkspaceId)
+  const validChildIds = new Set([...childrenByParent.values()].flat().map(account => account.id))
+  const groups: AccountPocketGroup[] = []
+
+  for (const account of accounts) {
+    if (!isPocketAccount(account)) {
+      groups.push({ account, pockets: childrenByParent.get(account.id) ?? [], isOrphan: false })
+    } else if (!validChildIds.has(account.id)) {
+      groups.push({ account, pockets: [], isOrphan: true })
+    }
+  }
+
+  return groups
+}
+
+/** Give valid pockets a bank-qualified name and keep malformed account IDs visible. */
+export function getAccountDisplayLabel(account: Account, accounts: Account[]): string {
+  if (!isPocketAccount(account)) return account.name
+  const parent = accounts.find(candidate => candidate.id === account.parentAccountId)
+  const isRegistered = !!parent && validPocketChildren(accounts).get(parent.id)?.some(child => child.id === account.id)
+  return isRegistered
+    ? `${parent.name} › ${account.name}`
+    : `${account.name} · sin grupo (ID: ${account.id})`
+}
+
+/** Preserve ordinary transfer selection, but constrain any movement involving a pocket. */
+export function canTransferBetweenAccounts(source: Account, destination: Account, accounts: Account[]): boolean {
+  if (source.id === destination.id) return false
+  if (!isPocketRelatedAccount(source) && !isPocketRelatedAccount(destination)) return true
+  if (source.workspaceId !== destination.workspaceId || source.currency !== destination.currency ||
+      source.mirror || destination.mirror) return false
+
+  const eligibleTypes = ['checking', 'savings', 'cash']
+  if (!eligibleTypes.includes(source.type) || !eligibleTypes.includes(destination.type)) return false
+
+  const groups = groupAccountsByPocket(accounts)
+  const validChildIds = new Set(groups.flatMap(group => group.pockets.map(child => child.id)))
+  const hasValidRegistration = (account: Account) => {
+    if (isPocketAccount(account)) return validChildIds.has(account.id)
+    const actualChildren = groups.find(group => group.account.id === account.id)?.pockets.map(child => child.id) ?? []
+    const registeredChildren = account.childAccountIds ?? []
+    return registeredChildren.length === actualChildren.length &&
+      registeredChildren.every(id => actualChildren.includes(id))
+  }
+
+  return hasValidRegistration(source) && hasValidRegistration(destination)
 }
 
 export function getTransactionAccountDeltas(movement: PocketMovement): AccountBalanceDeltas {
@@ -70,8 +148,7 @@ export function getAccountPocketTotals(parentId: string, accounts: Account[]): A
   const parent = accounts.find(account => account.id === parentId)
   if (!parent || isPocketAccount(parent)) throw new Error('No se encontró una cuenta bancaria principal válida.')
 
-  const pocketBalance = accounts
-    .filter(account => account.parentAccountId === parentId)
+  const pocketBalance = (groupAccountsByPocket(accounts).find(group => group.account.id === parentId)?.pockets ?? [])
     .reduce((total, account) => total + account.balance, 0)
 
   return {
