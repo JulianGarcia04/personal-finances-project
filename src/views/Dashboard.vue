@@ -50,6 +50,74 @@
 
     <!-- Dashboard Content when accounts exist -->
     <div v-else class="space-y-8 animate-fade-in">
+      <!-- 0. Forward-looking KPIs -->
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <!-- Disponible para gastar (hero) -->
+        <div class="glass-panel rounded-2xl p-4 sm:p-6 relative overflow-hidden border border-white/5 glow-card-emerald md:col-span-2 flex flex-col justify-between">
+          <div class="min-w-0">
+            <div class="absolute top-0 right-0 w-32 h-32 bg-accent-emerald/10 rounded-full blur-2xl pointer-events-none"></div>
+            <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Disponible para gastar</span>
+            <h3
+              :class="['min-w-0 font-display font-bold text-3xl sm:text-4xl tabular-nums mt-2', spendable.isDeficit ? 'text-accent-rose' : 'text-accent-emerald']"
+              :title="formatPrimaryCurrency(spendable.amount)"
+            >
+              <span class="whitespace-nowrap">{{ splitMoney(formatPrimaryCurrency(spendable.amount))[0] }}</span> <span class="inline-block max-w-full truncate align-bottom whitespace-nowrap">{{ splitMoney(formatPrimaryCurrency(spendable.amount))[1] }}</span>
+            </h3>
+            <p v-if="!spendable.isDeficit" class="text-xs text-text-secondary mt-1 tabular-nums">
+              ≈ {{ formatPrimaryCurrency(spendable.perDay) }}/día por {{ spendable.daysLeft }} {{ spendable.daysLeft === 1 ? 'día' : 'días' }}
+            </p>
+            <p v-else class="text-xs text-accent-rose mt-1">
+              Déficit: tus pagos de tarjeta pendientes superan tu efectivo disponible.
+            </p>
+          </div>
+          <div class="mt-4 pt-4 border-t border-white/5 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-text-muted">
+            <span>Efectivo disponible: <span class="font-semibold text-text-primary tabular-nums">{{ formatPrimaryCurrency(availableBalance) }}</span></span>
+            <span>Pagos de tarjeta este mes: <span class="font-semibold text-text-primary tabular-nums">−{{ formatPrimaryCurrency(committedCards) }}</span></span>
+          </div>
+        </div>
+
+        <!-- Proyección de cierre -->
+        <div :class="['glass-panel rounded-2xl p-4 sm:p-6 relative overflow-hidden border border-white/5 flex flex-col justify-between', creditAccounts.length === 0 ? 'md:col-span-2' : '']">
+          <div class="min-w-0">
+            <div class="absolute top-0 right-0 w-24 h-24 bg-accent-violet/5 rounded-full blur-xl pointer-events-none"></div>
+            <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Proyección de cierre</span>
+            <h4
+              :class="['min-w-0 font-display font-bold text-xl sm:text-2xl tabular-nums mt-2', projectionWarnings.length > 0 ? 'text-accent-amber' : 'text-text-primary']"
+              :title="formatPrimaryCurrency(monthEndProjection)"
+            >
+              <span class="whitespace-nowrap">{{ splitMoney(formatPrimaryCurrency(monthEndProjection))[0] }}</span> <span class="inline-block max-w-full truncate align-bottom whitespace-nowrap">{{ splitMoney(formatPrimaryCurrency(monthEndProjection))[1] }}</span>
+            </h4>
+            <span class="text-[10px] text-text-muted mt-1 block">Gastos estimados al cierre del mes a tu ritmo actual</span>
+          </div>
+          <div v-if="projectionWarnings.length > 0" class="mt-4 pt-3 border-t border-white/5 space-y-1">
+            <span v-for="warning in projectionWarnings" :key="warning" class="text-[10px] font-semibold text-accent-amber block">
+              ⚠️ {{ warning }}
+            </span>
+          </div>
+        </div>
+
+        <!-- Deuda en tarjetas -->
+        <div v-if="creditAccounts.length > 0" class="glass-panel rounded-2xl p-4 sm:p-6 relative overflow-hidden border border-white/5 flex flex-col justify-between">
+          <div class="min-w-0">
+            <div class="absolute top-0 right-0 w-24 h-24 bg-accent-rose/5 rounded-full blur-xl pointer-events-none"></div>
+            <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Deuda en tarjetas</span>
+            <h4 class="min-w-0 font-display font-bold text-xl sm:text-2xl tabular-nums mt-2 text-text-primary" :title="formatPrimaryCurrency(cardDebt.debt)">
+              <span class="whitespace-nowrap">{{ splitMoney(formatPrimaryCurrency(cardDebt.debt))[0] }}</span> <span class="inline-block max-w-full truncate align-bottom whitespace-nowrap">{{ splitMoney(formatPrimaryCurrency(cardDebt.debt))[1] }}</span>
+            </h4>
+          </div>
+          <div v-if="cardDebt.utilization !== null" class="mt-3">
+            <div class="flex justify-between gap-2 text-[10px] mb-1">
+              <span class="min-w-0 truncate text-text-secondary">Cupo usado de {{ formatPrimaryCurrency(cardDebt.limit) }}</span>
+              <span :class="['shrink-0 font-semibold tabular-nums', utilizationTextClass]">{{ cardDebt.utilization }}%</span>
+            </div>
+            <div class="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+              <div class="h-full rounded-full transition-all" :class="utilizationBarClass" :style="{ width: Math.min(cardDebt.utilization, 100) + '%' }"></div>
+            </div>
+          </div>
+          <span v-else class="text-[10px] text-text-muted mt-3 block">Configura el cupo de tus tarjetas para ver su uso.</span>
+        </div>
+      </div>
+
       <!-- 1. Stats Cards Grid -->
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         <!-- Patrimonio Neto (USD/COP default) -->
@@ -370,14 +438,19 @@ import { Account, AccountType, Transaction } from '@/types'
 import { expenseAmountForMonth } from '@/lib/installments'
 import { getTransactionDisplay } from '@/lib/transactionDisplay'
 import { splitMoney } from '@/lib/money'
-import { getAccountDisplayLabel, groupAccountsByPocket } from '@/lib/pockets'
+import { getAccountDisplayLabel, groupAccountsByPocket, isPocketAccount } from '@/lib/pockets'
 import {
   alignedMonthPeriods,
   isDateInPeriod,
   expenseAmountInPeriod,
   percentChange,
   previousFullMonths,
-  runwayDays
+  runwayDays,
+  committedCardPayments,
+  spendableUntilMonthEnd,
+  projectMonthEndExpenses,
+  cardDebtSummary,
+  utilizationLevel
 } from '@/lib/dashboardMetrics'
 import { getNextOccurrence, daysUntil, expenseAmountForCycle } from '@/lib/creditCycle'
 import { 
@@ -527,6 +600,77 @@ const liquidityDays = computed(() => {
     dayOfMonth: now.getDate()
   })
 })
+
+// Disponible para gastar: cash outside pockets minus card payments still due this month.
+const availableBalance = computed(() =>
+  liquidAccounts.value
+    .filter(acc => !isPocketAccount(acc))
+    .reduce((sum, acc) => sum + convert(acc.balance, acc.currency), 0)
+)
+
+const committedCards = computed(() =>
+  committedCardPayments(
+    upcomingCardPayments.value.map(payment => ({
+      statementAmount: payment.amount === null ? null : convert(payment.amount, payment.currency),
+      debt: convert(payment.debt, payment.currency),
+      dueDate: payment.dueDate
+    })),
+    new Date()
+  )
+)
+
+const spendable = computed(() =>
+  spendableUntilMonthEnd({ availableBalance: availableBalance.value, committed: committedCards.value, now: new Date() })
+)
+
+// Proyección de cierre: purchases made this month at the current daily pace plus
+// installments of earlier purchases already imputed to this month.
+const monthEndProjection = computed(() => {
+  const now = new Date()
+  const year = now.getFullYear(), month = now.getMonth()
+  let pace = 0, committed = 0
+  transactionsStore.transactions.forEach(t => {
+    if (t.type !== 'expense') return
+    const amount = convert(expenseAmountForMonth(t, year, month), t.currency)
+    if (amount === 0) return
+    if (t.date.getFullYear() === year && t.date.getMonth() === month) pace += amount
+    else committed += amount
+  })
+  return projectMonthEndExpenses({ paceExpensesToDate: pace, committedExpenses: committed, now })
+})
+
+const projectionWarnings = computed(() => {
+  const warnings: string[] = []
+  const budgetTotal = budgetSummary.value?.totalBudget ?? 0
+  if (budgetTotal > 0 && monthEndProjection.value > budgetTotal) {
+    warnings.push(`Supera tu presupuesto (${formatPrimaryCurrency(budgetTotal)})`)
+  }
+  if (currentExpenseLimit.value > 0 && monthEndProjection.value > currentExpenseLimit.value) {
+    warnings.push(`Supera el límite de gastos (${formatPrimaryCurrency(currentExpenseLimit.value)})`)
+  }
+  return warnings
+})
+
+// Deuda en tarjetas: negative credit balances and utilization of the total limit.
+const creditAccounts = computed(() =>
+  accountsStore.accounts.filter(acc => acc.type === 'credit' && !acc.mirror)
+)
+const cardDebt = computed(() =>
+  cardDebtSummary(creditAccounts.value.map(acc => ({
+    balance: convert(acc.balance, acc.currency),
+    limit: convert(acc.limit || 0, acc.currency)
+  })))
+)
+const utilizationTextClass = computed(() => ({
+  ok: 'text-accent-emerald',
+  warn: 'text-accent-amber',
+  alert: 'text-accent-rose'
+}[utilizationLevel(cardDebt.value.utilization)]))
+const utilizationBarClass = computed(() => ({
+  ok: 'bg-accent-emerald',
+  warn: 'bg-accent-amber',
+  alert: 'bg-accent-rose'
+}[utilizationLevel(cardDebt.value.utilization)]))
 
 // ponytail: Top Bleeder
 const topBleeder = computed(() => {
@@ -830,7 +974,9 @@ const upcomingCardPayments = computed(() => {
         id: acc.id,
         name: acc.name,
         currency: acc.currency,
+        dueDate,
         daysLeft: daysUntil(dueDate),
+        debt: Math.max(0, -acc.balance),
         amount
       }
     })
