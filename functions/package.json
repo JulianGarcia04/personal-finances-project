@@ -3,6 +3,7 @@
   "scripts": {
     "build": "tsc",
     "build:watch": "tsc --watch",
+    "test": "pnpm build && node --test lib/*.test.js",
     "serve": "pnpm build && firebase emulators:start --only functions",
     "shell": "pnpm build && firebase functions:shell",
     "start": "pnpm serve",
@@ -10,7 +11,7 @@
     "genkit": "npx -y genkit start --port=4001"
   },
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "main": "lib/index.js",
   "dependencies": {

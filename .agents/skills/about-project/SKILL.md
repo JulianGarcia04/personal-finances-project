@@ -32,16 +32,17 @@ vault-personal-finances (Root)
 ## 🔒 Security & Data Models
 
 ### Firestore Security Rules
-* `/users/{userId}`: Only the authenticated owner can read/write.
-* `/workspaces/{workspaceId}`: Users can create workspaces. Members can read/update. Only the owner can delete.
+* `/users/{userId}`: Only the owner can write. `get` is allowed to the owner or to a co-member of the requester's active workspace (both uids checked on the workspace doc); `list` is denied. `secure/*` (encrypted API key) is server-only.
+* `/workspaces/{workspaceId}`: Create requires `ownerId == uid` and `members == [uid]`. Members can read and update only `expenseLimit`, `budget*`, `budgetAllocations`, `categoryBudgets`, `exchangeRates`. `members`/`ownerId` are server-only (changed by `inviteToWorkspace`). Only the owner can delete.
 * `/accounts/{accountId}`: Only workspace members (`isWorkspaceMember(resource.data.workspaceId)`) can read, update, or delete.
 * `/transactions/{transactionId}`: Only workspace members can read, update, or delete.
 * `/categories/{categoryId}`: Users can read categories that belong to their workspace OR global categories (`workspaceId == null`).
 * `/goals/{goalId}`: Only workspace members can read, update, or delete.
 * `/chats/{chatId}`: Only workspace members can read, update, or delete.
+* `/transactionEmbeddings/*`, `/usageQuotas/*`, `/statementImports/*`: server-only (explicit deny-all; Admin SDK only).
 
 ### Storage Rules
-* File uploads (like receipts) are stored under `/workspaces/{workspaceId}/receipts/*`. Only workspace members can read or write these files.
+* File uploads (like receipts) are stored under `/workspaces/{workspaceId}/receipts/*`. Only workspace members can read or write these files; create/update requires size < 5 MB and `image/*` or `application/pdf`.
 
 ### Firestore Composite Indexes (`firestore.indexes.json`)
 * The **frontend** queries by `workspaceId`; the **agent backend** queries by `userId`. Both paths must stay indexed.
@@ -103,8 +104,9 @@ vault-personal-finances (Root)
 * `receiptUrl`: string | null (optional, download URL for receipt uploaded to Storage)
 * `notes`: string | null (optional free-text notes/observations, max 500 chars, included in client-side search)
 * `currency`: string (copied from account)
-* `embedding`: number[] | null (optional, 768-dimension semantic vector from text-embedding-004)
 * `createdAt`: timestamp
+
+> Note: vectors no longer live on the transaction (legacy `embedding` fields are stripped by `scripts/backfill-embeddings.mjs`). See `transactionEmbeddings`.
 
 #### 5. `/categories/{categoryId}`
 * `id`: string
@@ -125,6 +127,11 @@ vault-personal-finances (Root)
 * `currency`: string (e.g., "COP", "USD", "EUR")
 * `targetDate`: timestamp
 * `createdAt`: timestamp
+
+#### 7. Server-only collections (clients denied)
+* `/transactionEmbeddings/{transactionId}`: `{transactionId, workspaceId, embedding: number[3072], model ("gemini-embedding-2"), dim, textHash, sourceUpdatedAt, updatedAt}`. Kept in sync by the `syncTransactionEmbedding` trigger; searched in memory by `semanticSearchTransactions` (3072 dims exceed Firestore's 2048-dim vector limit).
+* `/usageQuotas/{uid}_{YYYY-MM-DD}`: per-user daily `chat`/`parse` counters for the project (default) Gemini key, day in America/Bogota; `expiresAt` (+7 d) for an optional TTL policy.
+* `/statementImports/{workspaceId}_{statementImportId}`: idempotency marker for `importPocketStatement` (payload fingerprint + stored result for replays).
 
 ---
 
@@ -166,11 +173,16 @@ Vault runs entirely offline using the **Firebase Emulator Suite** and **Genkit D
 
 ### Environment Configuration
 Backend secrets must be set in `functions/.env`:
-* `GEMINI_API_KEY`: Google AI Studio API Key.
-* `ENCRYPTION_SECRET`: A secure 32-character string used to encrypt/decrypt user-provided Gemini API keys.
+* `GEMINI_API_KEY`: Google AI Studio API Key (project default key; also used by the embeddings trigger).
+* `ENCRYPTION_SECRET` (**required**): secret used to encrypt/decrypt user-provided Gemini API keys. Functions fail closed (generic 500) when it is missing; ciphertexts from the old hardcoded secret are still decrypted and re-encrypted on use.
+* `DEFAULT_KEY_DAILY_CHAT_LIMIT` / `DEFAULT_KEY_DAILY_PARSE_LIMIT` (optional, defaults 50 / 10): per-user daily quota on the project key; `0` disables the default key. Own-key requests are not limited.
+
+### Cloud Functions (`functions/src/index.ts`, Node 22)
+* HTTP: `chatWithAgent`, `parseStatement`, `saveUserApiKey`, `inviteToWorkspace` (owner-only, atomic, generic response). Callable: `importPocketStatement` (requires `statementImportId`). Firestore trigger: `syncTransactionEmbedding` (`onDocumentWritten("transactions/{id}")`, replaces `onTransactionCreated`). All have `maxInstances: 10` (`options.ts`).
+* Tests: `pnpm test:functions` (unit, `functions/lib/*.test.js`), `pnpm test:emulators` (pocket/import emulator suite, rules + embeddings suite, HTTP suite `tests/functions.http.emulators.mjs` with a test-only env from `tests/fixtures/functions.env`).
 
 ### AI Chatbot & Tax Context Integration
-* **`chatWithAgent` Cloud Function:** An interactive HTTPS Cloud Function that powers the chat page. It initializes Genkit + Gemini (`GEMINI_MODEL = "gemini-2.5-flash"`; embeddings use `text-embedding-004`). Tools are defined **inline** and capture the verified `userId` in a closure (the model never receives the uid as a parameter). Database tools: `listAccounts`, `createAccount`, `listTransactions`, `createTransaction`, `deleteTransaction`, `listCategories`, `listGoals`, `createGoal`, `updateGoalAmount`, `semanticSearchTransactions`, `indexTransactions`, `getExpensesByCategory`, `saveCategoryBudgets`.
+* **`chatWithAgent` Cloud Function:** An interactive HTTPS Cloud Function that powers the chat page. It initializes Genkit + Gemini (`GEMINI_MODEL = "gemini-2.5-flash"`; embeddings use `gemini-embedding-2` via `functions/src/embeddings.ts`). It returns 403 unless the caller is a member of their `activeWorkspaceId`. Tools are defined **inline** and capture the verified `userId` in a closure (the model never receives the uid as a parameter). Database tools: `listAccounts`, `createAccount`, `listTransactions`, `createTransaction`, `deleteTransaction`, `listCategories`, `listGoals`, `createGoal`, `updateGoalAmount`, `semanticSearchTransactions`, `indexTransactions`, `getExpensesByCategory`, `saveCategoryBudgets`.
 * **Budget tools:** `getExpensesByCategory(months)` aggregates expenses by category server-side (total, count, monthly average) so the model reasons over a summary instead of hundreds of docs. `saveCategoryBudgets(budgets[])` resolves the user's `activeWorkspaceId` and writes `categoryBudgets` on the workspace doc. The system prompt enforces analyze → propose → confirm → save.
 * **Country Tax Context Mapping:** Automatically maps the user's `country` to specific tax agencies and guidelines (DIAN/4x1000 in Colombia, SAT/ISR in Mexico, Hacienda/IRPF in Spain, IRS/401k in USA, SII in Chile, AFIP in Argentina, SUNAT in Peru) and injects it as localized context in the chatbot instructions.
 
