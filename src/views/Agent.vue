@@ -161,7 +161,7 @@
           <div class="space-y-2">
             <h3 class="font-display font-bold text-xl text-text-primary">¿En qué puedo ayudarte hoy?</h3>
             <p class="text-text-secondary text-sm">
-              Soy tu asesor financiero y contador personal impulsado por IA. Puedo consultar tu información de cuentas y transacciones, indexar tus movimientos e incluso crear registros por ti.
+              Soy tu asesor financiero y contador personal impulsado por IA. Puedo resumir y comparar tus gastos, revisar tu presupuesto, buscar movimientos e incluso crear registros por ti.
             </p>
           </div>
 
@@ -185,23 +185,36 @@
           :class="['flex', msg.role === 'user' ? 'justify-end animate-slide-left' : 'justify-start animate-slide-right']"
         >
           <div 
+            :role="msg.isError ? 'alert' : undefined"
             :class="[
               'max-w-[88%] sm:max-w-[80%] min-w-0 break-words rounded-2xl p-3.5 sm:p-4 text-sm border shadow-md space-y-1',
               msg.role === 'user' 
                 ? 'bg-gradient-to-tr from-slate-900 to-slate-950 border-white/5 text-text-primary rounded-tr-none' 
-                : 'bg-slate-950/45 border-white/5 text-text-secondary rounded-tl-none font-sans leading-relaxed'
+                : msg.isError
+                  ? 'bg-accent-rose/5 border-accent-rose/20 text-text-secondary rounded-tl-none font-sans leading-relaxed'
+                  : 'bg-slate-950/45 border-white/5 text-text-secondary rounded-tl-none font-sans leading-relaxed'
             ]"
           >
             <!-- Message Sender Header -->
-            <div class="flex items-center space-x-2 text-[10px] text-text-muted font-bold uppercase mb-1">
-              <span>{{ msg.role === 'user' ? 'Tú' : 'Asesor IA' }}</span>
+            <div :class="['flex items-center space-x-2 text-[10px] font-bold uppercase mb-1', msg.isError ? 'text-accent-rose' : 'text-text-muted']">
+              <span>{{ msg.role === 'user' ? 'Tú' : msg.isError ? 'Error' : 'Asesor IA' }}</span>
             </div>
 
             <!-- Message Body with custom parsed markdown -->
             <div 
               class="markdown-content"
-              v-html="renderMarkdown(msg.content)"
+              v-html="renderAgentMarkdown(msg.content)"
             ></div>
+
+            <!-- Retry affordance: only on the latest error notice -->
+            <button
+              v-if="msg.isError && idx === activeChatMessages.length - 1 && !loading"
+              @click="retryLastMessage"
+              class="mt-2 min-h-10 inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-slate-950/60 border border-accent-rose/25 hover:border-accent-rose/50 text-xs font-semibold text-text-primary transition-all cursor-pointer"
+            >
+              <RetryIcon class="w-3.5 h-3.5" />
+              <span>Reintentar</span>
+            </button>
           </div>
         </div>
 
@@ -263,6 +276,7 @@ import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useGoalsStore } from '@/stores/goalsStore'
 import { useChatsStore } from '@/stores/chatsStore'
+import type { ChatMessage } from '@/types'
 import { 
   Sparkles as SparklesIcon, 
   Send as SendIcon,
@@ -270,8 +284,10 @@ import {
   Trash2 as TrashIcon,
   MessageSquare as ChatIcon,
   History as HistoryIcon,
+  RotateCcw as RetryIcon,
   X as XIcon
 } from 'lucide-vue-next'
+import { renderAgentMarkdown } from '@/lib/agentMarkdown'
 
 const authStore = useAuthStore()
 const settingsStore = useSettingsStore()
@@ -286,9 +302,14 @@ const MAX_HISTORY_MESSAGES = 40
 const MAX_USER_MESSAGE_CHARS = 4000
 const MAX_ASSISTANT_MESSAGE_CHARS = 8000
 
-// Sends only the recent history, starting at a user turn, with each message clipped to the server limits.
-const toBackendMessages = (messages: { role: string; content: string }[]) => {
-  const recent = messages.slice(-MAX_HISTORY_MESSAGES)
+// Error notices are UI-only; legacy chats may still hold persisted "⚠️ …" notices.
+const isErrorNotice = (m: ChatMessage) =>
+  m.isError === true || (m.role === 'assistant' && m.content.startsWith('⚠️'))
+
+// Sends only the recent history (without error notices), starting at a user turn,
+// with each message clipped to the server limits.
+const toBackendMessages = (messages: ChatMessage[]) => {
+  const recent = messages.filter(m => !isErrorNotice(m)).slice(-MAX_HISTORY_MESSAGES)
   const firstUser = recent.findIndex(m => m.role === 'user')
   return recent.slice(Math.max(firstUser, 0)).map(m => ({
     role: m.role,
@@ -303,16 +324,22 @@ const messageAreaRef = ref<HTMLDivElement | null>(null)
 const showHistoryDrawer = ref(false)
 
 const suggestionChips = [
+  'Resumen de mis gastos de este mes',
+  'Compara este mes con el anterior',
+  '¿Cómo voy con mi presupuesto?',
+  'Mis 5 gastos más grandes del mes',
   '¿Cuál es mi patrimonio neto actual?',
-  'Dáme un resumen de mis gastos de este mes',
-  'Registra un gasto de 30000 COP en Comida hoy',
-  '¿Cómo voy con mis metas de ahorro?'
+  'Registra un gasto de 30000 COP en Comida hoy'
 ]
 
 const contextChips = [
+  'Resumen de mis gastos de este mes',
+  'Compara este mes con el anterior',
+  '¿Cómo voy con mi presupuesto?',
+  'Mis 5 gastos más grandes del mes',
+  '¿Cuándo compré ropa?',
+  '¿Cómo voy con mis metas de ahorro?',
   'Dáme consejos para ahorrar',
-  '¿Tengo transacciones sin indexar?',
-  'Indexa mis transacciones ahora',
   'Crea una cuenta llamada Efectivo con saldo 50000 COP'
 ]
 
@@ -418,106 +445,101 @@ const sendMessage = async () => {
   inputMessage.value = ''
   loading.value = true
 
+  let chatId = chatsStore.activeChatId
   try {
-    const user = authStore.user
-    if (!user) throw new Error('Usuario no autenticado')
+    if (!authStore.user) throw new Error('Usuario no autenticado')
 
     // Si no hay un chat activo, crear uno dinámicamente
-    let chatId = chatsStore.activeChatId
     if (!chatId) {
       chatId = await chatsStore.createChat()
     }
 
-    // Agregar el mensaje del usuario
+    // Agregar el mensaje del usuario (los avisos de error previos dejan de ser relevantes)
+    chatsStore.clearErrorNotices(chatId)
     await chatsStore.addMessageToChat(chatId, 'user', userText)
     await scrollToBottom()
 
-    // Obtener el ID Token actualizable
-    const { auth } = await import('@/lib/firebase')
-    const activeUser = auth.currentUser
-    if (!activeUser) throw new Error('No se pudo verificar la sesión actual.')
-    const tokenJwt = await activeUser.getIdToken()
-
-    const url = getFunctionUrl('chatWithAgent')
-
-    // Formatear los mensajes para el backend (eliminando el campo createdAt para que coincida con lo esperado por Genkit)
-    const backendMessages = toBackendMessages(activeChatMessages.value)
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${tokenJwt}`
-      },
-      body: JSON.stringify({
-        messages: backendMessages,
-        useDefaultKey: !settingsStore.useCustomKey
-      })
-    })
-
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}))
-      // Server-side rejections (quota 429, validation 400/413, ...) carry a user-facing message.
-      throw Object.assign(new Error(errData.error || 'Error al conectar con el Asesor IA'), { fromServer: true })
-    }
-
-    const data = await response.json()
-    
-    // Agregar la respuesta de la IA al chat
-    await chatsStore.addMessageToChat(chatId, 'assistant', data.response || 'No recibí respuesta del asesor.')
-
-    // Sincronizar datos locales en segundo plano por si el agente creó cuentas, transacciones o presupuestos
-    await accountsStore.fetchAccounts()
-    await transactionsStore.fetchTransactions()
-    await goalsStore.loadBudgetSettings()
-
+    await requestReply(chatId)
   } catch (err: any) {
-    console.error('Error del Asesor IA:', err)
-    
-    // Si hay un chat activo, agregar un mensaje de error local
-    if (chatsStore.activeChatId) {
-      await chatsStore.addMessageToChat(
-        chatsStore.activeChatId, 
-        'assistant', 
-        err?.fromServer
-          ? `⚠️ ${err.message}`
-          : `⚠️ Error de conexión: ${err.message}. Asegúrate de tener los emuladores o el backend en ejecución.`
-      )
-    }
+    reportError(chatId ?? chatsStore.activeChatId, err)
   } finally {
     loading.value = false
     await scrollToBottom()
   }
 }
 
+// Re-sends the history (whose last turn is the unanswered user message) after an error.
+const retryLastMessage = async () => {
+  const chatId = chatsStore.activeChatId
+  if (!chatId || loading.value) return
+  chatsStore.clearErrorNotices(chatId)
+  loading.value = true
+  try {
+    await requestReply(chatId)
+  } catch (err: any) {
+    reportError(chatId, err)
+  } finally {
+    loading.value = false
+    await scrollToBottom()
+  }
+}
+
+const requestReply = async (chatId: string) => {
+  // Obtener el ID Token actualizable
+  const { auth } = await import('@/lib/firebase')
+  const activeUser = auth.currentUser
+  if (!activeUser) throw new Error('No se pudo verificar la sesión actual.')
+  const tokenJwt = await activeUser.getIdToken()
+
+  const response = await fetch(getFunctionUrl('chatWithAgent'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${tokenJwt}`
+    },
+    body: JSON.stringify({
+      messages: toBackendMessages(activeChatMessages.value),
+      useDefaultKey: !settingsStore.useCustomKey
+    })
+  })
+
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({}))
+    // Server-side rejections (quota 429, validation 400/413, ...) carry a user-facing message.
+    throw Object.assign(new Error(errData.error || 'Error al conectar con el Asesor IA'), { fromServer: true })
+  }
+
+  const data = await response.json()
+
+  // Agregar la respuesta de la IA al chat
+  await chatsStore.addMessageToChat(chatId, 'assistant', data.response || 'No recibí respuesta del asesor.')
+
+  // Sincronizar datos locales por si el agente creó cuentas, transacciones o presupuestos.
+  // A sync failure must not turn a delivered reply into an error notice.
+  try {
+    await accountsStore.fetchAccounts()
+    await transactionsStore.fetchTransactions()
+    await goalsStore.loadBudgetSettings()
+  } catch (syncErr) {
+    console.error('Error al sincronizar datos tras la respuesta del asesor:', syncErr)
+  }
+}
+
+// Shows a UI-only error notice; the user's message stays persisted so it can be retried.
+const reportError = (chatId: string | null, err: any) => {
+  console.error('Error del Asesor IA:', err)
+  if (!chatId) return
+  chatsStore.addErrorNotice(
+    chatId,
+    err?.fromServer
+      ? `⚠️ ${err.message}`
+      : `⚠️ Error de conexión: ${err?.message}. Asegúrate de tener los emuladores o el backend en ejecución.`
+  )
+}
+
 const sendSuggestion = (text: string) => {
   inputMessage.value = text
   sendMessage()
-}
-
-// Custom simple markdown parser
-const renderMarkdown = (text: string): string => {
-  if (!text) return ''
-  
-  // Escapar HTML básico
-  let html = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-
-  // Negrita (**texto**)
-  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-  
-  // Iconos o chips de código (`código`)
-  html = html.replace(/`(.*?)`/g, '<code class="px-1.5 py-0.5 rounded bg-slate-950 font-mono text-xs text-accent-amber border border-white/5">$1</code>')
-
-  // Bullet points
-  html = html.replace(/^[-\*]\s+(.*?)$/gm, '<li class="ml-4 list-disc">$1</li>')
-
-  // Nuevas líneas a <br>
-  html = html.replace(/\n/g, '<br>')
-
-  return html
 }
 </script>
 
@@ -564,17 +586,115 @@ const renderMarkdown = (text: string): string => {
 .markdown-content {
   overflow-wrap: anywhere;
 }
-.markdown-content table,
+.markdown-content > * + * {
+  margin-top: 0.5rem;
+}
 .markdown-content pre {
   display: block;
   max-width: 100%;
   overflow-x: auto;
 }
-
-.markdown-content li {
-  margin-top: 0.25rem;
-}
 .markdown-content strong {
   color: var(--color-text-primary);
 }
+.markdown-content em {
+  font-style: italic;
+}
+.markdown-content .md-heading {
+  font-family: var(--font-display, inherit);
+  font-weight: 700;
+  color: var(--color-text-primary);
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+.markdown-content .md-heading:not(:first-child) {
+  margin-top: 0.9rem;
+}
+.markdown-content h3.md-heading { font-size: 1rem; }
+.markdown-content h4.md-heading { font-size: 0.9375rem; }
+.markdown-content h5.md-heading {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: color-mix(in oklab, var(--color-accent-amber) 80%, transparent);
+}
+.markdown-content .md-ul,
+.markdown-content .md-ol {
+  padding-left: 1.25rem;
+}
+.markdown-content .md-ul { list-style: disc; }
+.markdown-content .md-ol { list-style: decimal; }
+.markdown-content li {
+  margin-top: 0.25rem;
+}
+.markdown-content li::marker {
+  color: color-mix(in oklab, var(--color-accent-amber) 70%, transparent);
+}
+.markdown-content .md-code {
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  background: var(--color-slate-950, #020617);
+  border: 1px solid rgb(255 255 255 / 0.05);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.75rem;
+  color: var(--color-accent-amber);
+}
+.markdown-content .md-pre {
+  padding: 0.75rem;
+  border-radius: 0.75rem;
+  background: var(--color-slate-950, #020617);
+  border: 1px solid rgb(255 255 255 / 0.05);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.75rem;
+}
+.markdown-content .md-link {
+  color: var(--color-accent-amber);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.markdown-content .md-hr {
+  border: 0;
+  border-top: 1px solid rgb(255 255 255 / 0.08);
+  margin: 0.9rem 0;
+}
+/* Tables scroll horizontally inside the bubble on narrow screens. */
+.markdown-content .md-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid rgb(255 255 255 / 0.06);
+  border-radius: 0.75rem;
+  background: rgb(2 6 23 / 0.4);
+}
+.markdown-content table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.markdown-content th,
+.markdown-content td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+.markdown-content th {
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid rgb(255 255 255 / 0.08);
+}
+.markdown-content td {
+  color: var(--color-text-secondary);
+  border-top: 1px solid rgb(255 255 255 / 0.04);
+}
+.markdown-content tbody tr:hover td {
+  background: rgb(255 255 255 / 0.02);
+}
+.markdown-content th.text-right,
+.markdown-content td.text-right { text-align: right; }
+.markdown-content th.text-center,
+.markdown-content td.text-center { text-align: center; }
 </style>

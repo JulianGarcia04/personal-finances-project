@@ -134,6 +134,8 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   createdAt: string;
+  // UI-only failure notice: never persisted nor sent to the model.
+  isError?: boolean;
 }
 
 export interface Chat {

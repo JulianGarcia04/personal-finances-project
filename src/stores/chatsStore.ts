@@ -148,7 +148,8 @@ export const useChatsStore = defineStore('chats', {
         const chatRef = doc(db, 'chats', chatId)
         await updateDoc(chatRef, {
           title: updatedTitle,
-          messages: chat.messages,
+          // Error notices are UI-only: never persist them as model turns.
+          messages: chat.messages.filter(m => !m.isError),
           updatedAt: serverTimestamp()
         })
         
@@ -162,6 +163,20 @@ export const useChatsStore = defineStore('chats', {
       } finally {
         this.loading = false
       }
+    },
+
+    // 3b. Mostrar un aviso de error solo en memoria (no se guarda en Firestore ni se envía al modelo)
+    addErrorNotice(chatId: string, content: string): void {
+      const chat = this.chats.find(c => c.id === chatId)
+      if (!chat) return
+      chat.messages.push({ role: 'assistant', content, createdAt: new Date().toISOString(), isError: true })
+    },
+
+    // 3c. Quitar los avisos de error en memoria (p. ej. antes de reintentar)
+    clearErrorNotices(chatId: string): void {
+      const chat = this.chats.find(c => c.id === chatId)
+      if (!chat) return
+      chat.messages = chat.messages.filter(m => !m.isError)
     },
 
     // 4. Eliminar conversación
