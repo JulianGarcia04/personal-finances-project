@@ -151,7 +151,8 @@ export const useSettingsStore = defineStore('settings', {
         })
 
         if (!response.ok) {
-          const errData = await response.json()
+          // Non-JSON bodies (e.g. a platform 413 for oversized uploads) fall back to the generic text.
+          const errData = await response.json().catch(() => ({}))
           throw new Error(errData.error || 'Error al procesar el extracto bancario')
         }
 

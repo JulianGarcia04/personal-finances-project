@@ -527,5 +527,10 @@ service cloud.firestore {
     match /statementImports/{markerId} {
       allow read, write: if false;
     }
+
+    // Server-only daily default-key usage counters (written by functions via Admin SDK).
+    match /usageQuotas/{quotaId} {
+      allow read, write: if false;
+    }
   }
 }

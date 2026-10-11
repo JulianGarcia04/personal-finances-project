@@ -456,8 +456,9 @@ const sendMessage = async () => {
     })
 
     if (!response.ok) {
-      const errData = await response.json()
-      throw new Error(errData.error || 'Error al conectar con el Asesor IA')
+      const errData = await response.json().catch(() => ({}))
+      // Server-side rejections (quota 429, validation 400/413, ...) carry a user-facing message.
+      throw Object.assign(new Error(errData.error || 'Error al conectar con el Asesor IA'), { fromServer: true })
     }
 
     const data = await response.json()
@@ -478,7 +479,9 @@ const sendMessage = async () => {
       await chatsStore.addMessageToChat(
         chatsStore.activeChatId, 
         'assistant', 
-        `⚠️ Error de conexión: ${err.message}. Asegúrate de tener los emuladores o el backend en ejecución.`
+        err?.fromServer
+          ? `⚠️ ${err.message}`
+          : `⚠️ Error de conexión: ${err.message}. Asegúrate de tener los emuladores o el backend en ejecución.`
       )
     }
   } finally {

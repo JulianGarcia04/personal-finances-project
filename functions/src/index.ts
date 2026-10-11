@@ -1,7 +1,9 @@
+// Must stay first: applies global function options (maxInstances) before any
+// function below or in re-exported modules is defined.
+import "./options";
 import { onRequest } from "firebase-functions/v2/https";
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import * as admin from "firebase-admin";
-import * as crypto from "crypto";
 import cors from "cors";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { genkit } from "genkit";
@@ -21,6 +23,8 @@ import {
   timeZoneForCountry,
   verifyBearerToken
 } from "./http";
+import { ApiKeyDecryptError, decryptApiKey, encryptApiKey, getEncryptionSecret, MissingEncryptionSecretError } from "./crypto";
+import { assertStatementSize, consumeDefaultKeyQuota, QuotaKind } from "./quota";
 export { importPocketStatement } from "./pocketImports";
 
 const corsHandler = cors({ origin: true });
@@ -52,31 +56,66 @@ async function embedText(apiKey: string, text: string): Promise<number[]> {
   return values;
 }
 
-// Llave de encriptación de 32 bytes derivada de la variable de entorno
-const SECRET_KEY = crypto.createHash('sha256')
-  .update(process.env.ENCRYPTION_SECRET || 'vault-local-dev-encryption-secret-key-32-chars-long')
-  .digest();
-const ALGORITHM = 'aes-256-cbc';
-
-// Helper: Encriptar
-function encrypt(text: string) {
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv(ALGORITHM, SECRET_KEY, iv);
-  let encrypted = cipher.update(text, 'utf8', 'hex');
-  encrypted += cipher.final('hex');
-  return {
-    encryptedData: encrypted,
-    iv: iv.toString('hex')
-  };
+function requireEncryptionSecret(): string {
+  try {
+    return getEncryptionSecret();
+  } catch (error) {
+    if (error instanceof MissingEncryptionSecretError) {
+      console.error(error.message);
+    }
+    throw error;
+  }
 }
 
-// Helper: Desencriptar
-function decrypt(encryptedData: string, ivHex: string): string {
-  const iv = Buffer.from(ivHex, 'hex');
-  const decipher = crypto.createDecipheriv(ALGORITHM, SECRET_KEY, iv);
-  let decrypted = decipher.update(encryptedData, 'hex', 'utf8');
-  decrypted += decipher.final('utf8');
-  return decrypted;
+/**
+ * Resolves the Gemini key for a request: the project key (after consuming the
+ * caller's daily quota) or the caller's own stored key (no quota).
+ */
+async function resolveGeminiApiKey(userId: string, useDefaultKey: boolean | undefined, kind: QuotaKind): Promise<string> {
+  if (useDefaultKey) {
+    const defaultKey = getDefaultGeminiApiKey();
+    if (!defaultKey) {
+      console.error("GEMINI_API_KEY / GOOGLE_GENAI_API_KEY is not configured.");
+      throw new HttpError(500, "La API Key por defecto del proyecto no está configurada en las funciones.");
+    }
+    await consumeDefaultKeyQuota(db, userId, kind);
+    return defaultKey;
+  }
+
+  const settingsRef = db.collection("users").doc(userId).collection("secure").doc("settings");
+  const secureDoc = await settingsRef.get();
+  if (!secureDoc.exists) {
+    throw new HttpError(400, "No tienes una API Key personalizada guardada. Activa la del proyecto o ingresa una válida.");
+  }
+  const data = secureDoc.data();
+  if (!data || typeof data.encryptedApiKey !== "string" || typeof data.iv !== "string") {
+    throw new HttpError(400, "Datos de API Key corruptos o incompletos.");
+  }
+
+  const secret = requireEncryptionSecret();
+  let decrypted: { apiKey: string; needsMigration: boolean };
+  try {
+    decrypted = decryptApiKey(data.encryptedApiKey, data.iv, secret);
+  } catch (error) {
+    if (error instanceof ApiKeyDecryptError) {
+      console.error(`Stored API key for ${userId} could not be decrypted.`);
+      throw new HttpError(400, "No se pudo leer tu API Key guardada. Vuelve a guardarla en Configuración.");
+    }
+    throw error;
+  }
+
+  if (decrypted.needsMigration) {
+    // Lazy migration away from the legacy hardcoded secret; best effort.
+    try {
+      await settingsRef.update({
+        ...encryptApiKey(decrypted.apiKey, secret),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+    } catch (error) {
+      console.error(`Failed to re-encrypt legacy API key for ${userId}:`, error);
+    }
+  }
+  return decrypted.apiKey;
 }
 
 // 1. Guardar API Key Encriptada en Firestore
@@ -92,8 +131,8 @@ export const saveUserApiKey = onRequest({cors: true}, async (req, res) => {
 
       const { apiKey } = parseBody(apiKeyBodySchema, req.body);
 
-      // Encriptar y Guardar
-      const { encryptedData, iv } = encrypt(apiKey);
+      // Encriptar y Guardar (fails closed with a generic 500 when ENCRYPTION_SECRET is unset)
+      const { encryptedData, iv } = encryptApiKey(apiKey, requireEncryptionSecret());
 
       await db.collection("users").doc(userId).collection("secure").doc("settings").set({
         encryptedApiKey: encryptedData,
@@ -197,28 +236,9 @@ export const parseStatement = onRequest({cors: true}, async (req, res) => {
       const userId = await authenticate(req.headers.authorization);
 
       const { text, pdfBase64, useDefaultKey } = parseBody(parseStatementBodySchema, req.body);
+      assertStatementSize({ text, pdfBase64 });
 
-      let activeApiKey: string | undefined = undefined;
-
-      if (useDefaultKey) {
-        activeApiKey = getDefaultGeminiApiKey();
-        if (!activeApiKey) {
-          res.status(500).json({ error: "La API Key por defecto del proyecto no está configurada en las funciones." });
-          return;
-        }
-      } else {
-        const secureDoc = await db.collection("users").doc(userId).collection("secure").doc("settings").get();
-        if (!secureDoc.exists) {
-          res.status(400).json({ error: "No tienes una API Key personalizada guardada. Activa la del proyecto o ingresa una válida." });
-          return;
-        }
-        const data = secureDoc.data();
-        if (!data || !data.encryptedApiKey || !data.iv) {
-          res.status(400).json({ error: "Datos de API Key corruptos o incompletos." });
-          return;
-        }
-        activeApiKey = decrypt(data.encryptedApiKey, data.iv);
-      }
+      const activeApiKey = await resolveGeminiApiKey(userId, useDefaultKey, "parse");
 
       // Ejecutar el Flow
       const parsedTransactions = await runParseStatementFlow({ text, pdfBase64 }, activeApiKey);
@@ -324,27 +344,8 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       return;
     }
 
-    // Obtener API Key activa
-    let activeApiKey: string | undefined = undefined;
-    if (useDefaultKey) {
-      activeApiKey = getDefaultGeminiApiKey();
-      if (!activeApiKey) {
-        res.status(500).json({ error: "La API Key por defecto no está configurada." });
-        return;
-      }
-    } else {
-      const secureDoc = await db.collection("users").doc(userId).collection("secure").doc("settings").get();
-      if (!secureDoc.exists) {
-        res.status(400).json({ error: "No tienes una API Key personalizada guardada." });
-        return;
-      }
-      const data = secureDoc.data();
-      if (!data || !data.encryptedApiKey || !data.iv) {
-        res.status(400).json({ error: "Datos de API Key corruptos o incompletos." });
-        return;
-      }
-      activeApiKey = decrypt(data.encryptedApiKey, data.iv);
-    }
+    // Obtener API Key activa (la del proyecto consume la cuota diaria del usuario)
+    const activeApiKey = await resolveGeminiApiKey(userId, useDefaultKey, "chat");
 
     const ai = genkit({
       plugins: [googleAI({ apiKey: activeApiKey })],

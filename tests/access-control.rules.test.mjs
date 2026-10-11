@@ -181,6 +181,15 @@ test('statement import markers are server-only', async () => {
   await assert.rejects(deleteDoc(doc(owner.db, 'statementImports', markerId)), denied)
 })
 
+test('default-key usage quotas are server-only', async () => {
+  const quotaId = `${owner.uid}_2026-10-11`
+  await adminDb.collection('usageQuotas').doc(quotaId).set({ uid: owner.uid, chat: 50 })
+  await assert.rejects(getDoc(doc(owner.db, 'usageQuotas', quotaId)), denied)
+  await assert.rejects(getDocs(collection(owner.db, 'usageQuotas')), denied)
+  await assert.rejects(setDoc(doc(owner.db, 'usageQuotas', quotaId), { uid: owner.uid, chat: 0 }), denied)
+  await assert.rejects(deleteDoc(doc(owner.db, 'usageQuotas', quotaId)), denied)
+})
+
 test('only the owner can delete the workspace', async () => {
   await assert.rejects(deleteDoc(doc(member.db, 'workspaces', workspaceId)), denied)
   await deleteDoc(doc(owner.db, 'workspaces', workspaceId))

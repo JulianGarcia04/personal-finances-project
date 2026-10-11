@@ -308,6 +308,7 @@ const router = useRouter()
 const targetAccountId = ref('')
 const statementText = ref('')
 const pdfBase64 = ref('')
+const MAX_STATEMENT_TEXT_CHARS = 200_000
 const dragOver = ref(false)
 const fileName = ref('')
 const errorMessage = ref('')
@@ -401,6 +402,11 @@ const processWithIA = async () => {
   }
   if (!statementText.value.trim() && !pdfBase64.value) {
     errorMessage.value = 'No hay contenido para analizar. Escribe o sube un extracto.'
+    return
+  }
+  // Mirrors the server cap in functions/src/quota.ts (MAX_STATEMENT_TEXT_CHARS).
+  if (!pdfBase64.value && statementText.value.length > MAX_STATEMENT_TEXT_CHARS) {
+    errorMessage.value = 'El texto del extracto supera el máximo de 200.000 caracteres.'
     return
   }
 

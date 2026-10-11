@@ -1,3 +1,5 @@
+// Must stay first: applies global function options before onCall below.
+import './options'
 import { createHash } from 'node:crypto'
 import * as admin from 'firebase-admin'
 import { Timestamp } from 'firebase-admin/firestore'
