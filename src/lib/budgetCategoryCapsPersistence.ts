@@ -22,7 +22,7 @@ const assertBudgetId = (id: string) => {
 }
 
 const assertCategoryId = (id: string) => {
-  if (typeof id !== 'string' || !id.trim() || id.includes('/') || id === '.' || id === '..' || /^__.*__$/.test(id)) {
+  if (typeof id !== 'string' || !id.trim() || id.includes('/') || id === '.' || id === '..' || id === '__proto__' || /^__.*__$/.test(id)) {
     throw new Error('Invalid category ID')
   }
 }
