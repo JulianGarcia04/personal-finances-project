@@ -18,3 +18,9 @@ JAVA_HOME="/path/to/jdk-21" PATH="/path/to/jdk-21/bin:$PATH" pnpm test:budgets:s
 Security files remain process-isolated but run one at a time (`--test-concurrency=1`), with a 15-second default test-execution bound (`--test-timeout=15000`). All security cases, SDK actors and fixture assertions are unchanged. See the [Node.js test-runner options](https://nodejs.org/docs/latest-v24.x/api/cli.html#--test-concurrency).
 
 These controls reduce overlapping clients and expose stalled tests; they are not a proven fix for emulator gRPC framing faults. A separate overall supervisor is still needed to bound emulator startup and teardown. A timeout is a failed/incomplete check, not a reason to retry automatically.
+
+## Expense budget classification API
+
+`transactionsStore.assignExpenseBudget(transactionId, budgetId)` changes only an expense's `budgetId`. Pass an additional budget ID, `default-monthly`, or `null` to return to the protected default. It does not invoke normal financial editing, reverse balances, change installments/receipts/dates, or update a mirrored counterpart. Firestore rules still validate the actual budget workspace and archive state.
+
+The action requires the authenticated active workspace. It updates local classification only after persistence succeeds and only while the same user/workspace and an expense row remain current; refreshed financial fields are preserved. `expensesForBudget(budgetId)` selects current-workspace expenses and resolves legacy absent/null membership without rewriting records. Manual, imported and AI entry paths remain unchanged. UI controls belong to the separate management/reporting work unit.

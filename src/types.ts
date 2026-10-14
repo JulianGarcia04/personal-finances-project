@@ -70,6 +70,8 @@ export interface Transaction {
   notes?: string | null;
   // Full purchase stays in amount; KPIs distribute it across this many months.
   installments?: number | null;
+  // Expense membership; absent/null preserves the protected monthly default.
+  budgetId?: string | null;
   // ID de la pata gemela en el otro workspace (actividad espejo).
   mirrorOf?: string | null;
   // Distinguishes new bridge settlements from other mirrored transfers and their reversals.
