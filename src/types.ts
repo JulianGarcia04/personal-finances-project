@@ -5,6 +5,8 @@ export interface Workspace {
   members: string[];
   currency: string;
   expenseLimit?: number; // ponytail: simple number limit
+  /** Explicit unit for legacy categoryBudgets; never inferred from currency or converted. */
+  categoryBudgetCurrency?: string;
   createdAt: string | Date;
 }
 
