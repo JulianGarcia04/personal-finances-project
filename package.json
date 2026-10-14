@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test": "node --test src/**/*.test.ts",
-    "test:budgets:security": "pnpm exec firebase emulators:exec --only firestore --project demo-vault-b2 --config firebase.budgets.test.json \"pnpm exec node --test tests/firestore/*.test.ts\"",
+    "test": "node --test src/**/*.test.ts tests/runner/*.test.ts",
+    "test:budgets:security": "pnpm exec firebase emulators:exec --only firestore --project demo-vault-b2 --config firebase.budgets.test.json \"pnpm exec node --test --test-concurrency=1 --test-timeout=15000 tests/firestore/*.test.ts\"",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "emulators": "pnpm dlx kill-port --port 8080,9099,5001,9199,4000 && firebase emulators:start",
