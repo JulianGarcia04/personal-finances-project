@@ -258,7 +258,7 @@
       </div>
 
       <!-- 2.5 Budget & Goals widgets -->
-      <div v-if="budgetSummary || goalProgress.length > 0" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <!-- Budget of the month -->
         <div v-if="budgetSummary" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
           <div class="flex items-center justify-between">
@@ -269,19 +269,32 @@
           </div>
           <div class="flex items-end justify-between">
             <span class="text-[10px] text-text-muted uppercase tracking-widest">Usado</span>
-            <span :class="['font-display font-bold text-lg', budgetSummary.percent > 100 ? 'text-accent-rose' : budgetSummary.percent >= 70 ? 'text-accent-amber' : 'text-accent-emerald']">
+            <span v-if="budgetSummary.percent !== null" :class="['font-display font-bold text-lg', budgetSummary.percent > 100 ? 'text-accent-rose' : budgetSummary.percent >= 70 ? 'text-accent-amber' : 'text-accent-emerald']">
               {{ budgetSummary.percent }}%
             </span>
+            <span v-else class="text-[10px] font-semibold text-accent-amber">Sin comparación</span>
           </div>
           <div class="w-full h-2 rounded-full bg-white/10 overflow-hidden">
             <div
+              v-if="budgetSummary.percent !== null"
               :class="['h-full rounded-full transition-all', budgetSummary.percent > 100 ? 'bg-accent-rose' : budgetSummary.percent >= 70 ? 'bg-accent-amber' : 'bg-accent-emerald']"
               :style="{ width: Math.min(budgetSummary.percent, 100) + '%' }"
             ></div>
           </div>
           <p class="text-[10px] text-text-muted">
-            {{ formatPrimaryCurrency(budgetSummary.totalSpentReal) }} de {{ formatPrimaryCurrency(budgetSummary.totalBudget) }}
+            <span v-if="budgetSummary.totalSpentReal !== null">
+              Gastado en {{ budgetSummary.reportingCurrency }}: {{ formatCurrency(budgetSummary.totalSpentReal, budgetSummary.reportingCurrency) }}
+            </span>
+            <span v-else>Gasto incompleto en {{ budgetSummary.reportingCurrency }}.</span>
+            <span aria-hidden="true"> · </span>
+            <span v-if="budgetSummary.capCurrency !== null && budgetSummary.totalBudget !== null">
+              Límites en {{ budgetSummary.capCurrency }}: {{ formatCurrency(budgetSummary.totalBudget, budgetSummary.capCurrency) }}
+            </span>
+            <span v-else>Moneda de límites por confirmar.</span>
           </p>
+          <div v-if="budgetSummary.comparisonWarnings.length > 0" role="status" aria-live="polite" class="space-y-1 text-[10px] text-accent-amber">
+            <p v-for="warning in budgetSummary.comparisonWarnings" :key="warning">{{ warning }}</p>
+          </div>
           <div class="space-y-2 pt-2 border-t border-white/5">
             <div v-for="row in budgetSummary.rows" :key="row.name" class="space-y-1">
               <div class="flex justify-between gap-2 text-[11px]">
@@ -289,15 +302,44 @@
                   <span class="w-2 h-2 rounded-full shrink-0" :style="{ backgroundColor: row.color }"></span>
                   <span class="truncate">{{ row.name }}</span>
                 </span>
-                <span class="shrink-0" :class="row.percent > 100 ? 'text-accent-rose font-semibold' : row.percent === 100 ? 'text-accent-amber font-semibold' : 'text-text-muted'">{{ row.percent }}%</span>
+                <span v-if="row.percent !== null" class="shrink-0" :class="row.percent > 100 ? 'text-accent-rose font-semibold' : row.percent === 100 ? 'text-accent-amber font-semibold' : 'text-text-muted'">{{ row.percent }}%</span>
+                <span v-else class="shrink-0 text-accent-amber">Pendiente</span>
               </div>
               <div class="w-full h-1 rounded-full bg-white/10 overflow-hidden">
                 <div
+                  v-if="row.percent !== null"
                   :class="['h-full rounded-full', row.percent > 100 ? 'bg-accent-rose' : row.percent >= 70 ? 'bg-accent-amber' : 'bg-accent-emerald']"
                   :style="{ width: Math.min(row.percent, 100) + '%' }"
                 ></div>
               </div>
             </div>
+          </div>
+        </div>
+
+        <!-- All-budget monthly estimate -->
+        <div class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
+          <div class="flex flex-wrap items-start justify-between gap-2 sm:gap-3">
+            <div class="min-w-0 flex-1">
+              <h4 class="font-display font-bold text-base text-text-primary">Asignaciones mensuales estimadas</h4>
+              <p class="text-text-muted text-xs mt-1 max-w-xl">
+                Cuotas del mes de gastos de todos los presupuestos, incluidos los archivados y sin asignar; el principal de eventos no se suma aparte.
+              </p>
+            </div>
+            <span class="shrink-0 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] font-semibold text-text-secondary">
+              Moneda de reporte: {{ allBudgetsEstimatedMonthly.currency }}
+            </span>
+          </div>
+
+          <div class="rounded-xl border border-white/5 bg-slate-950/30 p-3.5 sm:p-4 min-w-0">
+            <span class="block text-[10px] font-semibold uppercase tracking-widest text-text-muted">Estimación del mes calendario</span>
+            <p v-if="allBudgetsEstimatedMonthly.amount !== null" class="font-display font-bold text-xl sm:text-2xl text-text-primary tabular-nums truncate mt-1" :title="formatCurrency(allBudgetsEstimatedMonthly.amount, allBudgetsEstimatedMonthly.currency)">
+              {{ formatCurrency(allBudgetsEstimatedMonthly.amount, allBudgetsEstimatedMonthly.currency) }}
+            </p>
+            <p v-else class="font-semibold text-sm text-accent-amber mt-1">Total incompleto; revisa las tasas manuales.</p>
+          </div>
+
+          <div v-if="allBudgetsEstimateWarnings.length > 0" role="status" aria-live="polite" class="space-y-1 text-xs text-accent-amber">
+            <p v-for="warning in allBudgetsEstimateWarnings" :key="warning">{{ warning }}</p>
           </div>
         </div>
 
@@ -462,6 +504,8 @@ import {
   cardDebtRows
 } from '@/lib/dashboardMetrics'
 import { getNextOccurrence, daysUntil, expenseAmountForCycle, getStatementClosingForDueDate } from '@/lib/creditCycle'
+import { DEFAULT_MONTHLY_BUDGET_ID } from '@/lib/budgets'
+import { reportAllBudgetsEstimatedMonthly, reportBudgetScope } from '@/lib/budgetReporting'
 import { 
   Plus as PlusIcon, 
   Sparkles as SparklesIcon,
@@ -530,6 +574,28 @@ watch(
 
 // Moneda principal: la elegida por el usuario en Settings
 const primaryCurrency = computed(() => settingsStore.currency || 'COP')
+
+const allBudgetsEstimatedMonthly = computed(() => {
+  const now = new Date()
+  return reportAllBudgetsEstimatedMonthly({
+    transactions: transactionsStore.transactions,
+    period: { year: now.getFullYear(), month: now.getMonth() },
+    reportingCurrency: primaryCurrency.value,
+    exchangeRates: goalsStore.exchangeRates
+  })
+})
+
+const allBudgetsEstimateWarnings = computed(() => {
+  const report = allBudgetsEstimatedMonthly.value
+  const warnings: string[] = []
+  if (report.missingRateCurrencies.length > 0) {
+    warnings.push(`Faltan tasas manuales para: ${report.missingRateCurrencies.join(', ')}`)
+  }
+  if (report.invalidRateCurrencies.length > 0) {
+    warnings.push(`Tasas inválidas para: ${report.invalidRateCurrencies.join(', ')}`)
+  }
+  return warnings
+})
 
 // ponytail: conversión con tasas manuales del workspace; sin tasa configurada se suma 1:1
 const convert = (amount: number, currency: string) =>
@@ -747,34 +813,100 @@ const recentTransactions = computed(() => {
   return transactionsStore.transactions.slice(0, 5)
 })
 
-// Resumen de presupuesto del mes (categoryBudgets vs gasto real convertido)
+// Compare protected legacy category caps without changing their stored denomination.
 const budgetSummary = computed(() => {
   const budgets = goalsStore.categoryBudgets
   const ids = Object.keys(budgets)
   if (ids.length === 0) return null
 
-  const spending = transactionsStore.spendingByCategoryThisMonth((amt, cur) => convert(amt, cur))
-  let totalBudget = 0, totalSpent = 0
+  const now = new Date()
+  const capCurrency = goalsStore.categoryBudgetCurrency.status === 'confirmed'
+    ? goalsStore.categoryBudgetCurrency.code
+    : null
+  const report = reportBudgetScope({
+    scope: { id: DEFAULT_MONTHLY_BUDGET_ID, kind: 'monthly', capCurrency },
+    categoryCaps: budgets,
+    transactions: transactionsStore.transactions,
+    period: { year: now.getFullYear(), month: now.getMonth() },
+    reportingCurrency: primaryCurrency.value,
+    exchangeRates: goalsStore.exchangeRates
+  })
+
+  const comparisonWarnings = new Set<string>()
+  if (capCurrency === null) {
+    comparisonWarnings.add('Moneda de límites por confirmar en Objetivos; la comparación está desactivada.')
+  }
+
   const rows = ids.map(catId => {
-    const limit = budgets[catId]
-    const spent = spending[catId] || 0
-    totalBudget += limit
-    totalSpent += Math.min(spent, limit) // para el % global no penalizamos doble el exceso
-    const cat = getCategory(catId)
-    return {
-      name: cat?.name || 'Categoría',
-      color: cat?.color || '#94a3b8',
-      spent,
-      limit,
-      percent: limit > 0 ? Math.round((spent / limit) * 100) : 0
+    const categoryReport = report.categories[catId]
+    const allocation = categoryReport?.monthlyAllocation
+    const cap = categoryReport?.cap
+    if (cap?.state === 'missing-rate' && cap.currency) {
+      comparisonWarnings.add(`Falta tasa manual para comparar límites en ${cap.currency}.`)
+    } else if (cap?.state === 'invalid-rate' && cap.currency) {
+      comparisonWarnings.add(`Tasa manual inválida para comparar límites en ${cap.currency}.`)
     }
-  }).sort((a, b) => b.percent - a.percent)
+    if (allocation) {
+      allocation.missingRateCurrencies.forEach(currency => {
+        comparisonWarnings.add(`Falta tasa manual para reportar gastos en ${currency}.`)
+      })
+      allocation.invalidRateCurrencies.forEach(currency => {
+        comparisonWarnings.add(`Tasa manual inválida para reportar gastos en ${currency}.`)
+      })
+      if (!allocation.complete) {
+        comparisonWarnings.add('El total de gasto está incompleto; revisa las tasas manuales.')
+      }
+    }
+
+    const comparison = categoryReport?.comparison
+    const category = getCategory(catId)
+    return {
+      name: category?.name || 'Categoría',
+      color: category?.color || '#94a3b8',
+      spent: allocation?.amount ?? null,
+      limit: budgets[catId],
+      percent: comparison
+        ? comparison.limitAmount > 0
+          ? Math.round((comparison.spentAmount / comparison.limitAmount) * 100)
+          : 0
+        : null
+    }
+  }).sort((a, b) => (b.percent ?? -1) - (a.percent ?? -1))
+
+  const positiveCategoryIds = ids.filter(catId => budgets[catId] > 0)
+  const totalLimitForReporting = positiveCategoryIds.reduce<number | null>((total, catId) => {
+    const comparison = report.categories[catId]?.comparison
+    if (total === null || !comparison) return null
+    return total + comparison.limitAmount
+  }, capCurrency === null ? null : 0)
+  const cappedSpendForReporting = positiveCategoryIds.reduce<number | null>((total, catId) => {
+    const comparison = report.categories[catId]?.comparison
+    if (total === null || !comparison) return null
+    return total + Math.min(comparison.spentAmount, comparison.limitAmount)
+  }, capCurrency === null ? null : 0)
+  const percent = positiveCategoryIds.length === 0
+    ? capCurrency === null ? null : 0
+    : totalLimitForReporting !== null && totalLimitForReporting > 0 && cappedSpendForReporting !== null
+      ? Math.round((cappedSpendForReporting / totalLimitForReporting) * 100)
+      : null
+
+  const allocations = ids.map(catId => report.categories[catId]?.monthlyAllocation)
+  const totalSpentComplete = allocations.every(allocation => allocation?.complete && allocation.amount !== null)
+  const totalSpentReal = totalSpentComplete
+    ? allocations.reduce((total, allocation) => total + (allocation?.amount ?? 0), 0)
+    : null
+  const totalBudget = capCurrency === null
+    ? null
+    : ids.reduce((total, catId) => total + budgets[catId], 0)
 
   return {
     rows: rows.slice(0, 4),
-    percent: totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0,
+    percent,
     totalBudget,
-    totalSpentReal: ids.reduce((s, id) => s + (spending[id] || 0), 0)
+    totalSpentReal,
+    capCurrency,
+    reportingCurrency: report.reportingCurrency,
+    comparisonWarnings: [...comparisonWarnings]
   }
 })
 

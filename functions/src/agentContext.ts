@@ -13,6 +13,7 @@ import {
   toLeanTransaction
 } from "./agentTools";
 import { buildBudgetStatus, computeNetWorth, previousPeriod, resolvePeriod, summarize, SummaryTransaction } from "./agentQueries";
+import { buildLegacyCategoryBudgetsPatch, parseLegacyCategoryBudgetCurrency } from "./legacyCategoryBudgets";
 import { cosineSimilarity, EMBEDDINGS_COLLECTION, isEmbeddable, queryEmbeddingInput, toVectorArray } from "./embeddings";
 
 // The chat agent's tools as plain definitions built from (db, context), with no
@@ -487,15 +488,23 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
         loadSummaryRows(period.startInstant, period.endExclusive),
         loadNames()
       ]);
+      const categoryBudgetCurrency = parseLegacyCategoryBudgetCurrency(ws);
       const rates = ratesOf(ws);
       const month = summarize(rows, {
+        period, now, timeZone, primaryCurrency, exchangeRates: rates, names,
+        groupBy: 'category', topN: 0
+      });
+      const defaultBudgetRows = rows.filter(row =>
+        row.type !== 'expense' || !row.budgetId || row.budgetId === 'default-monthly'
+      );
+      const defaultBudgetMonth = summarize(defaultBudgetRows, {
         period, now, timeZone, primaryCurrency, exchangeRates: rates, names,
         groupBy: 'category', topN: 0
       });
       const budgets = buildBudgetStatus({
         categoryBudgets: (ws.categoryBudgets ?? {}) as Record<string, number>,
         expenseLimit: ws.expenseLimit,
-        summary: month,
+        summary: defaultBudgetMonth,
         names
       });
       const budgetIncome = Number(ws.budgetIncome) || 0;
@@ -508,6 +517,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
       const goalNames = new Map(goalsSnap.docs.map(docSnap => [docSnap.id, String(docSnap.data().name || 'Meta')]));
       return {
         currency: primaryCurrency,
+        categoryBudgetCurrency,
         exchangeRates: rates,
         budgetIncome,
         budgetSplit: Object.fromEntries(Object.entries(split).map(([key, percent]) => [
@@ -530,16 +540,27 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
 
   define(
     'saveCategoryBudgets',
-    `Guarda el presupuesto mensual recurrente por categoría (límite de gasto mensual) en la moneda principal (${primaryCurrency}). Sin confirmed: true solo valida y devuelve un resumen para pedir confirmación.`,
+    `Guarda únicamente los límites mensuales heredados por categoría del workspace. Si categoryBudgetCurrency está confirmada en el workspace, currency debe coincidir con ella. Sin confirmed: true solo valida y devuelve un resumen para pedir confirmación.`,
     z.object({
+      currency: z.string().optional().describe('Código de moneda de los límites; cuando categoryBudgetCurrency está confirmada en el workspace, debe coincidir con ella.'),
       budgets: z.array(z.object({
         categoryId: z.string().min(1).describe('El ID de la categoría (obtenido de listCategories o getFinancialSummary con groupBy category)'),
         monthlyLimit: z.number().min(0).describe('Límite mensual de gasto para esta categoría (0 para eliminar el presupuesto)'),
       })).describe('Lista de presupuestos por categoría a guardar'),
       confirmed: confirmedParam,
     }),
-    async ({ budgets, confirmed }) => {
+    async ({ currency, budgets, confirmed }) => {
       const wsRef = db.collection('workspaces').doc(workspaceId);
+      const ws = await loadWorkspace();
+      const confirmedCurrency = parseLegacyCategoryBudgetCurrency(ws);
+      if (confirmedCurrency !== null || currency !== undefined) {
+        buildLegacyCategoryBudgetsPatch(
+          (ws.categoryBudgets ?? {}) as Record<string, number>,
+          budgets,
+          confirmedCurrency,
+          currency ?? confirmedCurrency ?? ''
+        );
+      }
       if (budgets.length === 0) return { success: true, savedBudgets: 0, message: "No había presupuestos para guardar." };
 
       // Every category must belong to the active workspace.
@@ -552,6 +573,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
         throw new AgentToolError(`Categorías no encontradas en el workspace activo: ${unknown.join(', ')}.`);
       }
 
+      const effectiveCurrency = confirmedCurrency ?? primaryCurrency;
       // Last entry wins when the model repeats a category (duplicate field paths are rejected).
       const limits = new Map(budgets.map(b => [b.categoryId, Number(b.monthlyLimit)]));
       if (!isConfirmed(confirmed)) {
@@ -561,7 +583,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
           summary: [...limits].map(([categoryId, monthlyLimit]) => ({
             categoryName: categoryNames.get(categoryId),
             monthlyLimit,
-            currency: primaryCurrency
+            currency: effectiveCurrency
           })),
           message: awaitingConfirmation(confirmed, "Muestra esta propuesta y pide confirmación explícita antes de guardar.")
         };
@@ -577,7 +599,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
       });
       const [firstField, firstValue, ...rest] = fieldUpdates;
       await wsRef.update(firstField as FieldPath, firstValue, ...rest);
-      return { success: true, savedBudgets: limits.size, message: "Presupuestos guardados en el workspace activo." };
+      return { success: true, savedBudgets: limits.size, currency: effectiveCurrency, message: "Presupuestos guardados en el workspace activo." };
     }
   );
 

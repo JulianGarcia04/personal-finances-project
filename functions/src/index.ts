@@ -387,9 +387,10 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       - Los montos de getFinancialSummary, getWorkspaceSettings y los totales de listAccounts ya vienen convertidos a ${primaryCurrency}; menciona las notes relevantes (por ejemplo tasas de cambio faltantes).
 
       FLUJO PARA PRESUPUESTOS POR CATEGORÍA:
-      - Cuando el usuario pida crear o ajustar presupuestos, PRIMERO llama a getWorkspaceSettings (presupuestos actuales) y a getFinancialSummary con lastCompleteMonths 3 (o hasta 6), groupBy "category" y type "expense" para conocer el promedio mensual real (monthlyAverageExpenses) de cada categoría, calculado solo con meses completos. El key de cada grupo es el categoryId.
+      - Cuando el usuario pida crear o ajustar presupuestos, PRIMERO llama a getWorkspaceSettings (presupuestos actuales y categoryBudgetCurrency) y a getFinancialSummary con lastCompleteMonths 3 (o hasta 6), groupBy "category" y type "expense" para conocer el promedio mensual real (monthlyAverageExpenses) de cada categoría, calculado solo con meses completos. El key de cada grupo es el categoryId.
+      - Si categoryBudgetCurrency está confirmada y difiere de la moneda de reporte o faltan tasas manuales, no derives importes cruzados: pide al usuario los límites en la categoryBudgetCurrency confirmada.
       - Propón límites mensuales realistas basados en los promedios reales (redondeados, con un pequeño margen o recorte según el objetivo del usuario).
-      - Presenta la propuesta y pide confirmación. SOLO después de que el usuario confirme explícitamente, llama a saveCategoryBudgets con confirmed: true.
+      - Presenta la propuesta y pide confirmación. SOLO después de que el usuario confirme explícitamente, llama a saveCategoryBudgets con confirmed: true (y currency igual a categoryBudgetCurrency cuando esté confirmada).
 
       CONSULTAS:
       - Nunca anuncies consultas futuras ("voy a consultar", "déjame revisar", "espera un momento"): llama a las herramientas necesarias en este mismo turno y responde directamente con los resultados.

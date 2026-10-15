@@ -13,6 +13,7 @@ import {
   SettlementLegRecord
 } from '@/lib/mirror'
 import { expenseAmountForDate, getInstallmentCount } from '@/lib/installments'
+import { createExpenseBudgetAssigner, selectBudgetExpenses } from '@/lib/transactionClassification'
 import { 
   collection, 
   query, 
@@ -310,6 +311,11 @@ export const useTransactionsStore = defineStore('transactions', {
       }
 
       return list
+    },
+    expensesForBudget: (state) => (budgetId: string) => {
+      const workspaceId = useAuthStore().activeWorkspaceId
+      if (!auth.currentUser || !workspaceId) return []
+      return selectBudgetExpenses(state.transactions.filter(t => t.workspaceId === workspaceId), budgetId)
     },
     // Gastos del mes actual agrupados por categoría (para presupuestos).
     // Acepta un convertidor opcional (amount, currency) => amount en moneda principal.
@@ -1310,6 +1316,20 @@ export const useTransactionsStore = defineStore('transactions', {
         console.error('Error al importar lote de transacciones:', error)
         throw error
       }
+    },
+
+    // Classification is separate from financial editing, including mirrored expenses.
+    async assignExpenseBudget(transactionId: string, budgetId: string | null): Promise<void> {
+      const authStore = useAuthStore()
+      const assign = createExpenseBudgetAssigner({
+        getUserId: () => auth.currentUser?.uid ?? null,
+        getWorkspaceId: () => authStore.activeWorkspaceId ?? null,
+        findTransaction: id => this.transactions.find(t => t.id === id),
+        writePatch: async (id, { budgetId }) => {
+          await updateDoc(doc(db, 'transactions', id), { budgetId })
+        },
+      })
+      await assign(transactionId, budgetId)
     },
 
     // 6. Editar / Actualizar Transacción
