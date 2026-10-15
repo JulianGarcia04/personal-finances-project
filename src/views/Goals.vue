@@ -9,13 +9,22 @@
         <p class="text-text-secondary text-sm mt-1">Crea metas de ahorro a largo plazo y define la distribución de tus ingresos mensuales.</p>
       </div>
 
-      <button 
-        @click="showCreateModal = true"
-        class="inline-flex items-center space-x-2 px-5 py-3 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm transition-all shadow-glow-emerald cursor-pointer"
-      >
-        <PlusIcon class="w-4 h-4" />
-        <span>Nuevo Objetivo</span>
-      </button>
+      <div class="flex flex-wrap items-center gap-3">
+        <button
+          @click="openBudgetModal()"
+          class="inline-flex items-center space-x-2 px-4 py-3 rounded-xl bg-slate-900 border border-border text-text-primary font-display font-semibold text-sm hover:bg-slate-800 transition-all cursor-pointer"
+        >
+          <PlusIcon class="w-4 h-4 text-accent-emerald" />
+          <span>Nuevo presupuesto</span>
+        </button>
+        <button
+          @click="showCreateModal = true"
+          class="inline-flex items-center space-x-2 px-5 py-3 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm transition-all shadow-glow-emerald cursor-pointer"
+        >
+          <PlusIcon class="w-4 h-4" />
+          <span>Nuevo Objetivo</span>
+        </button>
+      </div>
     </div>
 
     <!-- Main Grid layout -->
@@ -230,16 +239,116 @@
       </div>
     </div>
 
+    <!-- Additional operating budgets; the protected legacy baseline remains below. -->
+    <section class="space-y-5" aria-labelledby="additional-budgets-heading">
+      <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+        <div>
+          <h3 id="additional-budgets-heading" class="font-display font-bold text-xl text-text-primary flex items-center gap-2">
+            <WalletIcon class="w-5 h-5 text-accent-emerald" />
+            <span>Presupuestos adicionales</span>
+          </h3>
+          <p class="text-xs text-text-muted mt-1 max-w-3xl">
+            Se administran separados de las metas, sus asignaciones, el plan 50/30/20 y los límites base por categoría.
+            Los límites se conservan en su moneda guardada; la moneda de visualización no cambia la moneda guardada.
+          </p>
+        </div>
+        <button
+          @click="openBudgetModal()"
+          class="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-accent-emerald/10 border border-accent-emerald/20 text-accent-emerald text-xs font-semibold hover:bg-accent-emerald/15 transition-colors cursor-pointer shrink-0"
+        >
+          <PlusIcon class="w-4 h-4" />
+          <span>Nuevo presupuesto</span>
+        </button>
+      </div>
+
+      <p v-if="goalsStore.budgetSettingsError" role="alert" class="text-xs text-accent-rose">
+        {{ goalsStore.budgetSettingsError }}
+      </p>
+      <div v-if="goalsStore.budgetSettingsLoading && goalsStore.operatingBudgets.length === 0" class="glass-panel rounded-2xl p-6 text-center text-xs text-text-muted">
+        Cargando presupuestos del espacio…
+      </div>
+      <div v-else-if="activeOperatingBudgets.length === 0" class="glass-panel rounded-2xl p-6 text-center text-xs text-text-muted">
+        Aún no hay presupuestos adicionales. Los gastos sin presupuesto asignado permanecen en el presupuesto base mensual.
+      </div>
+      <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <article v-for="entry in activeOperatingBudgets" :key="entry.budget.id" class="glass-panel rounded-2xl p-5 border border-white/5 space-y-4">
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <h4 class="font-display font-bold text-base text-text-primary truncate">{{ entry.budget.name }}</h4>
+              <p class="text-[10px] text-text-muted mt-1">
+                {{ entry.budget.kind === 'event' ? 'Presupuesto de evento' : 'Presupuesto mensual' }} · moneda de límites: {{ entry.budget.capCurrency }}
+              </p>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <button @click="openBudgetModal(entry)" class="px-3 py-1.5 rounded-lg bg-slate-900 border border-border text-[11px] text-text-primary hover:bg-slate-800 cursor-pointer">
+                Editar presupuesto
+              </button>
+              <button @click="handleArchiveBudget(entry.budget.id)" class="px-3 py-1.5 rounded-lg bg-accent-rose/10 border border-accent-rose/20 text-[11px] text-accent-rose hover:bg-accent-rose/15 cursor-pointer">
+                Archivar presupuesto
+              </button>
+            </div>
+          </div>
+          <p class="text-sm font-semibold text-text-primary">
+            Límite total: {{ entry.budget.totalLimit === undefined ? 'Sin límite total' : formatCurrency(entry.budget.totalLimit, entry.budget.capCurrency) }}
+          </p>
+          <div v-if="budgetCategoryCapEntries(entry).length" class="flex flex-wrap gap-2">
+            <span v-for="cap in budgetCategoryCapEntries(entry)" :key="cap.categoryId" class="px-2.5 py-1 rounded-lg bg-slate-950/60 border border-white/5 text-[10px] text-text-secondary">
+              {{ categoryName(cap.categoryId) }} · {{ formatCurrency(cap.amount, entry.budget.capCurrency) }}
+            </span>
+          </div>
+          <p v-if="entry.budget.kind === 'event' && (entry.budget.startDate || entry.budget.endDate)" class="text-[10px] text-text-muted">
+            Periodo de referencia: {{ entry.budget.startDate ? formatDate(entry.budget.startDate) : 'Sin inicio' }} – {{ entry.budget.endDate ? formatDate(entry.budget.endDate) : 'Sin fin' }}
+          </p>
+        </article>
+      </div>
+
+      <div v-if="archivedOperatingBudgets.length" class="glass-panel rounded-2xl p-4 sm:p-5 border border-white/5 space-y-3">
+        <div>
+          <h4 class="font-display font-semibold text-sm text-text-primary">Presupuestos archivados</h4>
+          <p class="text-[10px] text-text-muted mt-1">Archivar conserva asignaciones, historial y cuotas pendientes; no borra movimientos ni límites guardados.</p>
+        </div>
+        <div v-for="entry in archivedOperatingBudgets" :key="entry.budget.id" class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-t border-white/5 pt-3">
+          <div>
+            <span class="text-xs font-semibold text-text-secondary">{{ entry.budget.name }}</span>
+            <span class="ml-2 text-[10px] text-text-muted">Archivado · límites en {{ entry.budget.capCurrency }}</span>
+          </div>
+          <span class="text-[10px] text-text-muted">{{ entry.budget.totalLimit === undefined ? 'Sin límite total' : formatCurrency(entry.budget.totalLimit, entry.budget.capCurrency) }} · {{ budgetCategoryCapEntries(entry).length }} límites por categoría conservados</span>
+        </div>
+      </div>
+    </section>
+
     <!-- Category Budgets (presupuesto mensual recurrente) -->
     <div class="space-y-6">
       <h3 class="font-display font-bold text-xl text-text-primary flex items-center space-x-2">
         <WalletIcon class="w-5 h-5 text-accent-emerald" />
-        <span>Presupuesto Mensual por Categoría</span>
+        <span>Presupuesto Mensual por Categoría · Presupuesto base mensual protegido</span>
       </h3>
+
+      <div v-if="goalsStore.categoryBudgetCurrency.status === 'unconfirmed'" class="glass-panel rounded-2xl p-4 sm:p-5 border border-accent-amber/20 bg-accent-amber/5 space-y-3">
+        <div>
+          <p class="text-xs font-semibold text-accent-amber">Confirmarla una vez por espacio (recomendado)</p>
+          <p class="text-xs text-text-secondary mt-1">Selecciona la moneda real de estos límites. Se conserva aunque cambie la moneda de visualización; no se convierten importes.</p>
+        </div>
+        <div class="flex flex-col sm:flex-row gap-3 sm:items-end">
+          <label class="space-y-1 flex-1">
+            <span class="block text-[10px] font-semibold text-text-muted">Moneda real de los límites heredados (código de 3 letras)</span>
+            <input v-model="legacyCategoryBudgetCurrencyInput" type="text" maxlength="3" placeholder="COP" autocomplete="off" class="w-full px-3 py-2 rounded-lg bg-slate-950 border border-white/10 text-sm uppercase text-text-primary focus:border-accent-amber/40 focus:outline-hidden" @input="normalizeLegacyCurrencyInput" />
+          </label>
+          <button @click="confirmLegacyCategoryBudgetCurrency" :disabled="confirmingLegacyCurrency || !isValidCurrencyCode(legacyCategoryBudgetCurrencyInput)" class="px-4 py-2.5 rounded-lg bg-accent-amber/10 border border-accent-amber/20 text-accent-amber text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">
+            Confirmar moneda de límites heredados
+          </button>
+        </div>
+        <p v-if="legacyCurrencyError" role="alert" class="text-[10px] text-accent-rose">{{ legacyCurrencyError }}</p>
+      </div>
+      <div v-else class="rounded-xl bg-slate-950/45 border border-white/5 px-4 py-3 text-[11px] text-text-secondary">
+        Moneda confirmada para los límites heredados: <strong class="text-text-primary">{{ goalsStore.categoryBudgetCurrency.code }}</strong>.
+        Sus importes no se convierten ni se renombran al cambiar la moneda de visualización.
+      </div>
 
       <div class="glass-panel rounded-2xl p-4 sm:p-6 border border-white/5 space-y-4">
         <p class="text-xs text-text-muted">
-          Define un límite mensual por categoría. Las barras muestran el gasto real del mes en curso.
+          Este presupuesto base conserva los límites heredados en <code>categoryBudgets</code>. Los gastos sin presupuesto asignado permanecen aquí.
+          Cuando la moneda de los límites está confirmada, el gasto se compara en {{ userCurrency }} usando las tasas manuales actuales; si falta una tasa, no se muestra una comparación incompleta.
           Tip: también puedes pedirle al <span class="text-accent-emerald font-semibold">Asesor IA</span> que analice tus gastos y te proponga presupuestos.
         </p>
 
@@ -265,13 +374,16 @@
 
           <!-- Limit input -->
           <div class="relative sm:w-40 shrink-0">
-            <span class="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted text-xs font-semibold">$</span>
+            <span class="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted text-[10px] font-semibold">
+              {{ goalsStore.categoryBudgetCurrency.status === 'confirmed' ? goalsStore.categoryBudgetCurrency.code : '???' }}
+            </span>
             <input
               :value="categoryBudgetInputs[cat.id] ?? ''"
               type="number"
               min="0"
               placeholder="Sin límite"
-              class="w-full pl-7 pr-3 py-2 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary focus:border-accent-emerald/40 focus:outline-hidden transition-all"
+              :disabled="goalsStore.categoryBudgetCurrency.status !== 'confirmed'"
+              class="w-full pl-10 pr-3 py-2 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary focus:border-accent-emerald/40 focus:outline-hidden transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               @change="(e) => saveCategoryBudget(cat.id, (e.target as HTMLInputElement).value)"
             />
           </div>
@@ -280,11 +392,15 @@
           <div class="flex-1 space-y-1">
             <div class="flex justify-between text-[11px] font-semibold">
               <span class="text-text-secondary">
-                Gastado: {{ formatCurrency(spendingByCategory[cat.id] || 0, userCurrency) }}
+                <template v-if="baselineCategoryReport(cat.id)?.monthlyAllocation.complete !== false">
+                  Gastado en {{ userCurrency }}: {{ formatCurrency(baselineCategoryAmount(cat.id), userCurrency) }}
+                </template>
+                <template v-else>Gasto en {{ userCurrency }}: falta una tasa manual</template>
               </span>
-              <span v-if="categoryBudgetInputs[cat.id]" :class="budgetPercent(cat.id) > 100 ? 'text-accent-rose' : budgetPercent(cat.id) >= 70 ? 'text-accent-amber' : 'text-accent-emerald'">
+              <span v-if="categoryBudgetInputs[cat.id] && baselineCategoryReport(cat.id)?.comparison" :class="budgetPercent(cat.id) > 100 ? 'text-accent-rose' : budgetPercent(cat.id) >= 70 ? 'text-accent-amber' : 'text-accent-emerald'">
                 {{ budgetPercent(cat.id) }}%{{ budgetStatusLabel(cat.id) }}
               </span>
+              <span v-else-if="categoryBudgetInputs[cat.id]" class="text-accent-amber">Comparación pendiente de moneda o tasa</span>
             </div>
             <div class="w-full h-2 rounded-full bg-slate-950/60 overflow-hidden border border-white/5">
               <div
@@ -326,6 +442,80 @@
             </div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- Modal: Create or edit an additional operating budget -->
+    <div v-if="showBudgetModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
+      <div class="glass-panel w-full max-w-xl rounded-2xl border border-white/10 p-4 sm:p-6 space-y-5 max-h-[90vh] overflow-y-auto">
+        <div class="flex justify-between items-center gap-3">
+          <div>
+            <h3 class="font-display font-bold text-xl text-text-primary">{{ editingOperatingBudget ? 'Editar presupuesto' : 'Nuevo presupuesto' }}</h3>
+            <p class="text-[10px] text-text-muted mt-1">Los límites son nominales en la moneda indicada; no se convierten al cambiar la moneda de visualización.</p>
+          </div>
+          <button type="button" @click="showBudgetModal = false" class="text-text-muted hover:text-text-primary cursor-pointer" aria-label="Cerrar presupuesto">
+            <XIcon class="w-5 h-5" />
+          </button>
+        </div>
+
+        <form class="space-y-4" @submit.prevent="handleSaveOperatingBudget">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label class="space-y-1.5">
+              <span class="block text-xs font-semibold text-text-secondary">Nombre del presupuesto</span>
+              <input v-model.trim="budgetNameInput" type="text" required maxlength="100" class="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary focus:border-accent-emerald/40 focus:outline-hidden" placeholder="Ej. Viaje de verano" />
+            </label>
+            <label class="space-y-1.5">
+              <span class="block text-xs font-semibold text-text-secondary">Tipo</span>
+              <select v-model="budgetKindInput" :disabled="!!editingOperatingBudget" class="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary disabled:opacity-60">
+                <option value="monthly">Mensual</option>
+                <option value="event">Evento o proyecto</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label class="space-y-1.5">
+              <span class="block text-xs font-semibold text-text-secondary">Moneda del límite (código de 3 letras)</span>
+              <input v-model="budgetCapCurrencyInput" type="text" maxlength="3" required :disabled="!!editingOperatingBudget" class="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-white/5 text-sm uppercase text-text-primary disabled:opacity-60" placeholder="COP" @input="normalizeBudgetCurrencyInput" />
+              <span v-if="editingOperatingBudget" class="block text-[10px] text-text-muted">La moneda guardada {{ editingOperatingBudget.budget.capCurrency }} es fija; no se relabelan límites existentes.</span>
+            </label>
+            <label class="space-y-1.5">
+              <span class="block text-xs font-semibold text-text-secondary">Límite total (opcional)</span>
+              <input v-model="budgetTotalLimitInput" type="number" min="0" step="any" class="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary" placeholder="Sin límite total" />
+            </label>
+          </div>
+
+          <div v-if="budgetKindInput === 'event'" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label class="space-y-1.5">
+              <span class="block text-xs font-semibold text-text-secondary">Inicio de referencia (opcional)</span>
+              <input v-model="budgetStartDateInput" type="date" class="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary" />
+            </label>
+            <label class="space-y-1.5">
+              <span class="block text-xs font-semibold text-text-secondary">Fin de referencia (opcional)</span>
+              <input v-model="budgetEndDateInput" type="date" class="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-white/5 text-sm text-text-primary" />
+            </label>
+          </div>
+
+          <div class="space-y-2 rounded-xl bg-slate-950/40 border border-white/5 p-3">
+            <div>
+              <h4 class="text-xs font-semibold text-text-primary">Límites por categoría · {{ budgetCapCurrencyInput || 'moneda seleccionada' }}</h4>
+              <p class="text-[10px] text-text-muted mt-1">En blanco elimina sólo ese límite. El presupuesto base y sus categoryBudgets no cambian.</p>
+            </div>
+            <div v-if="budgetCategoryCapIds.length === 0" class="text-[10px] text-text-muted">No hay categorías de gasto disponibles.</div>
+            <label v-for="categoryId in budgetCategoryCapIds" :key="categoryId" class="flex items-center justify-between gap-3 border-t border-white/5 pt-2">
+              <span class="text-xs text-text-secondary truncate">{{ categoryName(categoryId) }}</span>
+              <input :value="budgetCategoryCapInputs[categoryId] ?? ''" type="number" min="0" step="any" class="w-36 px-3 py-2 rounded-lg bg-slate-950 border border-white/5 text-xs text-text-primary" placeholder="Sin límite" @change="(event) => updateBudgetCategoryCapInput(categoryId, (event.target as HTMLInputElement).value)" />
+            </label>
+          </div>
+
+          <p v-if="budgetManagementError" role="alert" class="text-xs text-accent-rose">{{ budgetManagementError }}</p>
+          <div class="flex justify-end gap-3 pt-3 border-t border-white/5">
+            <button type="button" @click="showBudgetModal = false" class="px-4 py-2.5 rounded-xl bg-slate-950 border border-white/5 text-xs font-semibold text-text-secondary hover:text-text-primary cursor-pointer">Cancelar</button>
+            <button type="submit" :disabled="savingOperatingBudget" class="px-4 py-2.5 rounded-xl bg-accent-emerald text-background font-display font-bold text-xs hover:bg-accent-emerald-hover disabled:opacity-50 cursor-pointer">
+              {{ savingOperatingBudget ? 'Guardando…' : editingOperatingBudget ? 'Guardar cambios' : 'Crear presupuesto' }}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
 
@@ -508,7 +698,10 @@ import { useGoalsStore } from '@/stores/goalsStore'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useSettingsStore } from '@/stores/settingsStore'
-import { Goal } from '@/types'
+import type { Goal, OperatingBudgetDraft, OperatingBudgetPatch } from '@/types'
+import type { BudgetWorkspaceBudgetSnapshot } from '@/lib/budgetWorkspaceAdapter'
+import { DEFAULT_MONTHLY_BUDGET_ID } from '@/lib/budgets'
+import { reportBudgetScope } from '@/lib/budgetReporting'
 import { expenseAmountForDate } from '@/lib/installments'
 import {
   Target as TargetIcon,
@@ -533,7 +726,21 @@ const settingsStore = useSettingsStore()
 // State
 const showCreateModal = ref(false)
 const showContributeModal = ref(false)
+const showBudgetModal = ref(false)
 const selectedGoal = ref<Goal | null>(null)
+const editingOperatingBudget = ref<BudgetWorkspaceBudgetSnapshot | null>(null)
+const budgetNameInput = ref('')
+const budgetKindInput = ref<'monthly' | 'event'>('monthly')
+const budgetCapCurrencyInput = ref('')
+const budgetTotalLimitInput = ref<string | number>('')
+const budgetStartDateInput = ref('')
+const budgetEndDateInput = ref('')
+const budgetCategoryCapInputs = reactive<Record<string, number | undefined>>({})
+const budgetManagementError = ref('')
+const savingOperatingBudget = ref(false)
+const legacyCategoryBudgetCurrencyInput = ref('')
+const confirmingLegacyCurrency = ref(false)
+const legacyCurrencyError = ref('')
 
 // Create Goal inputs
 const newGoalName = ref('')
@@ -567,11 +774,33 @@ const expenseCategories = computed(() =>
   transactionsStore.categories.filter(c => c.type === 'expense' || c.type === 'both')
 )
 
-const spendingByCategory = computed(() =>
-  transactionsStore.spendingByCategoryThisMonth(
-    (amount, currency) => goalsStore.convertToPrimary(amount, currency, userCurrency.value)
-  )
+const activeOperatingBudgets = computed(() =>
+  goalsStore.operatingBudgets.filter(entry => !entry.budget.archived)
 )
+const archivedOperatingBudgets = computed(() =>
+  goalsStore.operatingBudgets.filter(entry => entry.budget.archived)
+)
+const budgetCategoryCapIds = computed(() => [...new Set([
+  ...expenseCategories.value.map(category => category.id),
+  ...Object.keys(budgetCategoryCapInputs)
+])])
+const baselineBudgetReport = computed(() => {
+  const now = new Date()
+  return reportBudgetScope({
+    scope: {
+      id: DEFAULT_MONTHLY_BUDGET_ID,
+      kind: 'monthly',
+      capCurrency: goalsStore.categoryBudgetCurrency.status === 'confirmed'
+        ? goalsStore.categoryBudgetCurrency.code
+        : null
+    },
+    categoryCaps: goalsStore.categoryBudgets,
+    transactions: transactionsStore.transactions,
+    period: { year: now.getFullYear(), month: now.getMonth() },
+    reportingCurrency: userCurrency.value,
+    exchangeRates: goalsStore.exchangeRates
+  })
+})
 
 // Gasto/ingreso/ahorro real del mes (monedas convertidas a la principal)
 const realMonthTotals = computed(() => {
@@ -634,6 +863,164 @@ const formatCurrency = (val: number, currency: string) => {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0
   }).format(val)
+}
+
+const baselineCategoryReport = (categoryId: string) =>
+  Object.hasOwn(baselineBudgetReport.value.categories, categoryId)
+    ? baselineBudgetReport.value.categories[categoryId]
+    : undefined
+const baselineCategoryAmount = (categoryId: string): number =>
+  baselineCategoryReport(categoryId)?.monthlyAllocation.amount ?? 0
+const categoryName = (categoryId: string) =>
+  expenseCategories.value.find(category => category.id === categoryId)?.name ?? categoryId
+const budgetCategoryCapEntries = (entry: BudgetWorkspaceBudgetSnapshot): Array<{ categoryId: string; amount: number }> =>
+  Object.entries(entry.categoryCaps)
+    .map(([categoryId, amount]) => ({ categoryId, amount }))
+    .sort((left, right) => left.categoryId.localeCompare(right.categoryId))
+const isValidCurrencyCode = (value: string): boolean => /^[A-Z]{3}$/.test(value.trim())
+
+const normalizeLegacyCurrencyInput = (event: Event) => {
+  const input = event.target as HTMLInputElement
+  legacyCategoryBudgetCurrencyInput.value = input.value.replace(/[^a-z]/gi, '').toUpperCase().slice(0, 3)
+}
+
+const normalizeBudgetCurrencyInput = (event: Event) => {
+  const input = event.target as HTMLInputElement
+  budgetCapCurrencyInput.value = input.value.replace(/[^a-z]/gi, '').toUpperCase().slice(0, 3)
+}
+
+const dateInputValue = (value?: Date): string => value ? new Date(value).toISOString().slice(0, 10) : ''
+
+const openBudgetModal = (entry?: BudgetWorkspaceBudgetSnapshot) => {
+  editingOperatingBudget.value = entry ?? null
+  budgetNameInput.value = entry?.budget.name ?? ''
+  budgetKindInput.value = entry?.budget.kind ?? 'monthly'
+  budgetCapCurrencyInput.value = entry?.budget.capCurrency ?? ''
+  budgetTotalLimitInput.value = entry?.budget.totalLimit === undefined ? '' : String(entry.budget.totalLimit)
+  budgetStartDateInput.value = dateInputValue(entry?.budget.startDate)
+  budgetEndDateInput.value = dateInputValue(entry?.budget.endDate)
+  budgetManagementError.value = ''
+  for (const key of Object.keys(budgetCategoryCapInputs)) delete budgetCategoryCapInputs[key]
+  if (entry) Object.assign(budgetCategoryCapInputs, entry.categoryCaps)
+  showBudgetModal.value = true
+}
+
+const updateBudgetCategoryCapInput = (categoryId: string, rawValue: string) => {
+  budgetManagementError.value = ''
+  if (rawValue.trim() === '') {
+    delete budgetCategoryCapInputs[categoryId]
+    return
+  }
+  const amount = Number(rawValue)
+  if (!Number.isFinite(amount) || amount < 0) {
+    budgetManagementError.value = 'Cada límite por categoría debe ser un número finito no negativo.'
+    return
+  }
+  budgetCategoryCapInputs[categoryId] = amount
+}
+
+const categoryCapDraft = (): Record<string, number> => {
+  const result: Record<string, number> = {}
+  for (const [categoryId, amount] of Object.entries(budgetCategoryCapInputs)) {
+    if (amount !== undefined) Object.defineProperty(result, categoryId, {
+      value: amount, enumerable: true, configurable: true, writable: true
+    })
+  }
+  return result
+}
+
+const handleSaveOperatingBudget = async () => {
+  budgetManagementError.value = ''
+  const name = budgetNameInput.value.trim()
+  const capCurrency = budgetCapCurrencyInput.value.trim().toUpperCase()
+  const rawTotalLimit = String(budgetTotalLimitInput.value ?? '').trim()
+  const totalLimit = rawTotalLimit === '' ? undefined : Number(rawTotalLimit)
+  if (!name) {
+    budgetManagementError.value = 'Escribe un nombre para el presupuesto.'
+    return
+  }
+  if (!isValidCurrencyCode(capCurrency)) {
+    budgetManagementError.value = 'Indica un código de moneda válido de tres letras.'
+    return
+  }
+  if (totalLimit !== undefined && (!Number.isFinite(totalLimit) || totalLimit < 0)) {
+    budgetManagementError.value = 'El límite total debe ser un número finito no negativo.'
+    return
+  }
+  if (budgetStartDateInput.value && budgetEndDateInput.value && budgetEndDateInput.value < budgetStartDateInput.value) {
+    budgetManagementError.value = 'La fecha final no puede preceder a la fecha inicial.'
+    return
+  }
+
+  const toDate = (value: string): Date | undefined => value ? new Date(`${value}T00:00:00`) : undefined
+  const caps = categoryCapDraft()
+  savingOperatingBudget.value = true
+  try {
+    let budgetId: string
+    if (editingOperatingBudget.value) {
+      const existing = editingOperatingBudget.value.budget
+      const patch: OperatingBudgetPatch = {
+        name,
+        totalLimit: totalLimit ?? null
+      }
+      if (existing.kind === 'event') {
+        patch.startDate = toDate(budgetStartDateInput.value) ?? null
+        patch.endDate = toDate(budgetEndDateInput.value) ?? null
+      }
+      const updated = await goalsStore.updateOperatingBudget(existing.id, patch)
+      budgetId = updated.id
+    } else {
+      const draft: OperatingBudgetDraft = {
+        kind: budgetKindInput.value,
+        name,
+        capCurrency,
+        ...(totalLimit === undefined ? {} : { totalLimit })
+      }
+      if (draft.kind === 'event') {
+        const startDate = toDate(budgetStartDateInput.value)
+        const endDate = toDate(budgetEndDateInput.value)
+        if (startDate) draft.startDate = startDate
+        if (endDate) draft.endDate = endDate
+      }
+      const created = await goalsStore.createOperatingBudget(draft)
+      budgetId = created.id
+      editingOperatingBudget.value = goalsStore.operatingBudgets.find(entry => entry.budget.id === created.id)
+        ?? { budget: created, categoryCaps: {} }
+    }
+    await goalsStore.saveOperatingBudgetCategoryCaps(budgetId, caps)
+    showBudgetModal.value = false
+  } catch (error) {
+    budgetManagementError.value = error instanceof Error ? error.message : 'No se pudo guardar el presupuesto.'
+  } finally {
+    savingOperatingBudget.value = false
+  }
+}
+
+const handleArchiveBudget = async (budgetId: string) => {
+  if (!confirm('¿Archivar este presupuesto? Se conservarán sus asignaciones, historial y cuotas pendientes.')) return
+  try {
+    await goalsStore.archiveOperatingBudget(budgetId)
+  } catch (error) {
+    goalsStore.budgetSettingsError = error instanceof Error ? error.message : 'No se pudo archivar el presupuesto.'
+  }
+}
+
+const confirmLegacyCategoryBudgetCurrency = async () => {
+  legacyCurrencyError.value = ''
+  const code = legacyCategoryBudgetCurrencyInput.value.trim().toUpperCase()
+  if (!isValidCurrencyCode(code)) {
+    legacyCurrencyError.value = 'Indica el código real de moneda de tres letras.'
+    return
+  }
+  confirmingLegacyCurrency.value = true
+  try {
+    await goalsStore.confirmLegacyCategoryBudgetCurrency(code)
+    legacyCategoryBudgetCurrencyInput.value = ''
+  } catch (error) {
+    legacyCurrencyError.value = error instanceof Error ? error.message : 'No se pudo confirmar la moneda.'
+  } finally {
+    confirmingLegacyCurrency.value = false
+  }
 }
 
 const getProgressPercent = (goal: Goal) => {
@@ -849,6 +1236,10 @@ const saveBudget = async () => {
 
 // Presupuesto por categoría
 const saveCategoryBudget = async (categoryId: string, rawValue: string) => {
+  if (goalsStore.categoryBudgetCurrency.status !== 'confirmed') {
+    legacyCurrencyError.value = 'Confirma primero la moneda real de los límites heredados.'
+    return
+  }
   const value = rawValue === '' ? null : Math.max(0, Number(rawValue))
   categoryBudgetInputs[categoryId] = value
 
@@ -872,9 +1263,9 @@ const saveCategoryBudget = async (categoryId: string, rawValue: string) => {
 }
 
 const budgetPercent = (categoryId: string) => {
-  const limit = categoryBudgetInputs[categoryId]
-  if (!limit || limit <= 0) return 0
-  return Math.round(((spendingByCategory.value[categoryId] || 0) / limit) * 100)
+  const comparison = baselineCategoryReport(categoryId)?.comparison
+  if (!comparison || comparison.limitAmount <= 0) return 0
+  return Math.round((comparison.spentAmount / comparison.limitAmount) * 100)
 }
 
 const budgetStatusLabel = (categoryId: string) => {
