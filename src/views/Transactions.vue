@@ -108,6 +108,21 @@
       </div>
     </div>
 
+    <div
+      v-if="budgetSettingsError"
+      role="alert"
+      class="mb-4 rounded-xl border border-accent-rose/20 bg-accent-rose/[0.04] px-4 py-3 text-xs text-accent-rose"
+    >
+      No se pudieron cargar los presupuestos: {{ budgetSettingsError }}
+    </div>
+    <div
+      v-else-if="!budgetSettingsReady"
+      role="status"
+      class="mb-4 rounded-xl border border-border/60 bg-slate-900/30 px-4 py-3 text-xs text-text-muted"
+    >
+      Cargando presupuestos…
+    </div>
+
     <!-- Transactions List Table (desktop) -->
     <div class="glass-panel rounded-3xl overflow-hidden shadow-xl border border-white/5 relative hidden md:block">
       <div class="overflow-x-auto pb-16">
@@ -173,6 +188,27 @@
                   <span>{{ getCategory(tx.categoryId)?.name }}</span>
                 </span>
                 <span v-else class="text-text-muted text-xs">-</span>
+                <div v-if="tx.type === 'expense'" class="mt-2 max-w-48">
+                  <label class="sr-only" :for="`budget-assignment-row-${tx.id}`">Presupuesto asignado</label>
+                  <select
+                    v-if="budgetSettingsReady"
+                    data-testid="budget-assignment-row"
+                    :id="`budget-assignment-row-${tx.id}`"
+                    :value="resolveBudgetId(tx.budgetId)"
+                    :disabled="isBudgetAssignmentPending(tx.id)"
+                    @change="handleBudgetAssignmentChange(tx, $event)"
+                    class="w-full px-2 py-1.5 rounded-lg bg-slate-900/50 border border-border text-[10px] text-text-primary focus:outline-none focus:border-accent-emerald disabled:opacity-50"
+                  >
+                    <option
+                      v-for="option in budgetOptionsForExpense(tx.budgetId)"
+                      :key="option.id"
+                      :value="option.id"
+                      :disabled="option.archived"
+                    >
+                      {{ option.label }}{{ option.archived ? ' · Archivado' : '' }}
+                    </option>
+                  </select>
+                </div>
               </td>
               <!-- Date -->
               <td class="py-4 px-4 text-text-secondary">
@@ -288,50 +324,73 @@
             {{ getDisplayAmount(tx) >= 0 ? '+' : '' }}{{ formatCurrency(getDisplayAmount(tx), tx.currency || getAccountCurrency(tx.accountId)) }}
           </p>
         </div>
-        <div class="flex items-center justify-between pl-8">
-          <span
-            v-if="getCategory(tx.categoryId)"
-            class="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-semibold"
-            :style="{ backgroundColor: (getCategory(tx.categoryId)?.color || '#94a3b8') + '15', color: getCategory(tx.categoryId)?.color || '#94a3b8' }"
-          >
-            <component :is="getCategoryIcon(getCategory(tx.categoryId)?.icon || 'HelpCircle')" class="w-3.5 h-3.5" />
-            <span>{{ getCategory(tx.categoryId)?.name }}</span>
-          </span>
-          <span v-else class="text-text-muted text-xs">-</span>
-          <div class="flex items-center space-x-1">
-            <a
-              v-if="tx.receiptUrl"
-              :href="tx.receiptUrl"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="p-2 rounded-lg text-text-muted hover:text-accent-emerald hover:bg-white/5 transition-all inline-block"
-              title="Ver Comprobante"
+        <div class="space-y-2 pl-8">
+          <div class="flex items-center justify-between gap-2">
+            <span
+              v-if="getCategory(tx.categoryId)"
+              class="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-semibold"
+              :style="{ backgroundColor: (getCategory(tx.categoryId)?.color || '#94a3b8') + '15', color: getCategory(tx.categoryId)?.color || '#94a3b8' }"
             >
-              <PaperclipIcon class="w-4 h-4" />
-            </a>
-            <button
-              @click="openEditModal(tx)"
-              class="p-2 rounded-lg text-text-muted hover:text-accent-emerald hover:bg-white/5 transition-all"
-              title="Editar Transacción"
+              <component :is="getCategoryIcon(getCategory(tx.categoryId)?.icon || 'HelpCircle')" class="w-3.5 h-3.5" />
+              <span>{{ getCategory(tx.categoryId)?.name }}</span>
+            </span>
+            <span v-else class="text-text-muted text-xs">-</span>
+            <div class="flex items-center space-x-1 shrink-0">
+              <a
+                v-if="tx.receiptUrl"
+                :href="tx.receiptUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="p-2 rounded-lg text-text-muted hover:text-accent-emerald hover:bg-white/5 transition-all inline-block"
+                title="Ver Comprobante"
+              >
+                <PaperclipIcon class="w-4 h-4" />
+              </a>
+              <button
+                @click="openEditModal(tx)"
+                class="p-2 rounded-lg text-text-muted hover:text-accent-emerald hover:bg-white/5 transition-all"
+                title="Editar Transacción"
+              >
+                <PencilIcon class="w-4 h-4" />
+              </button>
+              <button
+                v-if="transactionsStore.reversibleSettlementIds.includes(tx.id)"
+                @click="openSettlementReversal(tx)"
+                class="p-2 rounded-lg text-accent-amber hover:bg-accent-amber/10 transition-all"
+                title="Revertir liquidación · solo corrige la contabilidad de Vault"
+                aria-label="Revertir liquidación en Vault"
+              >
+                <RotateCcwIcon class="w-4 h-4" />
+              </button>
+              <button
+                @click="handleDelete(tx.id)"
+                class="p-2 rounded-lg text-text-muted hover:text-accent-rose hover:bg-white/5 transition-all"
+                title="Eliminar Transacción"
+              >
+                <TrashIcon class="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+          <div v-if="tx.type === 'expense'" class="max-w-full">
+            <label class="sr-only" :for="`budget-assignment-card-${tx.id}`">Presupuesto asignado</label>
+            <select
+              v-if="budgetSettingsReady"
+              data-testid="budget-assignment-card"
+              :id="`budget-assignment-card-${tx.id}`"
+              :value="resolveBudgetId(tx.budgetId)"
+              :disabled="isBudgetAssignmentPending(tx.id)"
+              @change="handleBudgetAssignmentChange(tx, $event)"
+              class="w-full px-2 py-1.5 rounded-lg bg-slate-900/50 border border-border text-[10px] text-text-primary focus:outline-none focus:border-accent-emerald disabled:opacity-50"
             >
-              <PencilIcon class="w-4 h-4" />
-            </button>
-            <button
-              v-if="transactionsStore.reversibleSettlementIds.includes(tx.id)"
-              @click="openSettlementReversal(tx)"
-              class="p-2 rounded-lg text-accent-amber hover:bg-accent-amber/10 transition-all"
-              title="Revertir liquidación · solo corrige la contabilidad de Vault"
-              aria-label="Revertir liquidación en Vault"
-            >
-              <RotateCcwIcon class="w-4 h-4" />
-            </button>
-            <button
-              @click="handleDelete(tx.id)"
-              class="p-2 rounded-lg text-text-muted hover:text-accent-rose hover:bg-white/5 transition-all"
-              title="Eliminar Transacción"
-            >
-              <TrashIcon class="w-4 h-4" />
-            </button>
+              <option
+                v-for="option in budgetOptionsForExpense(tx.budgetId)"
+                :key="option.id"
+                :value="option.id"
+                :disabled="option.archived"
+              >
+                {{ option.label }}{{ option.archived ? ' · Archivado' : '' }}
+              </option>
+            </select>
           </div>
         </div>
       </div>
@@ -764,6 +823,38 @@
             </div>
           </div>
 
+          <div v-if="editingOriginalType === 'expense' && editTx.type === 'expense'" class="rounded-xl border border-border/60 bg-slate-900/30 p-3 space-y-2">
+            <label class="block text-[10px] font-semibold text-text-secondary uppercase tracking-wider">
+              Presupuesto asignado
+              <select
+                v-if="budgetSettingsReady"
+                data-testid="budget-assignment-edit"
+                v-model="editBudgetId"
+                :disabled="isBudgetAssignmentPending(editingTxId)"
+                class="mt-1 w-full px-3 py-2 rounded-xl bg-slate-900/50 border border-border text-sm text-text-primary focus:outline-none focus:border-accent-emerald disabled:opacity-50"
+              >
+                <option
+                  v-for="option in budgetOptionsForExpense(editingOriginalBudgetId)"
+                  :key="option.id"
+                  :value="option.id"
+                  :disabled="option.archived"
+                >
+                  {{ option.label }}{{ option.archived ? ' · Archivado' : '' }}
+                </option>
+              </select>
+            </label>
+            <button
+              type="button"
+              data-testid="budget-assignment-apply"
+              :disabled="!budgetSettingsReady || editBudgetId === editingOriginalBudgetId || isBudgetAssignmentPending(editingTxId)"
+              @click="applyEditBudgetAssignment"
+              class="w-full px-3 py-2 rounded-xl border border-accent-emerald/25 text-xs font-semibold text-accent-emerald hover:bg-accent-emerald/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Actualizar presupuesto
+            </button>
+            <p class="text-[10px] text-text-muted">Esta acción solo cambia el presupuesto asignado; no modifica el monto ni otros datos.</p>
+          </div>
+
           <!-- Description and amount -->
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div class="space-y-1">
@@ -903,6 +994,8 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
+import { useGoalsStore } from '@/stores/goalsStore'
+import { DEFAULT_MONTHLY_BUDGET_ID, resolveBudgetId } from '@/lib/budgets'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { Transaction, TransactionType } from '@/types'
 import { TransactionSchema } from '@/schemas'
@@ -922,7 +1015,44 @@ import {
 
 const accountsStore = useAccountsStore()
 const transactionsStore = useTransactionsStore()
+const goalsStore = useGoalsStore()
 const workspacesStore = useWorkspacesStore()
+const budgetSettingsReady = ref(false)
+const budgetSettingsError = ref('')
+const assigningBudgetIds = ref(new Set<string>())
+const editBudgetId = ref(DEFAULT_MONTHLY_BUDGET_ID)
+const editingOriginalBudgetId = ref(DEFAULT_MONTHLY_BUDGET_ID)
+const editingOriginalType = ref<TransactionType>('expense')
+
+const syncBudgetSettingsAvailability = () => {
+  if (goalsStore.budgetSettingsLoading) {
+    budgetSettingsReady.value = false
+    budgetSettingsError.value = ''
+    return
+  }
+  if (goalsStore.budgetSettingsError) {
+    budgetSettingsReady.value = false
+    budgetSettingsError.value = goalsStore.budgetSettingsError
+    return
+  }
+  if (!goalsStore.budgetSettingsContextKey) {
+    budgetSettingsReady.value = false
+    budgetSettingsError.value = 'No hay un espacio de trabajo activo para cargar los presupuestos.'
+    return
+  }
+
+  budgetSettingsReady.value = true
+  budgetSettingsError.value = ''
+}
+
+watch(
+  () => [
+    goalsStore.budgetSettingsLoading,
+    goalsStore.budgetSettingsError,
+    goalsStore.budgetSettingsContextKey
+  ],
+  syncBudgetSettingsAvailability
+)
 
 const showAddModal = ref(false)
 const loading = ref(false)
@@ -1058,6 +1188,71 @@ const isEditCreditExpense = computed(() =>
   editTx.value.type === 'expense' && accountsStore.getAccountById(editTx.value.accountId)?.type === 'credit'
 )
 
+const budgetOptionsForExpense = (currentBudgetId?: string | null) => {
+  const resolvedBudgetId = resolveBudgetId(currentBudgetId)
+  const additionalOptions = goalsStore.operatingBudgets
+    .filter(({ budget }) => budget.id !== DEFAULT_MONTHLY_BUDGET_ID
+      && (!budget.archived || budget.id === resolvedBudgetId))
+    .map(({ budget }) => ({
+      id: budget.id,
+      label: budget.name,
+      archived: Boolean(budget.archived)
+    }))
+
+  return [
+    { id: DEFAULT_MONTHLY_BUDGET_ID, label: 'Presupuesto mensual predeterminado', archived: false },
+    ...additionalOptions
+  ]
+}
+
+const isBudgetAssignmentPending = (transactionId: string) =>
+  assigningBudgetIds.value.has(transactionId)
+
+const assignBudgetToExpense = async (transaction: any, budgetId: string): Promise<boolean> => {
+  if (!budgetSettingsReady.value || transaction.type !== 'expense') return false
+  if (resolveBudgetId(transaction.budgetId) === budgetId) return false
+  if (assigningBudgetIds.value.has(transaction.id)) return false
+
+  assigningBudgetIds.value.add(transaction.id)
+  try {
+    await transactionsStore.assignExpenseBudget(transaction.id, budgetId)
+    return true
+  } catch (error: unknown) {
+    console.error('Error actualizando presupuesto del gasto:', error)
+    alert(error instanceof Error ? error.message : 'No se pudo actualizar el presupuesto del gasto')
+    return false
+  } finally {
+    assigningBudgetIds.value.delete(transaction.id)
+  }
+}
+
+const handleBudgetAssignmentChange = async (transaction: any, event: Event) => {
+  const select = event.target as HTMLSelectElement | null
+  if (!select) return
+
+  const previousBudgetId = resolveBudgetId(transaction.budgetId)
+  const saved = await assignBudgetToExpense(transaction, select.value)
+  if (!saved) select.value = previousBudgetId
+}
+
+const applyEditBudgetAssignment = async () => {
+  if (!budgetSettingsReady.value) return
+
+  const transaction = transactionsStore.transactions.find(tx => tx.id === editingTxId.value)
+  if (!transaction || transaction.type !== 'expense') return
+
+  const selectedOption = budgetOptionsForExpense(editingOriginalBudgetId.value)
+    .find(option => option.id === editBudgetId.value)
+  if (!selectedOption || selectedOption.archived) {
+    editBudgetId.value = editingOriginalBudgetId.value
+    return
+  }
+
+  const saved = await assignBudgetToExpense(transaction, editBudgetId.value)
+  if (saved) editingOriginalBudgetId.value = resolveBudgetId(editBudgetId.value)
+  else editBudgetId.value = editingOriginalBudgetId.value
+}
+
 // Computed properties for Edit Modal
 const availableEditDestinationAccounts = computed(() => {
   return accountsStore.accounts.filter(a => a.id !== editTx.value.accountId)
@@ -1073,6 +1268,14 @@ onMounted(async () => {
   await transactionsStore.fetchCategories()
   await transactionsStore.fetchTransactions()
   await workspacesStore.fetchActiveWorkspaceProfiles()
+  try {
+    await goalsStore.loadBudgetSettings()
+    syncBudgetSettingsAvailability()
+  } catch (error: unknown) {
+    console.error('Error cargando presupuestos:', error)
+    budgetSettingsReady.value = false
+    budgetSettingsError.value = error instanceof Error ? error.message : 'No se pudieron cargar los presupuestos'
+  }
 })
 
 const filteredCount = computed(() => transactionsStore.filteredTransactions(filters).length)
@@ -1185,6 +1388,10 @@ const saveTransaction = async () => {
 
 const openEditModal = (tx: any) => {
   editingTxId.value = tx.id
+  const currentBudgetId = resolveBudgetId(tx.budgetId)
+  editBudgetId.value = currentBudgetId
+  editingOriginalBudgetId.value = currentBudgetId
+  editingOriginalType.value = tx.type
   editTx.value = {
     type: tx.type,
     accountId: tx.accountId,
@@ -1208,6 +1415,9 @@ const openEditModal = (tx: any) => {
 const closeEditModal = () => {
   showEditModal.value = false
   editingTxId.value = ''
+  editBudgetId.value = DEFAULT_MONTHLY_BUDGET_ID
+  editingOriginalBudgetId.value = DEFAULT_MONTHLY_BUDGET_ID
+  editingOriginalType.value = 'expense'
   editTx.value = {
     type: 'expense',
     accountId: '',
