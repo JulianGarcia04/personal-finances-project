@@ -8,6 +8,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { genkit } from "genkit";
 import { googleAI } from "@genkit-ai/google-genai";
 import { z } from "zod";
+import { analyzeLegacyCategoryExpenses, buildLegacyCategoryBudgetsPatch, parseLegacyCategoryBudgetCurrency } from "./legacyCategoryBudgets";
 
 dotenv.config();
 const corsHandler = cors({ origin: true });
@@ -765,7 +766,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
     const getExpensesByCategoryTool = ai.defineTool(
       {
         name: 'getExpensesByCategory',
-        description: 'Analiza los gastos del usuario de los últimos N meses, agrupados por categoría: total gastado, cantidad de movimientos y promedio mensual. Úsalo SIEMPRE antes de proponer presupuestos mensuales por categoría para basarte en datos reales.',
+        description: 'Analiza los gastos del presupuesto mensual predeterminado de los últimos N meses, incluidos los históricos sin budgetId. Devuelve totales y promedios en la moneda de reporte del perfil usando solo tasas manuales, con la moneda confirmada de los límites heredados y diagnósticos de tasas faltantes o inválidas. Si no hay moneda confirmada, pide confirmarla; si canProposeCaps es false, no derives límites y pide al usuario importes en la moneda confirmada.',
         inputSchema: z.object({
           months: z.number().optional().describe('Cantidad de meses hacia atrás a analizar (por defecto 3, máximo 12)'),
         }),
@@ -780,44 +781,66 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
           month: firstMonth.getMonth() + index
         }));
 
+        const workspaceSnapshot = await db.collection('workspaces').doc(activeWorkspaceId).get();
+        if (!workspaceSnapshot.exists) throw new Error("El workspace no existe.");
+        const workspace = workspaceSnapshot.data() || {};
+        const categoryBudgetCurrency = parseLegacyCategoryBudgetCurrency(workspace);
+
         const snapshot = await db.collection('transactions')
           .where('workspaceId', '==', activeWorkspaceId)
           .where('type', '==', 'expense')
           .orderBy('date', 'desc')
           .get();
+        const storedRates = workspace.exchangeRates;
+        const exchangeRates: Record<string, number> = storedRates
+          && typeof storedRates === 'object'
+          && !Array.isArray(storedRates)
+          ? storedRates as Record<string, number>
+          : {};
 
         // Nombres de categorías del workspace activo (no de toda la colección)
         const catsSnapshot = await db.collection('categories').where('workspaceId', '==', activeWorkspaceId).get();
         const catNames: Record<string, string> = {};
         catsSnapshot.forEach(docSnap => { catNames[docSnap.id] = docSnap.data().name || 'Sin nombre'; });
 
-        const totals: Record<string, { total: number; count: number }> = {};
+        const expenses: Array<{ budgetId: unknown; categoryId: unknown; amount: number; currency: string }> = [];
         snapshot.forEach(docSnap => {
           const data = docSnap.data();
-          const key = data.categoryId || 'sin-categoria';
-          if (!totals[key]) totals[key] = { total: 0, count: 0 };
-          periodMonths.forEach(({ year, month }) => {
-            totals[key].total += expenseAmountForMonth(data, year, month);
+          const amount = periodMonths.reduce((total, period) => (
+            total + expenseAmountForMonth(data, period.year, period.month)
+          ), 0);
+          expenses.push({
+            budgetId: data.budgetId,
+            categoryId: data.categoryId,
+            amount,
+            currency: typeof data.currency === 'string' && data.currency.length > 0 ? data.currency : 'unknown'
           });
-          totals[key].count += 1;
         });
 
-        return Object.entries(totals).map(([categoryId, agg]) => ({
-          categoryId,
-          categoryName: catNames[categoryId] || (categoryId === 'sin-categoria' ? 'Sin categoría' : 'Desconocida'),
-          totalSpent: Math.round(agg.total),
-          transactionCount: agg.count,
-          monthlyAverage: Math.round(agg.total / monthsBack),
-          periodMonths: monthsBack
-        })).sort((a, b) => b.totalSpent - a.totalSpent);
+        const analysis = analyzeLegacyCategoryExpenses({
+          expenses,
+          periodMonths: monthsBack,
+          reportingCurrency: userCurrency,
+          categoryBudgetCurrency,
+          exchangeRates
+        });
+        return {
+          ...analysis,
+          categories: analysis.categories.map(category => ({
+            ...category,
+            categoryName: catNames[category.categoryId]
+              || (category.categoryId === 'sin-categoria' ? 'Sin categoría' : 'Desconocida')
+          }))
+        };
       }
     );
 
     const saveCategoryBudgetsTool = ai.defineTool(
       {
         name: 'saveCategoryBudgets',
-        description: 'Guarda el presupuesto mensual recurrente por categoría del usuario (límite de gasto mensual por categoría). Los montos van en la moneda principal del usuario. Confirma con el usuario los montos ANTES de llamar a esta herramienta.',
+        description: 'Guarda únicamente los límites mensuales heredados del workspace. Todos los montos deben estar en la categoryBudgetCurrency explícitamente confirmada. Si el análisis usa otra moneda o faltan tasas manuales, no derives montos: solicita al usuario los límites en la moneda confirmada y su confirmación antes de llamar a esta herramienta.',
         inputSchema: z.object({
+          currency: z.string().describe('Código de moneda de todos los límites; debe coincidir exactamente con la categoryBudgetCurrency confirmada del workspace.'),
           budgets: z.array(z.object({
             categoryId: z.string().describe('El ID de la categoría (obtenido de listCategories o getExpensesByCategory)'),
             monthlyLimit: z.number().describe('Límite mensual de gasto para esta categoría (0 para eliminar el presupuesto)'),
@@ -825,20 +848,27 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
         }),
         outputSchema: z.any(),
       },
-      async ({ budgets }) => {
+      async ({ budgets, currency }) => {
         const wsRef = db.collection('workspaces').doc(activeWorkspaceId);
         const wsDoc = await wsRef.get();
         if (!wsDoc.exists) throw new Error("El workspace no existe.");
 
-        const current = wsDoc.data()?.categoryBudgets || {};
-        const updated = { ...current };
-        budgets.forEach(b => {
-          if (b.monthlyLimit > 0) updated[b.categoryId] = Number(b.monthlyLimit);
-          else delete updated[b.categoryId];
-        });
+        const workspace = wsDoc.data() || {};
+        const categoryBudgetCurrency = parseLegacyCategoryBudgetCurrency(workspace);
+        const updated = buildLegacyCategoryBudgetsPatch(
+          workspace.categoryBudgets || {},
+          budgets,
+          categoryBudgetCurrency,
+          currency
+        );
 
         await wsRef.update({ categoryBudgets: updated });
-        return { success: true, savedBudgets: budgets.length, message: "Presupuestos guardados en el workspace activo." };
+        return {
+          success: true,
+          savedBudgets: budgets.length,
+          currency,
+          message: "Presupuestos guardados en la moneda confirmada del workspace."
+        };
       }
     );
 
@@ -875,9 +905,11 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       - Analizar gastos por categoría de los últimos meses (getExpensesByCategory) y guardar presupuestos mensuales por categoría (saveCategoryBudgets).
 
       FLUJO PARA PRESUPUESTOS POR CATEGORÍA:
-      - Cuando el usuario pida crear o ajustar presupuestos, PRIMERO llama a getExpensesByCategory (3-6 meses) para identificar sus categorías más recurrentes y cuánto gasta en promedio en cada una.
-      - Propón límites mensuales realistas basados en los promedios reales (redondeados, con un pequeño margen o recorte según el objetivo del usuario).
-      - Presenta la propuesta al usuario y pide confirmación. SOLO después de que el usuario confirme, llama a saveCategoryBudgets.
+      - Cuando el usuario pida crear o ajustar presupuestos, PRIMERO llama a getExpensesByCategory (3-6 meses). El análisis incluye solo el presupuesto mensual predeterminado y devuelve todos los importes con reportingCurrency explícita; las tasas son las manuales del perfil.
+      - Si categoryBudgetCurrency es null, explica que la moneda de los límites heredados aún no está confirmada; pide al usuario confirmarla en la pantalla de Presupuestos y no propongas ni guardes límites.
+      - Si canProposeCaps es false por diferencia de moneda o por tasas manuales faltantes o inválidas, no calcules ni propongas límites derivados del análisis. Explica claramente las monedas y las tasas faltantes o inválidas, y pide al usuario que ingrese los límites en la categoryBudgetCurrency confirmada. Nunca infieras tasas cruzadas ni cambies la moneda de límites guardados.
+      - Si canProposeCaps es true, puedes proponer límites realistas basados en los promedios completos, etiquetados en esa moneda. Presenta la propuesta y pide confirmación. SOLO después de que el usuario confirme, llama a saveCategoryBudgets con currency exactamente igual a la categoryBudgetCurrency confirmada.
+      - Si el usuario ingresa manualmente límites en la categoryBudgetCurrency confirmada, puedes guardarlos después de confirmar los montos; la herramienta rechaza moneda no confirmada o distinta.
       
       Lineamientos clave:
       1. **Presupuesto:** Promueve buenas prácticas como la regla 50/30/20 (50% Necesidades, 30% Deseos, 20% Ahorro) y aconseja cómo repartir el dinero a sus metas de ahorro activas con base a sus ingresos mensuales declarados.
