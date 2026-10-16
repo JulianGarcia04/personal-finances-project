@@ -56,7 +56,8 @@ Commit `9630468` (`test(agent): update emulator expectations for card payment mo
 ## Delivery
 - Docs commit of this file, fast-forward merge of `fix/date-offsets` into `main`, push `main` to `origin`, deploy Hosting and all 6 Cloud Functions (all load `index.ts`, which imports the changed modules) to `vault-41b34`. Firestore and Storage rules unchanged.
 
+- Done: docs commit `9b0c9b5`; `main` fast-forwarded `e937a06..9b0c9b5` and pushed to `origin`; `firebase deploy --only hosting,functions --project vault-41b34` (project-local CLI 15.34.0, project-local npm cache) exited 0 with no errors or warnings in the log: 6 functions updated (`saveUserApiKey`, `parseStatement`, `syncTransactionEmbedding`, `chatWithAgent`, `inviteToWorkspace`, `importPocketStatement`), Hosting released at https://vault-41b34.web.app. No post-deploy smoke test in the browser.
+
 ## Progress
-- T1, T2, T3 and the emulator follow-up done. No migration (user decision).
-- Next step: delivery as authorized in S6.
+- Feature delivered. No migration (user decision). Out-of-scope audit findings D3–D13 remain open.
 - Next step: after T1/T2 return and are spot-checked, launch the T3 writer.
