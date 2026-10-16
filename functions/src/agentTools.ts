@@ -109,6 +109,7 @@ export function buildAgentContextBlock({ now, timeZone, currency }: { now: Date;
       - Bolsillos (cuentas con cuenta principal): su saldo está separado del de la cuenta principal; el total de la cuenta es principal + bolsillos.
       - Cuentas puente (compartidas): saldo negativo = lo que este workspace le debe a quien pagó.
       - Las compras a cuotas guardan el monto total en la fecha de compra.
+      - En resúmenes y presupuestos, las compras con una tarjeta de crédito que tiene día de corte y de pago cuentan en el mes en que se paga el extracto que las incluye (cada cuota un mes después), igual que en el panel de control.
 
       REGLAS DE FECHAS:
       - Convierte "hoy", "ayer", "esta semana", "este mes", "mes pasado", "este año" o fechas relativas a fechas concretas (YYYY-MM-DD) con los rangos anteriores ANTES de llamar herramientas.

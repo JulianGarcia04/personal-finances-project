@@ -4,11 +4,13 @@ import {
   GENERIC_SERVER_ERROR,
   HttpError,
   apiKeyBodySchema,
+  cardBillingOf,
   chatBodySchema,
   expenseAmountForMonth,
   expensePeriod,
   parseBody,
   parseStatementBodySchema,
+  paymentMonthIndex,
   storedDateValue,
   timeZoneForCountry,
   verifyBearerToken,
@@ -149,4 +151,69 @@ test("expenseAmountForMonth uses the zoned month and spreads installments", () =
   assert.equal(expenseAmountForMonth(split, 2026, 2, "America/Bogota"), 33.33);
   assert.equal(expenseAmountForMonth(split, 2026, 3, "America/Bogota"), 0);
   assert.equal(expenseAmountForMonth({ ...split, type: "income" }, 2026, 0, "America/Bogota"), 0);
+});
+
+// --- Credit-card payment months (port of src/lib/installments.ts) ---
+
+const BOGOTA = "America/Bogota";
+// Local noon in Bogotá (UTC-5) of the given calendar day.
+const bogotaNoon = (year: number, month: number, day: number) => new Date(Date.UTC(year, month, day, 17));
+const sharesFrom = (data: Record<string, any>, billing: { statementClosingDay: number; paymentDueDay: number } | null, year: number, month: number, count: number) =>
+  Array.from({ length: count }, (_, offset) => {
+    const index = year * 12 + month + offset;
+    return expenseAmountForMonth(data, Math.floor(index / 12), index % 12, BOGOTA, billing);
+  });
+
+test("expenseAmountForMonth: closing 25, due 10, 28 Sep at 3 installments is paid in Nov, Dec and Jan", () => {
+  const purchase = { type: "expense", amount: -300_000, installments: 3, date: bogotaNoon(2026, 8, 28) };
+  assert.deepEqual(sharesFrom(purchase, { statementClosingDay: 25, paymentDueDay: 10 }, 2026, 8, 6), [0, 0, 100_000, 100_000, 100_000, 0]);
+});
+
+test("expenseAmountForMonth: closing 25, due 10, 20 Sep at 3 installments is paid in Oct, Nov and Dec", () => {
+  const purchase = { type: "expense", amount: -300_000, installments: 3, date: bogotaNoon(2026, 8, 20) };
+  assert.deepEqual(sharesFrom(purchase, { statementClosingDay: 25, paymentDueDay: 10 }, 2026, 8, 5), [0, 100_000, 100_000, 100_000, 0]);
+});
+
+test("expenseAmountForMonth: closing 5, due 20, 28 Sep at 3 installments is paid in Oct, Nov and Dec", () => {
+  const purchase = { type: "expense", amount: -300_000, installments: 3, date: bogotaNoon(2026, 8, 28) };
+  assert.deepEqual(sharesFrom(purchase, { statementClosingDay: 5, paymentDueDay: 20 }, 2026, 8, 5), [0, 100_000, 100_000, 100_000, 0]);
+});
+
+test("expenseAmountForMonth: closing 25, due 10, a single-installment purchase on 28 Sep is paid in Nov", () => {
+  const purchase = { type: "expense", amount: -300_000, date: bogotaNoon(2026, 8, 28) };
+  assert.deepEqual(sharesFrom(purchase, { statementClosingDay: 25, paymentDueDay: 10 }, 2026, 8, 4), [0, 0, 300_000, 0]);
+  // Without billing days the same purchase keeps its calendar month.
+  assert.deepEqual(sharesFrom(purchase, null, 2026, 8, 4), [300_000, 0, 0, 0]);
+});
+
+test("expenseAmountForMonth reads the closing day in the user's time zone", () => {
+  // 26 Sep 03:00 UTC is still 25 Sep (the closing day) in Bogotá: paid in Oct, not Nov.
+  const lateNight = { type: "expense", amount: -50, date: new Date("2026-09-26T03:00:00Z") };
+  assert.deepEqual(sharesFrom(lateNight, { statementClosingDay: 25, paymentDueDay: 10 }, 2026, 8, 3), [0, 50, 0]);
+});
+
+test("expenseAmountForMonth crosses the December to January boundary for card payments", () => {
+  const purchase = { type: "expense", amount: -70, installments: 2, date: bogotaNoon(2026, 11, 28) };
+  assert.deepEqual(sharesFrom(purchase, { statementClosingDay: 25, paymentDueDay: 10 }, 2026, 11, 4), [0, 0, 35, 35]);
+});
+
+test("paymentMonthIndex adds a month unless the due day comes after the closing day", () => {
+  const index = (year: number, month: number) => year * 12 + month;
+  assert.equal(paymentMonthIndex(2026, 8, 25, { statementClosingDay: 25, paymentDueDay: 10 }), index(2026, 9));
+  assert.equal(paymentMonthIndex(2026, 8, 26, { statementClosingDay: 25, paymentDueDay: 10 }), index(2026, 10));
+  assert.equal(paymentMonthIndex(2026, 9, 5, { statementClosingDay: 5, paymentDueDay: 20 }), index(2026, 9));
+  assert.equal(paymentMonthIndex(2026, 8, 15, { statementClosingDay: 15, paymentDueDay: 15 }), index(2026, 9));
+  // Closing 30, due 31: February's statement (closing and due clamped to the 28th) is paid in February.
+  assert.equal(paymentMonthIndex(2026, 1, 10, { statementClosingDay: 30, paymentDueDay: 31 }), index(2026, 1));
+});
+
+test("cardBillingOf only returns billing days for regular credit cards with both days set", () => {
+  const visa = { type: "credit", statementClosingDay: 25, paymentDueDay: 10 };
+  assert.deepEqual(cardBillingOf(visa), { statementClosingDay: 25, paymentDueDay: 10 });
+  assert.equal(cardBillingOf({ ...visa, type: "checking" }), null);
+  assert.equal(cardBillingOf({ ...visa, paymentDueDay: null }), null);
+  assert.equal(cardBillingOf({ ...visa, statementClosingDay: 0 }), null);
+  assert.equal(cardBillingOf({ ...visa, paymentDueDay: 32 }), null);
+  assert.equal(cardBillingOf({ ...visa, mirror: { workspaceId: "w", accountId: "a", sourceAccountId: "s" } }), null);
+  assert.equal(cardBillingOf(undefined), null);
 });
