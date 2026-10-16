@@ -3,7 +3,7 @@ import { db, auth, storage, functions } from '@/lib/firebase'
 import { useAccountsStore } from './accountsStore'
 import { useAuthStore } from './authStore'
 import { Account, Transaction, Category, TransactionType } from '@/types'
-import { getTransactionReplacementDeltas, isPocketRelatedAccount } from '@/lib/pockets'
+import { getTransactionReplacementDeltas, isPocketAccount, isPocketRelatedAccount } from '@/lib/pockets'
 import {
   isSettlementCandidate,
   planMirror,
@@ -69,7 +69,8 @@ interface PocketMovementTransaction {
 }
 
 function isUsablePocketMovementAccount(account: any): boolean {
-  return account && ['checking', 'savings', 'cash'].includes(account.type) && !account.mirror
+  return account && ['checking', 'savings', 'cash', 'credit'].includes(account.type) && !account.mirror &&
+    (account.type !== 'credit' || !isPocketRelatedAccount(account))
 }
 
 function movementAccountIsPocketRelated(account: any): boolean {
@@ -198,6 +199,11 @@ async function commitPocketMovement(options: {
       const isNewMovement = movement === options.next
       const recordedCurrency = isNewMovement ? options.next?.currency : before?.currency
       if (recordedCurrency !== source.currency) throw new Error('La moneda del movimiento debe coincidir con su cuenta.')
+      const target = movement.toAccountId ? accounts.get(movement.toAccountId) : undefined
+      if ((source.type === 'credit' || target?.type === 'credit') &&
+          (movement.type !== 'transfer' || isPocketAccount(source) || (target && isPocketAccount(target)))) {
+        throw new Error('Las transferencias con tarjetas requieren cuentas principales, no bolsillos.')
+      }
       if (movement.type === 'transfer') {
         const destination = movement.toAccountId && accounts.get(movement.toAccountId)
         if (!destination || movement.amount <= 0 || movement.accountId === movement.toAccountId ||

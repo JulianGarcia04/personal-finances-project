@@ -274,6 +274,10 @@ function assertSupportedPocketMovement(
     throw new Error('El monto y la moneda del movimiento no son válidos.')
   }
   if (data.mirrorOf) throw new Error('Los movimientos espejo no se pueden combinar con bolsillos.')
+  if ((source.type === 'credit' || destination?.type === 'credit') &&
+      (movement.type !== 'transfer' || source.parentAccountId != null || destination?.parentAccountId != null)) {
+    throw new Error('Las transferencias con tarjetas requieren cuentas principales, no bolsillos.')
+  }
   if (movement.type === 'transfer') {
     if (!destination || movement.accountId === movement.toAccountId || amount <= 0 ||
         source.currency !== destination.currency) {
@@ -293,7 +297,8 @@ function assertMovementAccount(
   parents: Map<string, admin.firestore.DocumentData>,
   childrenByParent: Map<string, string[]>
 ): void {
-  if (data.workspaceId !== workspaceId || !['checking', 'savings', 'cash'].includes(data.type) || data.mirror != null) {
+  if (data.workspaceId !== workspaceId || !['checking', 'savings', 'cash', 'credit'].includes(data.type) ||
+      data.mirror != null || (data.type === 'credit' && isPocketRelated(data))) {
     throw new Error('Las cuentas del movimiento deben ser cuentas ordinarias del mismo workspace.')
   }
   if (data.parentAccountId != null) {
