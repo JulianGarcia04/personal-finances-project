@@ -13,6 +13,7 @@ import {
   SettlementLegRecord
 } from '@/lib/mirror'
 import { expenseAmountForDate, getInstallmentCount } from '@/lib/installments'
+import { parseDateOnly, toDateValue } from '@/lib/dates'
 import { createExpenseBudgetAssigner, selectBudgetExpenses } from '@/lib/transactionClassification'
 import { 
   collection, 
@@ -418,7 +419,7 @@ export const useTransactionsStore = defineStore('transactions', {
             id: docSnap.id, 
             ...data,
             // Convertir timestamp de Firestore a Date
-            date: data.date instanceof Timestamp ? data.date.toDate() : new Date(data.date),
+            date: toDateValue(data.date),
             createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate() : new Date(data.createdAt)
           } as Transaction)
         })
@@ -1174,7 +1175,7 @@ export const useTransactionsStore = defineStore('transactions', {
         )
         return {
           ...row,
-          dateValue: new Date(row.date),
+          dateValue: parseDateOnly(row.date),
           categoryId: matchedCategory?.id ?? fallbackCategory?.id ?? ''
         }
       })

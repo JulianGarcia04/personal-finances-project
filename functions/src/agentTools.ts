@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { HttpError, zonedDateKey, zonedWallClockToInstant } from "./http";
+import { HttpError, storedDateValue, zonedDateKey, zonedWallClockToInstant } from "./http";
 
 // Pure helpers for the chat agent's tools: date context, date parsing, amount
 // signs, lean tool rows and fail-soft tool execution. No firebase-admin here so
@@ -136,14 +136,14 @@ export interface NameMaps {
   categories: Map<string, string>;
 }
 
-function toDate(value: any): Date | null {
-  const date = value?.toDate ? value.toDate() : value != null ? new Date(value) : null;
+function toDate(value: any, timeZone: string): Date | null {
+  const date = value != null ? storedDateValue(value, timeZone) : null;
   return date && !Number.isNaN(date.getTime()) ? date : null;
 }
 
 /** The fields the model needs from a transaction, with names instead of ids. */
 export function toLeanTransaction(id: string, data: Record<string, any>, names: NameMaps, timeZone: string): Record<string, unknown> {
-  const date = toDate(data.date);
+  const date = toDate(data.date, timeZone);
   const amount = Number(data.amount) || 0;
   const row: Record<string, unknown> = {
     id,

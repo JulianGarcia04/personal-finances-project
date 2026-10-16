@@ -23,6 +23,11 @@ test("zonedDateKey formats the local calendar day", () => {
   assert.equal(zonedDateKey(new Date("2026-10-12T05:00:00Z"), "America/Bogota"), "2026-10-12");
 });
 
+test("buildEmbeddingText keeps a legacy date-only string on its Bogota calendar day", () => {
+  const text = buildEmbeddingText({ description: "Taxi", type: "expense", amount: 15000, currency: "COP", date: "2026-10-01" });
+  assert.equal(text, "Descripción: Taxi. Tipo: gasto. Monto: -15000 COP. Fecha: 2026-10-01.");
+});
+
 test("buildEmbeddingText signs amounts by type and uses the Bogota date", () => {
   const text = buildEmbeddingText(
     { description: "Almuerzo", type: "expense", amount: 25000, currency: "COP", date: fakeTimestamp("2026-10-12T03:00:00Z") },

@@ -114,6 +114,18 @@ test('plans an accounting-only reversal only for a strictly validated settlement
   })
 })
 
+test('matches a legacy date-only leg with its local-noon counterpart on the same calendar day', async () => {
+  const mirror = await import('./mirror.ts')
+  const { paid, received, accountsById } = settlementLegs()
+  const plan = mirror.planSettlementReversal({
+    first: { ...received, date: new Date(2025, 3, 12, 12) },
+    second: { ...paid, date: '2025-04-12' },
+    accountsById
+  })
+
+  assert.equal(plan.paidLegId, 'paid')
+})
+
 test('does not identify generic mirrorOf activity as a bridge settlement', async () => {
   const mirror = await import('./mirror.ts')
   assert.equal(typeof mirror.planSettlementReversal, 'function', 'settlement reversal planner is required')

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import ts from 'typescript'
 import { DEFAULT_MONTHLY_BUDGET_ID, resolveBudgetId } from '../../src/lib/budgets.ts'
+import { parseDateOnly } from '../../src/lib/dates.ts'
 import { StatementImportBatchSchema } from '../../src/schemas.ts'
 
 const storeSource = readFileSync(new URL('../../src/stores/transactionsStore.ts', import.meta.url), 'utf8')
@@ -91,7 +92,8 @@ test('the actual batch import producer persists unassigned expenses to the defau
       if (first === testDatabase && second === 'transactions' && third === 'imported-expense-1') return txRef
       throw new Error('Unexpected doc() call')
     },
-    Timestamp: { fromDate: (date: Date) => date }
+    Timestamp: { fromDate: (date: Date) => date },
+    parseDateOnly
   })
   const store = {
     categories: [{ id: 'food', name: 'Food', workspaceId: null }],
@@ -111,6 +113,9 @@ test('the actual batch import producer persists unassigned expenses to the defau
   assert.equal(writes.length, 1, 'one imported expense should be written in the transaction')
   const payload = writes[0]!
   assert.equal(payload.type, 'expense')
+  const savedDate = payload.date as Date
+  assert.deepEqual([savedDate.getFullYear(), savedDate.getMonth(), savedDate.getDate()], [2025, 0, 5],
+    'a date-only statement row must stay on its local calendar day')
   assert.equal(Object.hasOwn(payload, 'budgetId'), false)
   assert.equal(resolveBudgetId(payload.budgetId as string | null | undefined), DEFAULT_MONTHLY_BUDGET_ID)
 })

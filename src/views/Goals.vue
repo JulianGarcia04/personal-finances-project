@@ -699,6 +699,7 @@ import { DEFAULT_MONTHLY_BUDGET_ID } from '@/lib/budgets'
 import { reportBudgetScope } from '@/lib/budgetReporting'
 import type { BudgetWorkspaceBudgetSnapshot } from '@/lib/budgetWorkspaceAdapter'
 import { expenseAmountForDate } from '@/lib/installments'
+import { parseDateOnly } from '@/lib/dates'
 import { getAccountDisplayLabel, isPocketRelatedAccount } from '@/lib/pockets'
 import {
   Target as TargetIcon,
@@ -1142,7 +1143,7 @@ const handleCreateGoal = async () => {
       targetAmount: newGoalTargetAmount.value,
       currentAmount: newGoalCurrentAmount.value || 0,
       currency: newGoalCurrency.value,
-      targetDate: new Date(newGoalTargetDate.value)
+      targetDate: parseDateOnly(newGoalTargetDate.value)
     })
 
     showCreateModal.value = false

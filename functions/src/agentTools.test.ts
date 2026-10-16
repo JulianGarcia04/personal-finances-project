@@ -90,6 +90,12 @@ test("buildAgentContextBlock states date, time zone, currency and sign conventio
   }
 });
 
+test("toLeanTransaction keeps a legacy date-only string on its local calendar day", () => {
+  const names = { accounts: new Map([["a1", "Nu"]]), categories: new Map<string, string>() };
+  const row = toLeanTransaction("t1", { accountId: "a1", amount: -5, type: "expense", date: "2026-10-01" }, names, BOGOTA);
+  assert.equal(row.date, "2026-10-01");
+});
+
 test("toLeanTransaction returns only named, local-dated fields", () => {
   const names = {
     accounts: new Map([["a1", "Nu"], ["a2", "Ahorros"]]),

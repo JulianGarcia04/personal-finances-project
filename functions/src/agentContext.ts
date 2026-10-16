@@ -2,7 +2,7 @@ import * as admin from "firebase-admin";
 import { FieldPath, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { z } from "zod";
 import { createWorkspaceAccount, mutateWorkspaceTransaction } from "./pockets";
-import { zonedDateKey } from "./http";
+import { storedDateValue, zonedDateKey } from "./http";
 import {
   AgentToolError,
   localDayRange,
@@ -435,7 +435,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
         id: docSnap.id,
         type: String(data.type ?? ''),
         amount: Number(data.amount) || 0,
-        date: data.date?.toDate ? data.date.toDate() : new Date(data.date)
+        date: storedDateValue(data.date, timeZone)
       });
     });
     return [...rows.values()];

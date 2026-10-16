@@ -26,6 +26,7 @@ import {
 import { createBudgetPersistence } from '../lib/budgetPersistence.ts'
 import { createBudgetCategoryCapsPersistence } from '../lib/budgetCategoryCapsPersistence.ts'
 import { DEFAULT_MONTHLY_BUDGET_ID } from '../lib/budgets.ts'
+import { toDateValue } from '../lib/dates.ts'
 
 interface GoalsState {
   goals: Goal[];
@@ -390,7 +391,7 @@ export const useGoalsStore = defineStore('goals', {
             targetAmount: Number(data.targetAmount),
             currentAmount: Number(data.currentAmount || 0),
             currency: data.currency || 'USD',
-            targetDate: data.targetDate instanceof Timestamp ? data.targetDate.toDate() : new Date(data.targetDate),
+            targetDate: toDateValue(data.targetDate),
             createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate() : new Date(data.createdAt),
           } as Goal)
         })

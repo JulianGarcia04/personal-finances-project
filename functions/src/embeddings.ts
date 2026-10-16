@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { DocumentData, FieldValue, Firestore } from "firebase-admin/firestore";
-import { zonedDateKey } from "./http";
+import { storedDateValue, zonedDateKey } from "./http";
 
 export const EMBEDDING_MODEL = "gemini-embedding-2";
 /**
@@ -38,7 +38,7 @@ export interface EmbeddingNames {
 
 function toDate(value: any): Date | null {
   if (!value) return null;
-  const date = typeof value.toDate === "function" ? value.toDate() : new Date(value);
+  const date = storedDateValue(value, EMBEDDING_TIME_ZONE);
   return date instanceof Date && !Number.isNaN(date.getTime()) ? date : null;
 }
 

@@ -9,8 +9,10 @@ import {
   expensePeriod,
   parseBody,
   parseStatementBodySchema,
+  storedDateValue,
   timeZoneForCountry,
   verifyBearerToken,
+  zonedDateKey,
   zonedYearMonth
 } from "./http";
 
@@ -117,6 +119,25 @@ test("expensePeriod starts at local midnight of the first analysed month", () =>
   const madrid = expensePeriod(new Date("2026-01-15T12:00:00Z"), 2, "Europe/Madrid");
   assert.equal(madrid.start.toISOString(), "2025-11-30T23:00:00.000Z");
   assert.deepEqual(madrid.months, [{ year: 2025, month: 11 }, { year: 2026, month: 0 }]);
+});
+
+test("storedDateValue reads Timestamps unchanged and legacy date-only strings as local noon", () => {
+  const instant = new Date("2026-10-15T02:00:00.000Z");
+  assert.equal(storedDateValue({ toDate: () => instant }, "America/Bogota"), instant);
+  assert.equal(storedDateValue("2026-10-01", "America/Bogota").toISOString(), "2026-10-01T17:00:00.000Z");
+  assert.equal(zonedDateKey(storedDateValue("2027-01-01", "Europe/Madrid"), "Europe/Madrid"), "2027-01-01");
+});
+
+test("storedDateValue keeps the standard parsing for other values", () => {
+  assert.equal(storedDateValue("2026-10-10T12:00:00.000Z", "America/Bogota").toISOString(), "2026-10-10T12:00:00.000Z");
+  assert.equal(storedDateValue(Date.UTC(2026, 9, 10), "America/Bogota").toISOString(), "2026-10-10T00:00:00.000Z");
+  assert.equal(storedDateValue("2026-02-30", "America/Bogota").getTime(), new Date("2026-02-30").getTime());
+});
+
+test("expenseAmountForMonth reads a legacy date-only string as that local calendar day", () => {
+  const legacy = { type: "expense", amount: -90, date: "2026-10-01" };
+  assert.equal(expenseAmountForMonth(legacy, 2026, 9, "America/Bogota"), 90);
+  assert.equal(expenseAmountForMonth(legacy, 2026, 8, "America/Bogota"), 0);
 });
 
 test("expenseAmountForMonth uses the zoned month and spreads installments", () => {

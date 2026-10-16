@@ -212,14 +212,30 @@ export function expensePeriod(now: Date, monthsBack: number, timeZone: string): 
   return { start: zonedMonthStart(months[0], timeZone), months };
 }
 
-function toDate(value: any): Date {
-  return value?.toDate ? value.toDate() : new Date(value);
+const DATE_ONLY_KEY = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * Stored date read-back: Timestamps as stored; legacy date-only strings are that calendar
+ * day at local noon in `timeZone` (the server clock runs in UTC, so `new Date("YYYY-MM-DD")`
+ * would land on the previous evening west of UTC). Anything else keeps the standard parsing.
+ */
+export function storedDateValue(value: any, timeZone: string = DEFAULT_TIME_ZONE): Date {
+  if (value?.toDate) return value.toDate();
+  const match = typeof value === "string" ? DATE_ONLY_KEY.exec(value) : null;
+  if (match) {
+    const [year, month, day] = [Number(match[1]), Number(match[2]) - 1, Number(match[3])];
+    const probe = new Date(Date.UTC(year, month, day));
+    if (probe.getUTCFullYear() === year && probe.getUTCMonth() === month && probe.getUTCDate() === day) {
+      return zonedWallClockToInstant(year, month, day, 12, timeZone);
+    }
+  }
+  return new Date(value);
 }
 
 /** Share of an expense (installments split to the cent) that falls in the given local month. */
 export function expenseAmountForMonth(data: Record<string, any>, year: number, month: number, timeZone: string): number {
   if (data.type !== "expense") return 0;
-  const transactionDate = toDate(data.date);
+  const transactionDate = storedDateValue(data.date, timeZone);
   if (Number.isNaN(transactionDate.getTime())) return 0;
 
   const installments = Number.isInteger(data.installments) && data.installments > 0 ? data.installments : 1;
