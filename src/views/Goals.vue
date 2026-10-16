@@ -699,7 +699,7 @@ import { DEFAULT_MONTHLY_BUDGET_ID } from '@/lib/budgets'
 import { reportBudgetScope } from '@/lib/budgetReporting'
 import type { BudgetWorkspaceBudgetSnapshot } from '@/lib/budgetWorkspaceAdapter'
 import { expenseAmountForDate } from '@/lib/installments'
-import { parseDateOnly } from '@/lib/dates'
+import { parseDateOnly, toDateValue, toLocalDateKey } from '@/lib/dates'
 import { getAccountDisplayLabel, isPocketRelatedAccount } from '@/lib/pockets'
 import {
   Target as TargetIcon,
@@ -896,7 +896,7 @@ const normalizeBudgetCurrencyInput = (event: Event) => {
   budgetCapCurrencyInput.value = input.value.replace(/[^a-z]/gi, '').toUpperCase().slice(0, 3)
 }
 
-const dateInputValue = (value?: Date): string => value ? new Date(value).toISOString().slice(0, 10) : ''
+const dateInputValue = (value?: Date): string => value ? toLocalDateKey(toDateValue(value)) : ''
 
 const openBudgetModal = (entry?: BudgetWorkspaceBudgetSnapshot) => {
   editingOperatingBudget.value = entry ?? null

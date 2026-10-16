@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import ts from 'typescript'
+import { toDateValue, toLocalDateKey } from '../lib/dates.ts'
 
 const goalsPath = fileURLToPath(new URL('./Goals.vue', import.meta.url))
 const goalsView = readFileSync(goalsPath, 'utf8')
@@ -110,4 +111,19 @@ test('S7: handleSaveOperatingBudget accepts numeric v-model values from number i
     totalLimit: 800
   }])
   assert.deepEqual(savedCaps, [{ budgetId: 'budget-1', caps: { cat1: 500 } }])
+})
+
+test('budget date inputs show the local calendar day', () => {
+  const declaration = goalsView.match(/const dateInputValue = [^\n]+/)?.[0]
+  assert.ok(declaration, 'Goals.vue must define dateInputValue')
+  const javascript = ts.transpileModule(declaration, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext }
+  }).outputText
+  const dateInputValue = new Function('toDateValue', 'toLocalDateKey', `${javascript}\nreturn dateInputValue`)(
+    toDateValue, toLocalDateKey
+  ) as (value?: Date) => string
+
+  assert.equal(dateInputValue(new Date(2026, 9, 1, 0, 0)), '2026-10-01')
+  assert.equal(dateInputValue(new Date(2026, 9, 31, 20, 30)), '2026-10-31')
+  assert.equal(dateInputValue(undefined), '')
 })

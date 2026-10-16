@@ -18,3 +18,10 @@ export const toDateValue = (value: unknown): Date => {
   if (typeof value === 'string') return parseDateOnly(value)
   return new Date(value as number | Date)
 }
+
+const pad = (value: number) => String(value).padStart(2, '0')
+
+// Local calendar day as a `YYYY-MM-DD` date input value. toISOString() would give the
+// UTC day, which is already tomorrow after 19:00 in Colombia.
+export const toLocalDateKey = (date: Date = new Date()): string =>
+  `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`

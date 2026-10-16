@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import ts from 'typescript'
 import { DEFAULT_MONTHLY_BUDGET_ID, resolveBudgetId } from '../lib/budgets.ts'
+import { toDateValue, toLocalDateKey } from '../lib/dates.ts'
 
 const componentSource = readFileSync(new URL('./Transactions.vue', import.meta.url), 'utf8')
 const templateEnd = componentSource.indexOf('<script setup lang="ts">')
@@ -177,4 +178,32 @@ test('fails closed until settings are loaded for an active workspace without err
   syncReadiness()
   assert.equal(budgetSettingsReady.value, true)
   assert.equal(budgetSettingsError.value, '')
+})
+
+test('pre-fills the edit form with the local calendar day of an evening movement', () => {
+  const ref = <Value>(value: Value) => ({ value })
+  const editTx = ref<Record<string, unknown>>({})
+  const openEditModal = evaluateComponentFunction<(tx: Record<string, unknown>) => void>('openEditModal', {
+    editingTxId: ref(''),
+    editBudgetId: ref(''),
+    editingOriginalBudgetId: ref(''),
+    editingOriginalType: ref(''),
+    editTx,
+    editUploadedReceiptUrl: ref(''),
+    editSelectedFileName: ref(''),
+    editReceiptError: ref(''),
+    showEditModal: ref(false),
+    resolveBudgetId,
+    toDateValue,
+    toLocalDateKey
+  })
+
+  openEditModal({ id: 'tx-1', type: 'expense', accountId: 'a1', amount: -10, description: 'Dinner', date: new Date(2026, 9, 15, 21, 0) })
+
+  assert.equal(editTx.value.date, '2026-10-15')
+})
+
+test('date input defaults never use the UTC day', () => {
+  assert.doesNotMatch(script, /toISOString\(\)\.(substring|slice)\(0, 10\)/)
+  assert.match(script, /date: toLocalDateKey\(\)/)
 })

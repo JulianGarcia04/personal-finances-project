@@ -1019,6 +1019,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { Transaction, TransactionType } from '@/types'
 import { TransactionSchema } from '@/schemas'
 import { getMonthlyInstallmentAmount } from '@/lib/installments'
+import { toDateValue, toLocalDateKey } from '@/lib/dates'
 import { getTransactionDisplay } from '@/lib/transactionDisplay'
 import { canTransferBetweenAccounts, getAccountDisplayLabel, isPocketAccount, isPocketRelatedAccount } from '@/lib/pockets'
 import { 
@@ -1174,7 +1175,7 @@ const newTx = ref<{
   categoryId: '',
   amount: null,
   installments: 1,
-  date: new Date().toISOString().substring(0, 10),
+  date: toLocalDateKey(),
   description: '',
   notes: '',
   userId: ''
@@ -1201,7 +1202,7 @@ const editTx = ref<{
   categoryId: '',
   amount: null,
   installments: 1,
-  date: new Date().toISOString().substring(0, 10),
+  date: toLocalDateKey(),
   description: '',
   notes: '',
   userId: ''
@@ -1383,7 +1384,7 @@ const closeAddModal = () => {
     categoryId: '',
     amount: null,
     installments: 1,
-    date: new Date().toISOString().substring(0, 10),
+    date: toLocalDateKey(),
     description: '',
     notes: '',
     userId: ''
@@ -1422,7 +1423,7 @@ const applyPocketTransferQuery = () => {
   newTx.value.accountId = source.id
   newTx.value.toAccountId = destination.id
   newTx.value.categoryId = ''
-  newTx.value.date = new Date().toISOString().substring(0, 10)
+  newTx.value.date = toLocalDateKey()
   pocketTransferSelection.value = true
   showAddModal.value = true
   clearPocketTransferQuery()
@@ -1506,9 +1507,7 @@ const openEditModal = (tx: any) => {
     categoryId: tx.categoryId || '',
     amount: Math.abs(tx.amount),
     installments: tx.installments || 1,
-    date: tx.date instanceof Date 
-      ? tx.date.toISOString().substring(0, 10) 
-      : new Date(tx.date).toISOString().substring(0, 10),
+    date: toLocalDateKey(toDateValue(tx.date)),
     description: tx.description,
     notes: tx.notes || '',
     userId: tx.userId || ''
@@ -1532,7 +1531,7 @@ const closeEditModal = () => {
     categoryId: '',
     amount: null,
     installments: 1,
-    date: new Date().toISOString().substring(0, 10),
+    date: toLocalDateKey(),
     description: '',
     notes: '',
     userId: ''
