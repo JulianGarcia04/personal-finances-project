@@ -7,6 +7,7 @@ import {
   monthlyBudgetAllocation,
   resolveBudgetId
 } from './budgets.ts'
+import { createCardBillingLookup } from './installments.ts'
 
 const expense = (overrides: Partial<{
   type: string
@@ -16,6 +17,7 @@ const expense = (overrides: Partial<{
   budgetId: string | null
   categoryId: string | null
   currency: string
+  accountId: string | null
 }> = {}) => ({
   type: 'expense',
   amount: -100,
@@ -75,6 +77,27 @@ test('reuses calendar-month installment allocation across year boundaries with e
   assert.equal(monthlyBudgetAllocation(transactions, 'monthly', 2026, 0).total, 3.33)
   assert.equal(monthlyBudgetAllocation(transactions, 'monthly', 2026, 1).total, 3.33)
   assert.equal(monthlyBudgetAllocation(transactions, 'monthly', 2026, 2).total, 0)
+})
+
+test('imputes billed card installments to their payment month when a billing lookup is given', () => {
+  const billingFor = createCardBillingLookup([
+    { id: 'visa', type: 'credit', statementClosingDay: 25, paymentDueDay: 10 },
+    { id: 'cash', type: 'cash' }
+  ])
+  // Closing 25, due 10: a 28 Sep purchase is paid in Nov, Dec and Jan.
+  const transactions = [
+    expense({ amount: -300, installments: 3, date: new Date(2026, 8, 28), accountId: 'visa', budgetId: 'monthly' }),
+    expense({ amount: -50, date: new Date(2026, 8, 28), accountId: 'cash', budgetId: 'monthly' })
+  ]
+
+  assert.equal(monthlyBudgetAllocation(transactions, 'monthly', 2026, 8, undefined, billingFor).total, 50)
+  assert.equal(monthlyBudgetAllocation(transactions, 'monthly', 2026, 9, undefined, billingFor).total, 0)
+  assert.equal(monthlyBudgetAllocation(transactions, 'monthly', 2026, 10, undefined, billingFor).total, 100)
+  assert.equal(allBudgetsEstimatedMonthlyTotal(transactions, 2027, 0, undefined, billingFor), 100)
+  assert.equal(allBudgetsEstimatedMonthlyTotal(transactions, 2027, 1, undefined, billingFor), 0)
+  // Without the lookup the calendar-month imputation is unchanged.
+  assert.equal(monthlyBudgetAllocation(transactions, 'monthly', 2026, 8).total, 150)
+  assert.equal(allBudgetsEstimatedMonthlyTotal(transactions, 2027, 0), 0)
 })
 
 test('counts assigned event bookings regardless of whether their purchase date is early or future', () => {

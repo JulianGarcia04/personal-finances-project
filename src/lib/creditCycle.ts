@@ -1,19 +1,13 @@
-// Ciclo de facturación de tarjetas de crédito (corte a corte), NO mes calendario.
-// installments.ts reparte cuotas por mes calendario porque los presupuestos y KPIs
-// (Dashboard, Goals, transactionsStore) responden "¿cuánto gasté este mes calendario?".
-// Este archivo responde una pregunta distinta: "¿cuánto me van a cobrar en el próximo
-// corte de esta tarjeta?". Por eso vive separado y no debe alimentar presupuestos/KPIs.
+// Credit-card billing cycle (closing to closing), not the calendar month.
+// installments.ts imputes card installments to the month the statement is paid
+// (getPaymentBucket), which is what KPIs, budgets and the Goals planner report.
+// This file answers a different question for the card statement widget: "how much
+// will this card charge on its next statement?" (expenseAmountForCycle, bucketed by
+// closing day). Both share getCycleBucket, so a purchase lands on the same statement.
 import type { InstallmentTransaction } from './installments.ts'
-import { getInstallmentCount, prorateInstallmentCents } from './installments.ts'
+import { getCycleBucket, getInstallmentCount, prorateInstallmentCents } from './installments.ts'
 
 const daysInMonth = (year: number, month: number) => new Date(year, month + 1, 0).getDate()
-
-// Bucket "año*12+mes" al que pertenece una fecha según el día de corte:
-// si la fecha cae después del corte, ya pertenece al ciclo del mes siguiente.
-export const getCycleBucket = (date: Date, cutoffDay: number): number => {
-  const bucket = date.getFullYear() * 12 + date.getMonth()
-  return date.getDate() > cutoffDay ? bucket + 1 : bucket
-}
 
 export const getStatementPeriod = (
   cutoffDay: number,

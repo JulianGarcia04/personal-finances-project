@@ -11,6 +11,8 @@ import {
   DEFAULT_MONTHLY_BUDGET_ID,
   type BudgetExpenseTransaction
 } from '../lib/budgets.ts'
+import { projectMonthEndExpenses, splitMonthEndExpenses } from '../lib/dashboardMetrics.ts'
+import { createCardBillingLookup, type BillingAccount } from '../lib/installments.ts'
 
 const componentSource = readFileSync(new URL('./Dashboard.vue', import.meta.url), 'utf8')
 const script = componentSource.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)?.[1]
@@ -58,16 +60,29 @@ const currentMonthExpense = (overrides: Partial<BudgetExpenseTransaction> = {}):
 
 const computedDependency = <Value>(getter: () => Value) => ({ get value() { return getter() } })
 
+const billingDependency = (accounts: BillingAccount[] = []) => ({ value: createCardBillingLookup(accounts) })
+
+// Closing 31 keeps every purchase on its calendar month's statement and due day 10 pays
+// it the following month, so the expectations do not depend on today's date.
+const visa: BillingAccount = { id: 'visa', type: 'credit', statementClosingDay: 31, paymentDueDay: 10 }
+
+const previousMonthFirstDay = () => {
+  const now = new Date()
+  return new Date(now.getFullYear(), now.getMonth() - 1, 1)
+}
+
 const estimateDependencies = (
   transactions: BudgetExpenseTransaction[],
   currency: string,
-  exchangeRates: Record<string, number>
+  exchangeRates: Record<string, number>,
+  accounts: BillingAccount[] = []
 ) => ({
   computed: computedDependency,
   reportAllBudgetsEstimatedMonthly,
   transactionsStore: { transactions },
   primaryCurrency: { value: currency },
-  goalsStore: { exchangeRates }
+  goalsStore: { exchangeRates },
+  cardBillingFor: billingDependency(accounts)
 })
 
 test('Dashboard estimates current monthly installments across budget IDs without adding event principal', () => {
@@ -114,7 +129,8 @@ const legacyBudgetDependencies = (
   },
   primaryCurrency: { value: 'USD' },
   convert: (amount: number, currency: string) => currency === 'EUR' ? amount * (exchangeRates.EUR ?? 1) : amount,
-  getCategory: () => ({ name: 'Food', color: '#ffffff' })
+  getCategory: () => ({ name: 'Food', color: '#ffffff' }),
+  cardBillingFor: billingDependency()
 })
 
 test('Dashboard keeps legacy caps nominal in confirmed currency and uses manual FX only for comparisons', () => {
@@ -200,4 +216,41 @@ test('Dashboard exposes reporting currency and names missing and invalid manual 
   assert.match(template, /allBudgetsEstimatedMonthly\.currency/)
   assert.match(template, /allBudgetsEstimateWarnings/)
   assert.match(template, /allBudgetsEstimatedMonthly\.amount !== null/)
+})
+
+test('Dashboard budget estimate counts card statements due this month instead of this month\'s card purchases', () => {
+  const transactions = [
+    currentMonthExpense({ amount: -50, accountId: 'visa', date: previousMonthFirstDay() }),
+    currentMonthExpense({ amount: -1000, accountId: 'visa' }),
+    currentMonthExpense({ amount: -10, accountId: 'cash' })
+  ]
+  const estimate = evaluateComputed<BudgetAmountReport>(
+    'allBudgetsEstimatedMonthly',
+    estimateDependencies(transactions, 'USD', {}, [visa])
+  )
+
+  assert.equal(estimate.value.amount, 60)
+})
+
+test('Dashboard month-end projection adds card statements of earlier purchases once without extrapolating them', () => {
+  const now = new Date()
+  const transactions = [
+    currentMonthExpense({ amount: -50, accountId: 'visa', date: previousMonthFirstDay(), categoryId: 'food' }),
+    currentMonthExpense({ amount: -10, accountId: 'cash', categoryId: 'food' }),
+    currentMonthExpense({ amount: -30, accountId: 'cash', categoryId: 'travel' })
+  ]
+  const projection = evaluateComputed<{ total: number; budgeted: number }>('monthEndProjection', {
+    computed: computedDependency,
+    transactionsStore: { transactions },
+    goalsStore: { categoryBudgets: { food: 100 } },
+    convert: (amount: number) => amount,
+    cardBillingFor: billingDependency([visa]),
+    splitMonthEndExpenses,
+    projectMonthEndExpenses
+  })
+  const elapsed = now.getDate()
+  const days = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+
+  assert.equal(projection.value.total, (40 / elapsed) * days + 50)
+  assert.equal(projection.value.budgeted, (10 / elapsed) * days + 50)
 })

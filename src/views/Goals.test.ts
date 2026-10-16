@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import ts from 'typescript'
 import { toDateValue, toLocalDateKey } from '../lib/dates.ts'
+import { createCardBillingLookup, expenseAmountForDate } from '../lib/installments.ts'
 
 const goalsPath = fileURLToPath(new URL('./Goals.vue', import.meta.url))
 const goalsView = readFileSync(goalsPath, 'utf8')
@@ -126,4 +127,38 @@ test('budget date inputs show the local calendar day', () => {
   assert.equal(dateInputValue(new Date(2026, 9, 1, 0, 0)), '2026-10-01')
   assert.equal(dateInputValue(new Date(2026, 9, 31, 20, 30)), '2026-10-31')
   assert.equal(dateInputValue(undefined), '')
+})
+
+test('the planner counts card statements due this month instead of this month\'s card purchases', () => {
+  const declaration = goalsView.match(/const realMonthTotals = computed\(\(\) => \{[\s\S]*?\n\}\)/)?.[0]
+  assert.ok(declaration, 'Goals.vue must define realMonthTotals')
+  const javascript = ts.transpileModule(declaration, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext }
+  }).outputText
+  const now = new Date()
+  const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1)
+  const previousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+  // Closing 31 keeps each purchase on its calendar month's statement; due day 10 pays it next month.
+  const cardBillingFor = {
+    value: createCardBillingLookup([{ id: 'visa', type: 'credit', statementClosingDay: 31, paymentDueDay: 10 }])
+  }
+  const transactions = [
+    { type: 'expense', amount: -50, date: previousMonth, accountId: 'visa', currency: 'COP' },
+    { type: 'expense', amount: -1000, date: thisMonth, accountId: 'visa', currency: 'COP' },
+    { type: 'expense', amount: -10, date: thisMonth, accountId: 'cash', currency: 'COP' },
+    { type: 'income', amount: 400, date: thisMonth, accountId: 'cash', currency: 'COP' }
+  ]
+  const realMonthTotals = new Function(
+    'computed', 'transactionsStore', 'goalsStore', 'userCurrency', 'expenseAmountForDate', 'cardBillingFor',
+    `${javascript}\nreturn realMonthTotals`
+  )(
+    (getter: () => unknown) => ({ get value() { return getter() } }),
+    { transactions },
+    { convertToPrimary: (amount: number) => amount },
+    { value: 'COP' },
+    expenseAmountForDate,
+    cardBillingFor
+  ) as { value: { income: number; expense: number } }
+
+  assert.deepEqual(realMonthTotals.value, { income: 400, expense: 60 })
 })

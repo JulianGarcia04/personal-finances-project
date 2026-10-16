@@ -10,12 +10,14 @@ import {
   committedCardPayments,
   spendableUntilMonthEnd,
   projectMonthEndExpenses,
+  splitMonthEndExpenses,
   cardDebtSummary,
   utilizationLevel,
   isSpendableAccount,
   projectionChecks,
   cardDebtRows
 } from './dashboardMetrics.ts'
+import { createCardBillingLookup } from './installments.ts'
 
 // --- Aligned month-over-month ---
 
@@ -48,6 +50,23 @@ test('expenseAmountInPeriod imputes an installment on the purchase day-of-month'
 test('expenseAmountInPeriod clamps a day-31 purchase to the end of a short month', () => {
   const purchase = { type: 'expense', amount: -200, date: new Date(2026, 0, 31), installments: 2 }
   assert.equal(expenseAmountInPeriod(purchase, { year: 2026, month: 1, uptoDay: 28 }), 100)
+})
+
+test('expenseAmountInPeriod imputes a billed card installment on the payment due day', () => {
+  // Closing 25, due 10: a 28 Sep purchase is paid on 10 Nov, 10 Dec and 10 Jan.
+  const purchase = { type: 'expense', amount: -300, date: new Date(2026, 8, 28), installments: 3 }
+  const billing = { statementClosingDay: 25, paymentDueDay: 10 }
+  assert.equal(expenseAmountInPeriod(purchase, { year: 2026, month: 9, uptoDay: 31 }, billing), 0)
+  assert.equal(expenseAmountInPeriod(purchase, { year: 2026, month: 10, uptoDay: 9 }, billing), 0)
+  assert.equal(expenseAmountInPeriod(purchase, { year: 2026, month: 10, uptoDay: 10 }, billing), 100)
+})
+
+test('expenseAmountInPeriod clamps a day-31 due date to the end of a short month', () => {
+  // Closing 25, due 31: a 20 Jan purchase is paid on 31 Jan and on 28 Feb.
+  const purchase = { type: 'expense', amount: -200, date: new Date(2026, 0, 20), installments: 2 }
+  const billing = { statementClosingDay: 25, paymentDueDay: 31 }
+  assert.equal(expenseAmountInPeriod(purchase, { year: 2026, month: 1, uptoDay: 27 }, billing), 0)
+  assert.equal(expenseAmountInPeriod(purchase, { year: 2026, month: 1, uptoDay: 28 }, billing), 100)
 })
 
 test('expenseAmountInPeriod ignores non-expense movements such as transfers', () => {
@@ -143,6 +162,43 @@ test('projection extrapolates this month pace and adds already committed install
   })
   // 1000 / 10 days * 30 days + 500
   assert.equal(projected, 3500)
+})
+
+test('month-end projection adds card statements of earlier purchases once and extrapolates only this month\'s purchases', () => {
+  // 15 Nov 2026 (30-day month). Visa: closing 25, due 10.
+  const now = new Date(2026, 10, 15, 12, 0)
+  const billingFor = createCardBillingLookup([
+    { id: 'visa', type: 'credit', statementClosingDay: 25, paymentDueDay: 10 },
+    { id: 'cash', type: 'cash' }
+  ])
+  const transactions = [
+    // Cash purchase this month: follows the daily pace.
+    { type: 'expense', amount: -150_000, date: new Date(2026, 10, 5), accountId: 'cash', currency: 'COP' },
+    // Card purchase on 20 Oct: statement of 25 Oct, paid on 10 Nov -> a known commitment.
+    { type: 'expense', amount: -200_000, date: new Date(2026, 9, 20), accountId: 'visa', currency: 'COP' },
+    // Card purchase on 3 Nov: statement of 25 Nov, paid in December -> nothing this month.
+    { type: 'expense', amount: -90_000, date: new Date(2026, 10, 3), accountId: 'visa', currency: 'COP' },
+    { type: 'income', amount: 1_000_000, date: new Date(2026, 10, 1), accountId: 'cash', currency: 'COP' }
+  ]
+  const convert = (amount: number) => amount
+
+  // Before: calendar months put both card purchases in their purchase month.
+  const before = splitMonthEndExpenses(transactions, now, { convert })
+  assert.deepEqual(before, { pace: 240_000, committed: 0 })
+  assert.equal(projectMonthEndExpenses({ paceExpensesToDate: before.pace, committedExpenses: before.committed, now }), 480_000)
+
+  // After: 150,000 / 15 days * 30 days + 200,000 due on 10 Nov.
+  const after = splitMonthEndExpenses(transactions, now, { convert, billingFor })
+  assert.deepEqual(after, { pace: 150_000, committed: 200_000 })
+  assert.equal(projectMonthEndExpenses({ paceExpensesToDate: after.pace, committedExpenses: after.committed, now }), 500_000)
+
+  // `include` narrows the split (budgeted categories) and `convert` receives the currency.
+  const onlyCard = splitMonthEndExpenses(transactions, now, {
+    convert: (amount, currency) => (currency === 'COP' ? amount / 1000 : amount),
+    billingFor,
+    include: transaction => transaction.accountId === 'visa'
+  })
+  assert.deepEqual(onlyCard, { pace: 0, committed: 200 })
 })
 
 test('projection on the last day equals the actual month total', () => {

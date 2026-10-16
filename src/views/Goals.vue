@@ -698,7 +698,7 @@ import BaseSheet from '@/components/ui/BaseSheet.vue'
 import { DEFAULT_MONTHLY_BUDGET_ID } from '@/lib/budgets'
 import { reportBudgetScope } from '@/lib/budgetReporting'
 import type { BudgetWorkspaceBudgetSnapshot } from '@/lib/budgetWorkspaceAdapter'
-import { expenseAmountForDate } from '@/lib/installments'
+import { createCardBillingLookup, expenseAmountForDate } from '@/lib/installments'
 import { parseDateOnly, toDateValue, toLocalDateKey } from '@/lib/dates'
 import { getAccountDisplayLabel, isPocketRelatedAccount } from '@/lib/pockets'
 import {
@@ -781,6 +781,9 @@ const budgetCategoryCapIds = computed(() => [...new Set([
   ...expenseCategories.value.map(category => category.id),
   ...Object.keys(budgetCategoryCapInputs)
 ])])
+// Billed card installments count in the month their statement is paid.
+const cardBillingFor = computed(() => createCardBillingLookup(accountsStore.accounts))
+
 const baselineBudgetReport = computed(() => {
   const now = new Date()
   return reportBudgetScope({
@@ -795,7 +798,8 @@ const baselineBudgetReport = computed(() => {
     transactions: transactionsStore.transactions,
     period: { year: now.getFullYear(), month: now.getMonth() },
     reportingCurrency: userCurrency.value,
-    exchangeRates: goalsStore.exchangeRates
+    exchangeRates: goalsStore.exchangeRates,
+    cardBilling: cardBillingFor.value
   })
 })
 
@@ -808,7 +812,8 @@ const realMonthTotals = computed(() => {
       if (t.date.getMonth() !== now.getMonth() || t.date.getFullYear() !== now.getFullYear()) return
       income += goalsStore.convertToPrimary(Math.abs(t.amount), t.currency, userCurrency.value)
     } else if (t.type === 'expense') {
-      expense += goalsStore.convertToPrimary(expenseAmountForDate(t, now), t.currency, userCurrency.value)
+      const amount = expenseAmountForDate(t, now, cardBillingFor.value(t.accountId))
+      expense += goalsStore.convertToPrimary(amount, t.currency, userCurrency.value)
     }
   })
   return { income, expense }

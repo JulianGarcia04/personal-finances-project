@@ -5,6 +5,7 @@ import {
   reportBudgetScope
 } from './budgetReporting.ts'
 import { DEFAULT_MONTHLY_BUDGET_ID, type BudgetExpenseTransaction } from './budgets.ts'
+import { createCardBillingLookup } from './installments.ts'
 
 const january = { year: 2026, month: 0 }
 
@@ -97,6 +98,27 @@ test('keeps event principal, monthly installments, and the all-budget estimate d
   }
 
   assert.equal(purchase.amount, -900, 'reporting must not rewrite the original ledger principal')
+})
+
+test('reports billed card installments in their payment month for the scope, its categories, and the global estimate', () => {
+  const cardBilling = createCardBillingLookup([{ id: 'visa', type: 'credit', statementClosingDay: 25, paymentDueDay: 10 }])
+  // Closing 25, due 10: a 28 Dec purchase closes on 25 Jan and is paid in February.
+  const transactions = [
+    expense({ amount: -90, date: new Date(2025, 11, 28), accountId: 'visa', budgetId: 'monthly' }),
+    expense({ amount: -10, date: new Date(2026, 0, 10), accountId: 'cash', budgetId: 'monthly' })
+  ]
+  const february = { year: 2026, month: 1 }
+
+  const januaryReport = reportBudgetScope(scopeInput({ transactions, cardBilling }))
+  assert.equal(januaryReport.monthlyAllocation.amount, 10)
+  const februaryReport = reportBudgetScope(scopeInput({ transactions, cardBilling, period: february }))
+  assert.equal(februaryReport.monthlyAllocation.amount, 90)
+  assert.equal(februaryReport.categories.food.monthlyAllocation.amount, 90)
+  assert.equal(reportAllBudgetsEstimatedMonthly({
+    transactions, period: february, reportingCurrency: 'USD', exchangeRates: {}, cardBilling
+  }).amount, 90)
+  // Without card billing the December purchase keeps its calendar month.
+  assert.equal(reportBudgetScope(scopeInput({ transactions, period: february })).monthlyAllocation.amount, 0)
 })
 
 test('counts event principal independently of the selected calendar month', () => {

@@ -12,7 +12,7 @@ import {
   SettlementAccountRecord,
   SettlementLegRecord
 } from '@/lib/mirror'
-import { expenseAmountForDate, getInstallmentCount } from '@/lib/installments'
+import { createCardBillingLookup, expenseAmountForDate, getInstallmentCount } from '@/lib/installments'
 import { parseDateOnly, toDateValue } from '@/lib/dates'
 import { createExpenseBudgetAssigner, selectBudgetExpenses } from '@/lib/transactionClassification'
 import { 
@@ -326,12 +326,14 @@ export const useTransactionsStore = defineStore('transactions', {
     },
     // Gastos del mes actual agrupados por categoría (para presupuestos).
     // Acepta un convertidor opcional (amount, currency) => amount en moneda principal.
+    // Billed card installments count in the month their statement is paid.
     spendingByCategoryThisMonth: (state) => (convert?: (amount: number, currency: string) => number) => {
       const now = new Date()
+      const billingFor = createCardBillingLookup(useAccountsStore().accounts)
       const result: Record<string, number> = {}
       state.transactions.forEach(t => {
         if (t.type !== 'expense' || !t.categoryId) return
-        const amount = expenseAmountForDate(t, now)
+        const amount = expenseAmountForDate(t, now, billingFor(t.accountId))
         if (amount === 0) return
         const convertedAmount = convert ? convert(amount, t.currency) : amount
         result[t.categoryId] = (result[t.categoryId] || 0) + convertedAmount

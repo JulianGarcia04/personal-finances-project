@@ -5,6 +5,7 @@ import {
   resolveBudgetId,
   type BudgetExpenseTransaction
 } from './budgets.ts'
+import type { CardBillingLookup } from './installments.ts'
 
 /** Calendar month using the same zero-based month convention as `Date#getMonth`. */
 export interface BudgetCalendarPeriod {
@@ -78,6 +79,8 @@ export interface BudgetScopeReportInput {
   reportingCurrency: string
   /** Current manual rates: source currency -> reporting currency. */
   exchangeRates: Readonly<Record<string, number>>
+  /** Card billing days by account; billed card installments count in their payment month. */
+  cardBilling?: CardBillingLookup
 }
 
 export interface AllBudgetsEstimateInput {
@@ -86,6 +89,8 @@ export interface AllBudgetsEstimateInput {
   reportingCurrency: string
   /** Current manual rates: source currency -> reporting currency. */
   exchangeRates: Readonly<Record<string, number>>
+  /** Card billing days by account; billed card installments count in their payment month. */
+  cardBilling?: CardBillingLookup
 }
 
 interface RateDiagnostics {
@@ -192,7 +197,7 @@ const setOwn = <Value>(record: Record<string, Value>, key: string, value: Value)
  * disable comparisons instead of applying a 1:1 fallback.
  */
 export const reportBudgetScope = (input: BudgetScopeReportInput): BudgetScopeReport => {
-  const { scope, transactions, period, reportingCurrency, exchangeRates } = input
+  const { scope, transactions, period, reportingCurrency, exchangeRates, cardBilling } = input
   const monthlyDiagnostics = createDiagnostics()
   const monthlySummary = monthlyBudgetAllocation(
     transactions,
@@ -205,7 +210,8 @@ export const reportBudgetScope = (input: BudgetScopeReportInput): BudgetScopeRep
       reportingCurrency,
       exchangeRates,
       monthlyDiagnostics
-    )
+    ),
+    cardBilling
   )
   const monthlyAllocation = moneyReport(monthlySummary.total, reportingCurrency, monthlyDiagnostics)
 
@@ -259,7 +265,8 @@ export const reportBudgetScope = (input: BudgetScopeReportInput): BudgetScopeRep
         reportingCurrency,
         exchangeRates,
         categoryDiagnostics
-      )
+      ),
+      cardBilling
     )
     const monthlyCategoryAllocation = moneyReport(categorySummary.total, reportingCurrency, categoryDiagnostics)
     let eventCategoryPrincipal: BudgetAmountReport | null = null
@@ -318,7 +325,7 @@ export const reportBudgetScope = (input: BudgetScopeReportInput): BudgetScopeRep
 export const reportAllBudgetsEstimatedMonthly = (
   input: AllBudgetsEstimateInput
 ): BudgetAmountReport => {
-  const { transactions, period, reportingCurrency, exchangeRates } = input
+  const { transactions, period, reportingCurrency, exchangeRates, cardBilling } = input
   const diagnostics = createDiagnostics()
   const partialTotal = allBudgetsEstimatedMonthlyTotal(
     transactions,
@@ -330,7 +337,8 @@ export const reportAllBudgetsEstimatedMonthly = (
       reportingCurrency,
       exchangeRates,
       diagnostics
-    )
+    ),
+    cardBilling
   )
 
   return moneyReport(partialTotal, reportingCurrency, diagnostics)

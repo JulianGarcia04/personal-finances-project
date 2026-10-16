@@ -483,7 +483,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useGoalsStore } from '@/stores/goalsStore'
 import { Account, AccountType, Transaction } from '@/types'
-import { expenseAmountForMonth } from '@/lib/installments'
+import { createCardBillingLookup, expenseAmountForMonth } from '@/lib/installments'
 import { getTransactionDisplay } from '@/lib/transactionDisplay'
 import { splitMoney } from '@/lib/money'
 import { getAccountDisplayLabel, groupAccountsByPocket } from '@/lib/pockets'
@@ -497,6 +497,7 @@ import {
   committedCardPayments,
   spendableUntilMonthEnd,
   projectMonthEndExpenses,
+  splitMonthEndExpenses,
   cardDebtSummary,
   utilizationLevel,
   isSpendableAccount,
@@ -575,13 +576,18 @@ watch(
 // Moneda principal: la elegida por el usuario en Settings
 const primaryCurrency = computed(() => settingsStore.currency || 'COP')
 
+// Billing days per credit card: billed card installments count in the month the
+// statement is paid. "Compras registradas" and the card statement widget do not use it.
+const cardBillingFor = computed(() => createCardBillingLookup(accountsStore.accounts))
+
 const allBudgetsEstimatedMonthly = computed(() => {
   const now = new Date()
   return reportAllBudgetsEstimatedMonthly({
     transactions: transactionsStore.transactions,
     period: { year: now.getFullYear(), month: now.getMonth() },
     reportingCurrency: primaryCurrency.value,
-    exchangeRates: goalsStore.exchangeRates
+    exchangeRates: goalsStore.exchangeRates,
+    cardBilling: cardBillingFor.value
   })
 })
 
@@ -617,9 +623,10 @@ const getMoMData = (type: 'income' | 'expense') => {
   transactionsStore.transactions.forEach(t => {
     if (t.type !== type) return
     if (type === 'expense') {
-      current += convert(expenseAmountForMonth(t, currentPeriod.year, currentPeriod.month), t.currency)
-      toDate += convert(expenseAmountInPeriod(t, currentPeriod), t.currency)
-      previous += convert(expenseAmountInPeriod(t, previousPeriod), t.currency)
+      const billing = cardBillingFor.value(t.accountId)
+      current += convert(expenseAmountForMonth(t, currentPeriod.year, currentPeriod.month, billing), t.currency)
+      toDate += convert(expenseAmountInPeriod(t, currentPeriod, billing), t.currency)
+      previous += convert(expenseAmountInPeriod(t, previousPeriod, billing), t.currency)
       return
     }
     const amount = convert(Math.abs(t.amount), t.currency)
@@ -664,7 +671,7 @@ const liquidityDays = computed(() => {
   const history = previousFullMonths(now, 3).map(({ year, month, days }) => ({
     days,
     expenses: transactionsStore.transactions.reduce(
-      (sum, t) => sum + convert(expenseAmountForMonth(t, year, month), t.currency),
+      (sum, t) => sum + convert(expenseAmountForMonth(t, year, month, cardBillingFor.value(t.accountId)), t.currency),
       0
     )
   }))
@@ -700,21 +707,17 @@ const spendable = computed(() =>
 )
 
 // Proyección de cierre: purchases made this month at the current daily pace plus
-// installments of earlier purchases already imputed to this month. `budgeted` only
-// counts categories with a budget, so it can be compared with the budget total.
+// amounts of earlier purchases already imputed to this month (later installments and
+// card statements due this month), added once. `budgeted` only counts categories with
+// a budget, so it can be compared with the budget total.
 const monthEndProjection = computed(() => {
   const now = new Date()
-  const year = now.getFullYear(), month = now.getMonth()
   const budgets = goalsStore.categoryBudgets
-  const all = { pace: 0, committed: 0 }
-  const budgeted = { pace: 0, committed: 0 }
-  transactionsStore.transactions.forEach(t => {
-    if (t.type !== 'expense') return
-    const amount = convert(expenseAmountForMonth(t, year, month), t.currency)
-    if (amount === 0) return
-    const key = t.date.getFullYear() === year && t.date.getMonth() === month ? 'pace' : 'committed'
-    all[key] += amount
-    if (t.categoryId && budgets[t.categoryId] !== undefined) budgeted[key] += amount
+  const options = { convert, billingFor: cardBillingFor.value }
+  const all = splitMonthEndExpenses(transactionsStore.transactions, now, options)
+  const budgeted = splitMonthEndExpenses(transactionsStore.transactions, now, {
+    ...options,
+    include: t => Boolean(t.categoryId && budgets[t.categoryId] !== undefined)
   })
   return {
     total: projectMonthEndExpenses({ paceExpensesToDate: all.pace, committedExpenses: all.committed, now }),
@@ -780,7 +783,7 @@ const memberExpenses = computed(() => {
   
   transactionsStore.transactions.forEach(t => {
     if (t.type === 'expense') {
-      const amount = expenseAmountForMonth(t, thisYear, thisMonth)
+      const amount = expenseAmountForMonth(t, thisYear, thisMonth, cardBillingFor.value(t.accountId))
       if (amount === 0) return
       const uid = t.userId || authStore.user?.uid || 'unknown'
       if (!totals[uid]) totals[uid] = 0
@@ -829,7 +832,8 @@ const budgetSummary = computed(() => {
     transactions: transactionsStore.transactions,
     period: { year: now.getFullYear(), month: now.getMonth() },
     reportingCurrency: primaryCurrency.value,
-    exchangeRates: goalsStore.exchangeRates
+    exchangeRates: goalsStore.exchangeRates,
+    cardBilling: cardBillingFor.value
   })
 
   const comparisonWarnings = new Set<string>()
@@ -932,7 +936,7 @@ const expensesByCategory = computed(() => {
     const cat = getCategory(t.categoryId)
     const name = cat ? cat.name : 'Otros'
     if (!groups[name]) groups[name] = 0
-    groups[name] += convert(expenseAmountForMonth(t, now.getFullYear(), now.getMonth()), t.currency)
+    groups[name] += convert(expenseAmountForMonth(t, now.getFullYear(), now.getMonth(), cardBillingFor.value(t.accountId)), t.currency)
   })
   return groups
 })
@@ -1022,8 +1026,9 @@ const renderCharts = () => {
         const match = last6Months.find(m => m.month === t.date.getMonth() && m.year === t.date.getFullYear())
         if (match) match.income += convert(Math.abs(t.amount), t.currency)
       } else if (t.type === 'expense') {
+        const billing = cardBillingFor.value(t.accountId)
         last6Months.forEach(month => {
-          month.expense += convert(expenseAmountForMonth(t, month.year, month.month), t.currency)
+          month.expense += convert(expenseAmountForMonth(t, month.year, month.month, billing), t.currency)
         })
       }
     })

@@ -1,4 +1,4 @@
-import { expenseAmountForMonth, type InstallmentTransaction } from './installments.ts'
+import { expenseAmountForMonth, type CardBillingLookup, type InstallmentTransaction } from './installments.ts'
 
 export const DEFAULT_MONTHLY_BUDGET_ID = 'default-monthly'
 
@@ -47,13 +47,14 @@ export const monthlyBudgetAllocation = (
   budgetId: string,
   year: number,
   month: number,
-  convert?: BudgetCurrencyConverter
+  convert?: BudgetCurrencyConverter,
+  billingFor?: CardBillingLookup
 ): BudgetAllocationSummary => {
   const summary = emptySummary()
 
   for (const transaction of transactions) {
     if (transaction.type !== 'expense' || resolveBudgetId(transaction.budgetId) !== budgetId) continue
-    const amount = expenseAmountForMonth(transaction, year, month)
+    const amount = expenseAmountForMonth(transaction, year, month, billingFor?.(transaction.accountId))
     if (amount === 0) continue
     addExpenseAmount(summary, transaction, amount, convert)
   }
@@ -82,13 +83,14 @@ export const allBudgetsEstimatedMonthlyTotal = (
   transactions: readonly BudgetExpenseTransaction[],
   year: number,
   month: number,
-  convert?: BudgetCurrencyConverter
+  convert?: BudgetCurrencyConverter,
+  billingFor?: CardBillingLookup
 ): number => {
   const summary = emptySummary()
 
   for (const transaction of transactions) {
     if (transaction.type !== 'expense') continue
-    const amount = expenseAmountForMonth(transaction, year, month)
+    const amount = expenseAmountForMonth(transaction, year, month, billingFor?.(transaction.accountId))
     if (amount === 0) continue
     addExpenseAmount(summary, transaction, amount, convert)
   }
