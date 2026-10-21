@@ -213,7 +213,9 @@ export function monthlyIncomeTotal(
   let total = 0;
   for (const tx of transactions) {
     if (tx.type !== "income") continue;
-    const local = zonedYearMonth(storedDateValue(tx.date, options.timeZone), options.timeZone);
+    const date = storedDateValue(tx.date, options.timeZone);
+    if (Number.isNaN(date.getTime())) continue; // malformed date: skip, like expenseAmountForMonth
+    const local = zonedYearMonth(date, options.timeZone);
     if (local.year !== month.year || local.month !== month.month) continue;
     const amount = Math.abs(Number(tx.amount) || 0);
     if (amount === 0) continue;

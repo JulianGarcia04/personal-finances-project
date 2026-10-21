@@ -317,3 +317,8 @@ test("countsTowardMonthlySpend accepts any budget's expense with a share in the 
   assert.equal(countsTowardMonthlySpend(income(10), OCTOBER, options), false);
   assert.equal(countsTowardMonthlySpend(undefined, OCTOBER, options), false);
 });
+
+test("monthly income skips income with a missing or unparseable date instead of throwing", () => {
+  const txs = [income(1_000), income(999, { date: undefined }), income(999, { date: "garbage" })];
+  assert.equal(monthlyIncomeTotal(txs, OCTOBER, COP_OPTIONS), 1_000);
+});
