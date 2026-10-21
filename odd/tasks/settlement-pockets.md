@@ -31,3 +31,13 @@ GREEN: `node tests/pockets.imports.emulators.mjs` 53/53; `pnpm test` 223/223; `p
 ### L5 — Independent verification and correction
 Verifier: no blockers; S1–S6 PASS with 21 extra emulator probes (authorization, exact deltas, cents, rejected-command invariance, later client pocket operations, pocket-free paths kept on the client). One correction batch: the server now refuses bridges mirrored to their own workspace (a crafted setup where `to === from` dropped a delta) and the delete rejection message names the real reason. RED 53 pass / 1 fail on the new test; GREEN emulators 54/54, `pnpm test:functions` 171/171. Commit `1ea3d92`.
 Follow-ups (pre-existing at baseline, not fixed): deleting an already-reversed settlement reverts balances twice and deleting a reversal pair leaves `reversedBy` on the originals; the client path has the same same-workspace-mirror defect for accounts without pockets. Advisories kept: server rounds amounts to cents (client path does not); server does not compare `mirror.sourceAccountId`; existence of IDs is distinguishable before the membership check (random IDs). Next: push, merge and deploy (`functions:bridgeSettlement` + hosting) await the user's decision.
+
+### L6 — Delivery authorization and concurrency question (verbatim, 2026-10-21)
+si, en teoria deberia funcionar como antes de hacer deploy lo de los bolsillos entonces no debería haber preocupación de nuevas funcionalidades
+
+esta función cubre todo lo relacionado con que en caso de varias personas del mismo workspace ejecute la función y que los datos sean indepontentes y todo eso ?
+
+puede haber esa situación ?
+
+### L7 — Concurrency evidence and delivery
+Each server operation runs in one Firestore transaction; duplicates are refused by state, not by request keys: a repeated settle fails the `expectedBridgeBalance` check, a repeated reverse finds `reversedBy` set, a repeated delete finds the leg gone. Added an emulator test with three concurrent identical settlements (two Admin calls plus the callable) and two concurrent reversals: exactly one of each applied, balances moved once, one reversal pair recorded. Emulators 55/55. Commit `8d4b050`. `main` fast-forwarded to `8d4b050` (no push requested). `firebase deploy --only functions:bridgeSettlement,hosting --project vault-41b34` exited 0: created `bridgeSettlement(us-central1)` (Node.js 22, 2nd Gen) and released hosting (https://vault-41b34.web.app). Firestore rules unchanged and not redeployed. Not yet exercised against production data.
