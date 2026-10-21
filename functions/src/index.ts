@@ -54,7 +54,8 @@ import {
   spendFieldsChanged
 } from "./budgetAlerts";
 import { createGmailSender, SMTP_PASS, SMTP_USER, smtpConfigFromEnvironment, uniqueRecipients } from "./mailer";
-import { renderBudgetAlertEmail } from "./templates/budgetAlert";
+import { BudgetAlertEmailInput, renderBudgetAlertEmail } from "./templates/budgetAlert";
+import { buildBudgetAlertPush, loadPushTokens, memberUidsOf, planBudgetAlertDelivery, sendPushToTokens } from "./push";
 export { importPocketStatement } from "./pocketImports";
 
 const corsHandler = cors({ origin: true });
@@ -299,12 +300,16 @@ export const syncTransactionEmbedding = onDocumentWritten(
   }
 );
 
-// 3b. Emails workspace members once per (workspace, category, month, threshold) when a
+// 3b. Alerts workspace members (email + FCM web push) once per (workspace, category, month, threshold) when a
 // category's month-to-date spend reaches 80% or 100% of workspaces/{id}.categoryBudgets.
 // Month bucketing and the primary currency come from the workspace owner's profile
 // (users/{ownerId}.country -> time zone, .currency -> primary currency), the same sources the
 // agent uses for a user (timeZoneForCountry / resolvePrimaryCurrency), so every member gets
 // one shared, deterministic evaluation. Only the current local month is evaluated.
+// Delivery order: email first, push only after the email outcome is decided. An email
+// failure releases the claim and rethrows (platform retry) before any push goes out, so a
+// retry never duplicates a push. Push is best-effort: it never throws, never releases the
+// claim and is not retried (trade-off: if email fails on every retry, no push is sent).
 export const notifyBudgetThreshold = onDocumentWritten(
   { document: "transactions/{transactionId}", retry: true, secrets: [SMTP_USER, SMTP_PASS] },
   async (event) => {
@@ -337,10 +342,11 @@ export const notifyBudgetThreshold = onDocumentWritten(
     if (alertCategoryFor(after, month, { timeZone }) !== categoryId) return;
 
     const smtp = smtpConfigFromEnvironment();
-    if (!smtp) {
-      console.warn("SMTP_USER / SMTP_PASS are not configured; budget alert email skipped.");
-      return;
-    }
+    const memberUids = memberUidsOf(workspace.members);
+    const pushTokens = await loadPushTokens(memberUids, db).catch(() => []);
+    const delivery = planBudgetAlertDelivery({ smtpConfigured: smtp !== null, pushTokenCount: pushTokens.length });
+    if (!smtp) console.warn("SMTP_USER / SMTP_PASS are not configured; budget alert email skipped.");
+    if (!delivery.claim) return;
 
     const txSnap = await db.collection("transactions")
       .where("workspaceId", "==", workspaceId)
@@ -375,17 +381,13 @@ export const notifyBudgetThreshold = onDocumentWritten(
     });
     if (!claim) return;
 
+    let alert: BudgetAlertEmailInput;
     try {
-      const recipients = await resolveMemberEmails(workspace.members);
-      if (recipients.length === 0) {
-        console.warn(`Budget alert for workspace ${workspaceId} has no recipient emails.`);
-        return;
-      }
       const categorySnap = await db.collection("categories").doc(categoryId).get();
       const categoryName = typeof categorySnap.get("name") === "string" && categorySnap.get("name")
         ? categorySnap.get("name") as string
         : categoryId;
-      const email = renderBudgetAlertEmail({
+      alert = {
         threshold: claim.threshold,
         categoryName,
         workspaceName: typeof workspace.name === "string" ? workspace.name : "",
@@ -394,8 +396,15 @@ export const notifyBudgetThreshold = onDocumentWritten(
         currency: primaryCurrency,
         monthLabel: new Intl.DateTimeFormat("es", { month: "long", year: "numeric", timeZone: "UTC" })
           .format(Date.UTC(month.year, month.month, 15))
-      });
-      await createGmailSender(smtp)({ to: recipients, ...email });
+      };
+      if (smtp) {
+        const recipients = await resolveMemberEmails(memberUids);
+        if (recipients.length === 0) {
+          console.warn(`Budget alert for workspace ${workspaceId} has no recipient emails.`);
+        } else {
+          await createGmailSender(smtp)({ to: recipients, ...renderBudgetAlertEmail(alert) });
+        }
+      }
     } catch (error) {
       // Release the claim so the platform retry can send it again.
       await ledgerRef.update({ notified: FieldValue.arrayRemove(...claim.claim) }).catch((releaseError) => {
@@ -404,12 +413,21 @@ export const notifyBudgetThreshold = onDocumentWritten(
       console.error(`Budget alert email for ${ledgerRef.id} failed.`);
       throw error;
     }
+
+    if (!delivery.push) return;
+    try {
+      const payload = buildBudgetAlertPush({ ...alert, workspaceId, categoryId, appUrl: process.env.APP_URL });
+      const result = await sendPushToTokens(pushTokens, payload, admin.messaging());
+      console.log(`Budget alert push for ${ledgerRef.id}: tokens=${result.tokens} sent=${result.sent} failed=${result.failed} removed=${result.removed}`);
+    } catch (error) {
+      // Best-effort channel: never undo the claim or fail the trigger.
+      console.error(`Budget alert push for ${ledgerRef.id} failed: ${(error as { code?: string })?.code ?? "unknown error"}`);
+    }
   }
 );
 
 /** Emails of workspace members: users/{uid}.email, falling back to Firebase Auth. */
-async function resolveMemberEmails(members: unknown): Promise<string[]> {
-  const uids = Array.isArray(members) ? members.filter((uid): uid is string => typeof uid === "string" && uid.length > 0) : [];
+async function resolveMemberEmails(uids: readonly string[]): Promise<string[]> {
   const emails = await Promise.all(uids.map(async (uid) => {
     const profile = await db.collection("users").doc(uid).get();
     const stored = profile.get("email");

@@ -40,7 +40,20 @@ export function formatMoney(amount: number, currency: string): string {
   }
 }
 
-export function renderBudgetAlertEmail(input: BudgetAlertEmailInput): RenderedEmail {
+/** Copy shared by the budget alert email and push notification. */
+export interface BudgetAlertCopy {
+  reached: boolean;
+  percent: number;
+  remaining: number;
+  overspend: number;
+  /** Workspace and month, e.g. "Casa · octubre de 2026". */
+  scope: string;
+  subject: string;
+  headline: string;
+  money: (value: number) => string;
+}
+
+export function budgetAlertCopy(input: BudgetAlertEmailInput): BudgetAlertCopy {
   const category = oneLine(input.categoryName) || "Sin categoría";
   const workspace = oneLine(input.workspaceName);
   const percent = Math.round((input.spent / input.budget) * 100);
@@ -48,17 +61,21 @@ export function renderBudgetAlertEmail(input: BudgetAlertEmailInput): RenderedEm
   const overspend = Math.max(input.spent - input.budget, 0);
   const reached = input.threshold === 100;
   const money = (value: number) => formatMoney(value, input.currency);
-
   const subject = reached
     ? `Ya alcanzaste el tope de ${category}`
     : `Estás cerca del tope de ${category} (${percent} %)`;
   const headline = reached
     ? `Ya alcanzaste el tope de tu presupuesto de ${category}.`
     : `Estás cerca del tope de tu presupuesto de ${category}.`;
+  const scope = workspace ? `${workspace} · ${input.monthLabel}` : input.monthLabel;
+  return { reached, percent, remaining, overspend, scope, subject, headline, money };
+}
+
+export function renderBudgetAlertEmail(input: BudgetAlertEmailInput): RenderedEmail {
+  const { reached, percent, remaining, overspend, scope, subject, headline, money } = budgetAlertCopy(input);
   const advice = reached
     ? "Cualquier gasto adicional en esta categoría superará lo que planeaste para este mes."
     : "Revisa tus próximos gastos en esta categoría para no superar lo que planeaste este mes.";
-  const scope = workspace ? `${workspace} · ${input.monthLabel}` : input.monthLabel;
 
   const rows: Array<[string, string]> = [
     ["Gastado", money(input.spent)],
