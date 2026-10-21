@@ -67,3 +67,9 @@ Branch `feat/budget-alerts-push` (from main 08ba2be). Runner: `pnpm --filter fun
 ## Log
 - L1 (2026-10-20) "bueno vamos a hacerlo por correo con mi correo personal pero también vamos a usar cloud messaging"
 - Route: parallel writers (two independent units, disjoint edit surfaces, contract = token doc path/shape fixed in S2).
+- Commits: P2 `5d004d4` (server push), P1 `4811b88` (client push + rules, App.vue foreground listener wired by parent), docs `c5c6707`.
+- Seam check (parent): vue-tsc OK, vite build OK, functions 125/125. Rules 37/37 (writer + verifier).
+- P3 independent verify (Risk item 2): S1-S5 PASS; no security blockers. Blocker B1 (shared browser: push token cached per browser not per user, logout kept registration) fixed in next commit: storage scoped to uid, logout unregisters device. No frontend unit runner -> no RED; checked by vue-tsc + build.
+- Advisories accepted/not done: A1 no per-user token cap; A2 revoked permission leaves token doc until FCM prunes it; A3 click focuses open tab without navigating to /goals; A4 APP_URL origin must match hosting origin; A5 lock screen shows amounts; A6 SW pins gstatic firebase 12.14.0.
+- Behavior notes: email first then push (no duplicate push on retry; if email always fails, no push). Threshold claimed for push-only (no SMTP) won't email later that month.
+- Next step: user decides merge/push/deploy; user generates VAPID key + Gmail app password.
