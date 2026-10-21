@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test": "node --test src/**/*.test.ts",
+    "test": "node --test src/**/*.test.ts tests/runner/*.test.ts",
+    "test:budgets:security": "pnpm exec firebase emulators:exec --only firestore --project demo-vault-b2 --config firebase.budgets.test.json \"pnpm exec node --test --test-concurrency=1 --test-timeout=15000 tests/firestore/*.test.ts\"",
     "test:functions": "pnpm --filter functions test",
     "test:emulators": "pnpm --filter functions build && node tests/pockets.imports.emulators.mjs && pnpm test:emulators:rules && node tests/functions.http.emulators.mjs",
     "test:emulators:rules": "firebase emulators:exec --project demo-vault-access --only auth,firestore --config tests/firebase.pockets.json \"node --test tests/access-control.rules.test.mjs tests/embeddings.emulator.test.mjs tests/agent.tools.emulator.test.mjs\"",

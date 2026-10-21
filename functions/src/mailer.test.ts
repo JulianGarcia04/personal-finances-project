@@ -83,3 +83,27 @@ test("budget alert email falls back to plain numbers for an unknown currency cod
   const email = renderBudgetAlertEmail({ ...baseAlert, threshold: 80, currency: "NOPE!" });
   assert.match(email.text, /850000(\.00)? NOPE!/);
 });
+
+test("budget alert email for the default budget does not name a budget", () => {
+  const email = renderBudgetAlertEmail({ ...baseAlert, threshold: 80 });
+  assert.doesNotMatch(email.text, /presupuesto «/);
+  assert.match(email.text, /Casa · octubre de 2026/);
+});
+
+test("budget alert email names an additional monthly budget", () => {
+  const email = renderBudgetAlertEmail({ ...baseAlert, threshold: 100, spent: 1_000_000, budgetName: "Casa <nueva>" });
+  assert.match(email.subject, /Mercado \(Casa <nueva>\)/);
+  assert.match(email.text, /presupuesto «Casa <nueva>»/);
+  assert.match(email.text, /Casa · Casa <nueva> · octubre de 2026/);
+  assert.match(email.html, /Casa &lt;nueva&gt;/);
+  assert.doesNotMatch(email.html, /<nueva>/);
+});
+
+test("budget alert email for an event budget has no month and no monthly advice", () => {
+  const email = renderBudgetAlertEmail({
+    ...baseAlert, threshold: 80, budgetName: "Viaje", eventBudget: true, monthLabel: undefined
+  });
+  assert.match(email.text, /presupuesto «Viaje»/);
+  assert.match(email.text, /Casa · Viaje\n/);
+  assert.doesNotMatch(email.text, /octubre|este mes/);
+});

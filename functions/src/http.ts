@@ -212,19 +212,79 @@ export function expensePeriod(now: Date, monthsBack: number, timeZone: string): 
   return { start: zonedMonthStart(months[0], timeZone), months };
 }
 
-function toDate(value: any): Date {
-  return value?.toDate ? value.toDate() : new Date(value);
+const DATE_ONLY_KEY = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * Stored date read-back: Timestamps as stored; legacy date-only strings are that calendar
+ * day at local noon in `timeZone` (the server clock runs in UTC, so `new Date("YYYY-MM-DD")`
+ * would land on the previous evening west of UTC). Anything else keeps the standard parsing.
+ */
+export function storedDateValue(value: any, timeZone: string = DEFAULT_TIME_ZONE): Date {
+  if (value?.toDate) return value.toDate();
+  const match = typeof value === "string" ? DATE_ONLY_KEY.exec(value) : null;
+  if (match) {
+    const [year, month, day] = [Number(match[1]), Number(match[2]) - 1, Number(match[3])];
+    const probe = new Date(Date.UTC(year, month, day));
+    if (probe.getUTCFullYear() === year && probe.getUTCMonth() === month && probe.getUTCDate() === day) {
+      return zonedWallClockToInstant(year, month, day, 12, timeZone);
+    }
+  }
+  return new Date(value);
 }
 
-/** Share of an expense (installments split to the cent) that falls in the given local month. */
-export function expenseAmountForMonth(data: Record<string, any>, year: number, month: number, timeZone: string): number {
+/** Billing days of a regular credit card (port of src/lib/installments.ts CardBilling). */
+export interface CardBilling {
+  statementClosingDay: number;
+  paymentDueDay: number;
+}
+
+const isBillingDay = (value: unknown): value is number =>
+  Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 31;
+
+/**
+ * Port of cardBillingOf: only credit cards with both days configured bill by statement;
+ * mirror bridge accounts and every other account keep calendar-month imputation.
+ */
+export function cardBillingOf(account: Record<string, any> | null | undefined): CardBilling | null {
+  if (!account || account.type !== "credit" || account.mirror) return null;
+  const { statementClosingDay, paymentDueDay } = account;
+  if (!isBillingDay(statementClosingDay) || !isBillingDay(paymentDueDay)) return null;
+  return { statementClosingDay, paymentDueDay };
+}
+
+/**
+ * Port of getPaymentBucket for a local calendar day (0-based month): year * 12 + month in
+ * which the statement containing that day is paid. A day after the closing day belongs to
+ * next month's closing; the payment is in the closing month when the due day comes after
+ * the closing day, otherwise the month after it.
+ */
+export function paymentMonthIndex(year: number, month: number, day: number, billing: CardBilling): number {
+  const closingIndex = year * 12 + month + (day > billing.statementClosingDay ? 1 : 0);
+  return closingIndex + (billing.paymentDueDay > billing.statementClosingDay ? 0 : 1);
+}
+
+/**
+ * Share of an expense (installments split to the cent) that falls in the given local month.
+ * With card `billing`, installment i falls in the statement payment month + i; otherwise in
+ * the purchase month + i.
+ */
+export function expenseAmountForMonth(
+  data: Record<string, any>,
+  year: number,
+  month: number,
+  timeZone: string,
+  billing?: CardBilling | null
+): number {
   if (data.type !== "expense") return 0;
-  const transactionDate = toDate(data.date);
+  const transactionDate = storedDateValue(data.date, timeZone);
   if (Number.isNaN(transactionDate.getTime())) return 0;
 
   const installments = Number.isInteger(data.installments) && data.installments > 0 ? data.installments : 1;
-  const start = zonedYearMonth(transactionDate, timeZone);
-  const monthIndex = year * 12 + month - (start.year * 12 + start.month);
+  const local = zonedParts(transactionDate, timeZone);
+  const firstMonth = billing
+    ? paymentMonthIndex(local.year, local.month - 1, local.day, billing)
+    : local.year * 12 + local.month - 1;
+  const monthIndex = year * 12 + month - firstMonth;
   if (monthIndex < 0 || monthIndex >= installments) return 0;
 
   const totalCents = Math.round(Math.abs(Number(data.amount) || 0) * 100);

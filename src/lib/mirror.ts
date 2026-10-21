@@ -7,6 +7,8 @@
 //
 // Sin dependencias (ni Firebase ni Pinia) para poder verificar los signos aparte.
 
+import { parseDateOnly } from './dates.ts'
+
 export interface MirrorDeltas {
   bridge: number // cuenta puente, en el workspace del gasto
   source: number // cuenta real que puso la plata, en el workspace espejo
@@ -161,7 +163,8 @@ const invalidSettlement = (reason: string): never => {
 
 const dateInMillis = (value: unknown): number => {
   if (value instanceof Date) return value.getTime()
-  if (typeof value === 'string' || typeof value === 'number') return new Date(value).getTime()
+  if (typeof value === 'string') return parseDateOnly(value).getTime()
+  if (typeof value === 'number') return new Date(value).getTime()
   if (value && typeof value === 'object' && 'toDate' in value && typeof value.toDate === 'function') {
     return value.toDate().getTime()
   }

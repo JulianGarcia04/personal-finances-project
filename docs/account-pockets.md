@@ -14,6 +14,8 @@ An opening allocation is a neutral transfer, not income or expense. Creating a z
 
 Use **Add money** or **Withdraw** on a pocket to open a preselected transfer. Transfers between a pocket and its parent, or other eligible same-currency accounts, are neutral movements. Ordinary pocket transactions also support income, expenses, imports, edits, and reversals; real income and expenses change wealth normally. Imported records use the same atomic statement-import path as other accounts.
 
+A parent checking or savings account can still transfer its available balance to a credit card, even when it has pockets. Record a card payment as a **Transfer** from the bank account to the card: the bank balance decreases, card debt decreases, and reserved pocket balances stay unchanged. Editing or deleting the payment adjusts or reverses both balances together without creating income or another expense. Direct transfers between a pocket and a credit card remain unavailable; move pocket funds back to the parent account first.
+
 Transaction history displays a bank-qualified name such as `Main bank › Travel`. Account selectors and transaction filters use the same label so pockets with identical names remain distinguishable.
 
 ## Currency, history, and deletion

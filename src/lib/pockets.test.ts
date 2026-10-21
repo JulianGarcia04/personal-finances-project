@@ -168,6 +168,22 @@ test('related transfer endpoints require eligible accounts in one workspace and 
   assert.equal(pocketUi.canTransferBetweenAccounts(otherBank, credit, accounts), true, 'ordinary transfers keep legacy eligibility')
 })
 
+test('bank accounts with pockets retain ordinary credit-card payment eligibility', () => {
+  const bank = account({ id: 'bank', type: 'savings', balance: 700, childAccountIds: ['pocket'] })
+  const pocket = account({ id: 'pocket', type: 'savings', parentAccountId: bank.id, balance: 300 })
+  const credit = account({ id: 'credit', type: 'credit', balance: -500, limit: 2_000 })
+  const accounts = [bank, pocket, credit]
+  const before = structuredClone(accounts)
+
+  assert.equal(pocketUi.canTransferBetweenAccounts(bank, credit, accounts), true)
+  assert.equal(pocketUi.canTransferBetweenAccounts(credit, bank, accounts), true)
+  assert.equal(pocketUi.canTransferBetweenAccounts(pocket, credit, accounts), false)
+  assert.equal(pocketUi.canTransferBetweenAccounts(credit, pocket, accounts), false)
+  assert.equal(pocketUi.canTransferBetweenAccounts(bank, { ...credit, currency: 'USD' }, accounts), false)
+  assert.equal(pocketUi.canTransferBetweenAccounts(bank, { ...credit, workspaceId: 'other' }, accounts), false)
+  assert.deepEqual(accounts, before)
+})
+
 test('display totals exclude malformed foreign or unregistered child records', () => {
   const bank = account({ id: 'bank', balance: 700, childAccountIds: ['valid'] })
   const valid = account({ id: 'valid', type: 'savings', parentAccountId: 'bank', balance: 300 })

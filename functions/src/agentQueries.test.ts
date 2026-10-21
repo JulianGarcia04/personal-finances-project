@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  billingLookbackStart,
   buildBudgetStatus,
+  cardBillingByAccount,
   computeNetWorth,
   convertToPrimary,
   monthlyAverages,
@@ -240,4 +242,85 @@ test("computeNetWorth sums every account per currency and converts each currency
   assert.equal(worth.accounts.find(a => a.id === "pocket")?.pocketOf, "Banco");
   assert.ok(worth.notes.some(note => note.includes("EUR") && note.includes("1:1")));
   assert.ok(!worth.notes.some(note => note.includes("USD") && note.includes("1:1")));
+});
+
+// --- Credit-card payment months ---
+
+const CARD_BILLING = cardBillingByAccount([
+  { id: "visa", type: "credit", statementClosingDay: 25, paymentDueDay: 10 },
+  { id: "fast", type: "credit", statementClosingDay: 5, paymentDueDay: 20 },
+  { id: "bank", type: "checking" }
+]);
+const CARD_ROWS: SummaryTransaction[] = [
+  // Closing 25, due 10: statement of 25 Oct, paid on 10 Nov, 10 Dec and 10 Jan.
+  tx("tv", "expense", -300_000, "2026-09-28T17:00:00Z", { accountId: "visa", installments: 3, categoryId: "tech" }),
+  tx("shoes", "expense", -90_000, "2026-09-28T17:00:00Z", { accountId: "visa", categoryId: "fun" }),
+  // Closing 5, due 20: statement of 5 Oct, paid on 20 Oct, 20 Nov and 20 Dec.
+  tx("phone", "expense", -300_000, "2026-09-28T17:00:00Z", { accountId: "fast", installments: 3, categoryId: "tech" }),
+  // 3 Oct closes on 5 Oct and is due on 20 Oct, after NOW (11 Oct).
+  tx("gift", "expense", -40_000, "2026-10-03T17:00:00Z", { accountId: "fast", categoryId: "fun" })
+];
+const runCards = (input: Parameters<typeof resolvePeriod>[0], extra: Partial<Parameters<typeof summarize>[1]> = {}) =>
+  summarize(CARD_ROWS, {
+    period: resolvePeriod(input, NOW, TZ),
+    now: NOW,
+    timeZone: TZ,
+    primaryCurrency: "COP",
+    exchangeRates: RATES,
+    names: NAMES,
+    cardBilling: CARD_BILLING,
+    ...extra
+  });
+
+test("card shares fall on the payment due date of the statement that contains the purchase", () => {
+  const s = runCards({ startDate: "2026-09-01", endDate: "2027-01-31" }, { groupBy: "day" });
+  assert.deepEqual(s.groups.map(g => [g.key, g.expenses]), [
+    ["2026-10-20", 140_000],
+    ["2026-11-10", 190_000],
+    ["2026-11-20", 100_000],
+    ["2026-12-10", 100_000],
+    ["2026-12-20", 100_000],
+    ["2027-01-10", 100_000]
+  ]);
+  assert.equal(s.totals.expenses, 730_000);
+});
+
+test("this_month counts card statements due this month and flags the ones due after today", () => {
+  const s = runCards({ preset: "this_month" });
+  assert.equal(s.totals.expenses, 140_000);
+  assert.equal(s.totals.upcomingInstallments, 140_000);
+  const phone = s.topExpenses.find(row => row.id === "phone");
+  assert.equal(phone?.installmentsInfo, "cuota 1 de 3 (compra total 300000 COP)");
+  assert.equal(phone?.date, "2026-09-28");
+});
+
+test("last_month keeps September card purchases out until their statements are due", () => {
+  assert.equal(runCards({ preset: "last_month" }).totals.expenses, 0);
+  // Without billing days the same rows keep calendar-month imputation.
+  assert.equal(runCards({ preset: "last_month" }, { cardBilling: undefined }).totals.expenses, 290_000);
+});
+
+test("card shares clamp a day-31 due date to the end of short months", () => {
+  const rows = [tx("sofa", "expense", -200_000, "2026-01-20T17:00:00Z", { accountId: "late", installments: 2 })];
+  const s = summarize(rows, {
+    period: resolvePeriod({ startDate: "2026-01-01", endDate: "2026-03-31" }, NOW, TZ),
+    now: NOW, timeZone: TZ, primaryCurrency: "COP", exchangeRates: RATES, names: NAMES, groupBy: "day",
+    cardBilling: cardBillingByAccount([{ id: "late", type: "credit", statementClosingDay: 25, paymentDueDay: 31 }])
+  });
+  assert.deepEqual(s.groups.map(g => [g.key, g.expenses]), [["2026-01-31", 100_000], ["2026-02-28", 100_000]]);
+});
+
+test("cardBillingByAccount keeps only regular credit cards with both billing days", () => {
+  const billing = cardBillingByAccount([
+    { id: "visa", type: "credit", statementClosingDay: 25, paymentDueDay: 10 },
+    { id: "noDue", type: "credit", statementClosingDay: 25, paymentDueDay: null },
+    { id: "bridge", type: "credit", statementClosingDay: 25, paymentDueDay: 10, mirror: { workspaceId: "w" } },
+    { id: "bank", type: "checking", statementClosingDay: 25, paymentDueDay: 10 }
+  ]);
+  assert.deepEqual([...billing.entries()], [["visa", { statementClosingDay: 25, paymentDueDay: 10 }]]);
+});
+
+test("billingLookbackStart reaches the local start of the month two months before the period", () => {
+  assert.equal(billingLookbackStart(new Date("2026-10-01T05:00:00Z"), TZ).toISOString(), "2026-08-01T05:00:00.000Z");
+  assert.equal(billingLookbackStart(new Date("2027-01-05T05:00:00Z"), TZ).toISOString(), "2026-11-01T05:00:00.000Z");
 });

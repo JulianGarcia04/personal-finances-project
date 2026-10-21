@@ -637,6 +637,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { Account, AccountType } from '@/types'
 import { AccountSchema } from '@/schemas'
 import { getNextOccurrence, daysUntil, expenseAmountForCycle } from '@/lib/creditCycle'
+import { toLocalDateKey } from '@/lib/dates'
 import { splitMoney } from '@/lib/money'
 import {
   canTransferBetweenAccounts,
@@ -974,7 +975,7 @@ const openSettleModal = async (account: Account) => {
     amount: -account.balance,
     fromAccountId: '',
     toAccountId: '',
-    date: new Date().toISOString().substring(0, 10)
+    date: toLocalDateKey()
   }
   await loadMirrorAccounts(account.mirror?.workspaceId)
 }

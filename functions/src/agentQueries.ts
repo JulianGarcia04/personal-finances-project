@@ -1,5 +1,5 @@
 import { AgentToolError, buildDateContext, NameMaps } from "./agentTools";
-import { zonedDateKey, zonedWallClockToInstant } from "./http";
+import { CardBilling, cardBillingOf, paymentMonthIndex, zonedDateKey, zonedWallClockToInstant, zonedYearMonth } from "./http";
 
 // Pure period aggregation for the chat agent (getFinancialSummary /
 // getWorkspaceSettings). No firebase-admin here: callers pass plain rows.
@@ -9,6 +9,8 @@ import { zonedDateKey, zonedWallClockToInstant } from "./http";
 //   (src/views/Dashboard.vue getMoMData, L455-479).
 // - Expenses: `type === 'expense'`, installment purchases split per month to the
 //   cent (src/lib/installments.ts expenseAmountForMonth / prorateInstallmentCents).
+//   On a credit card with both billing days, installment i falls in the month the
+//   statement containing the purchase is paid, plus i (getPaymentBucket).
 // - transfer, loan and loan_payment are neither income nor spend (Dashboard only
 //   reads 'income'/'expense'). A bridge expense's local leg is a normal expense
 //   and its mirror leg is a transfer (src/stores/transactionsStore.ts
@@ -194,6 +196,10 @@ interface Contribution {
   amount: number;
   installmentIndex: number;
   installments: number;
+  /** The instant is a scheduled share date (later installment or card due date), not the purchase. */
+  scheduled: boolean;
+  /** Imputed to a card statement payment month. */
+  billed: boolean;
 }
 
 const installmentCount = (value: unknown) => (Number.isInteger(value) && (value as number) > 0 ? (value as number) : 1);
@@ -205,27 +211,65 @@ function prorateCents(total: number, installments: number, index: number): numbe
   return (base + (index < totalCents % installments ? 1 : 0)) / 100;
 }
 
+const daysInMonth = (year: number, month: number) => new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+
 /**
  * Income at its date; expenses as one share per installment. Share k falls on the
  * purchase's local day k months later (clamped to month end), so whole-month
  * periods match expenseAmountForMonth exactly and shorter periods get a date.
+ * With card `billing`, share k falls at local noon of the (clamped) payment due day
+ * of the statement payment month + k.
  */
-function contributions(tx: SummaryTransaction, timeZone: string): Contribution[] {
+function contributions(tx: SummaryTransaction, timeZone: string, billing?: CardBilling | null): Contribution[] {
   if (Number.isNaN(tx.date.getTime())) return [];
   if (tx.type === "income") {
-    return [{ tx, kind: "income", instant: tx.date, amount: Math.abs(Number(tx.amount) || 0), installmentIndex: 0, installments: 1 }];
+    return [{ tx, kind: "income", instant: tx.date, amount: Math.abs(Number(tx.amount) || 0), installmentIndex: 0, installments: 1, scheduled: false, billed: false }];
   }
   if (tx.type !== "expense") return [];
   const installments = installmentCount(tx.installments);
   const local = keyParts(zonedDateKey(tx.date, timeZone));
+  const paymentMonth = billing ? paymentMonthIndex(local.year, local.month, local.day, billing) : null;
   return Array.from({ length: installments }, (_, index) => {
     let instant = tx.date;
-    if (index > 0) {
-      const daysInMonth = new Date(Date.UTC(local.year, local.month + index + 1, 0)).getUTCDate();
-      instant = zonedWallClockToInstant(local.year, local.month + index, Math.min(local.day, daysInMonth), 12, timeZone);
+    if (paymentMonth !== null && billing) {
+      const year = Math.floor((paymentMonth + index) / 12);
+      const month = (paymentMonth + index) % 12;
+      instant = zonedWallClockToInstant(year, month, Math.min(billing.paymentDueDay, daysInMonth(year, month)), 12, timeZone);
+    } else if (index > 0) {
+      const month = local.month + index;
+      instant = zonedWallClockToInstant(local.year, month, Math.min(local.day, daysInMonth(local.year, month)), 12, timeZone);
     }
-    return { tx, kind: "expense" as const, instant, amount: prorateCents(Number(tx.amount) || 0, installments, index), installmentIndex: index, installments };
+    return {
+      tx,
+      kind: "expense" as const,
+      instant,
+      amount: prorateCents(Number(tx.amount) || 0, installments, index),
+      installmentIndex: index,
+      installments,
+      scheduled: paymentMonth !== null || index > 0,
+      billed: paymentMonth !== null
+    };
   });
+}
+
+/** Billing days by account id for the workspace's regular credit cards (see cardBillingOf). */
+export function cardBillingByAccount(accounts: { id: string; [key: string]: unknown }[]): Map<string, CardBilling> {
+  const billing = new Map<string, CardBilling>();
+  for (const account of accounts) {
+    const days = cardBillingOf(account);
+    if (days) billing.set(account.id, days);
+  }
+  return billing;
+}
+
+/**
+ * Earliest purchase instant whose card payment can fall at or after `start`: a statement
+ * closes at most one month after the purchase and is paid at most one month later, so the
+ * local start of the month two months before `start`'s month.
+ */
+export function billingLookbackStart(start: Date, timeZone: string): Date {
+  const { year, month } = zonedYearMonth(start, timeZone);
+  return zonedWallClockToInstant(year, month - 2, 1, 0, timeZone);
 }
 
 // --- Summary -------------------------------------------------------------------
@@ -289,6 +333,8 @@ export interface SummaryOptions {
   categoryId?: string;
   compareWithPrevious?: boolean;
   topN?: number;
+  /** Billing days by account id; expenses on these cards count in their payment months. */
+  cardBilling?: ReadonlyMap<string, CardBilling>;
 }
 
 const categoryName = (id: string | null | undefined, names: NameMaps) =>
@@ -311,6 +357,8 @@ interface Aggregate {
   groups: SummaryGroup[];
   top: TopExpense[];
   missingRates: Set<string>;
+  /** Some expense in the period was imputed to a card statement payment month. */
+  billed: boolean;
 }
 
 function aggregate(rows: SummaryTransaction[], period: ResolvedPeriod, options: SummaryOptions): Aggregate {
@@ -321,13 +369,14 @@ function aggregate(rows: SummaryTransaction[], period: ResolvedPeriod, options: 
   let income = 0;
   let expenses = 0;
   let upcoming = 0;
+  let billed = false;
   const groups = new Map<string, SummaryGroup & { ids: Set<string> }>();
   const perTx = new Map<string, { value: number; original: number; indexes: number[]; c: Contribution }>();
 
   for (const tx of rows) {
     if (options.accountId && tx.accountId !== options.accountId) continue;
     if (options.categoryId && tx.categoryId !== options.categoryId) continue;
-    for (const c of contributions(tx, timeZone)) {
+    for (const c of contributions(tx, timeZone, options.cardBilling?.get(tx.accountId ?? ""))) {
       if (type !== "all" && c.kind !== type) continue;
       if (c.instant < period.startInstant || c.instant >= period.endExclusive) continue;
       const { value, missingRate } = convertToPrimary(c.amount, tx.currency, primaryCurrency, exchangeRates);
@@ -335,7 +384,8 @@ function aggregate(rows: SummaryTransaction[], period: ResolvedPeriod, options: 
       if (c.kind === "income") income += value;
       else {
         expenses += value;
-        if (c.installmentIndex > 0 && c.instant > now) upcoming += value;
+        if (c.scheduled && c.instant > now) upcoming += value;
+        if (c.billed) billed = true;
         const entry = perTx.get(tx.id) ?? { value: 0, original: 0, indexes: [], c };
         entry.value += value;
         entry.original += c.amount;
@@ -393,7 +443,8 @@ function aggregate(rows: SummaryTransaction[], period: ResolvedPeriod, options: 
     },
     groups: groupList,
     top,
-    missingRates
+    missingRates,
+    billed
   };
 }
 
@@ -438,8 +489,11 @@ export function summarize(rows: SummaryTransaction[], options: SummaryOptions): 
     };
   }
 
+  if (current.billed) {
+    notes.push("Las compras con tarjeta de crédito que tiene día de corte y de pago cuentan en el mes en que se paga su extracto (cada cuota un mes después), no en la fecha de compra.");
+  }
   if (current.totals.upcomingInstallments > 0) {
-    notes.push(`Las compras a cuotas cuentan solo la cuota de cada mes; incluye ${current.totals.upcomingInstallments} ${options.primaryCurrency} en cuotas que vencen después de hoy dentro del periodo.`);
+    notes.push(`Las compras a cuotas cuentan solo la cuota de cada mes; incluye ${current.totals.upcomingInstallments} ${options.primaryCurrency} en cuotas o pagos de tarjeta que vencen después de hoy dentro del periodo.`);
   }
   missing.forEach(code => {
     notes.push(`Tasa de cambio faltante para ${code}: se usó 1:1. Configúrala en Objetivos & Presupuesto para totales exactos.`);

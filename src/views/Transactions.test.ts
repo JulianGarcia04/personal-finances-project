@@ -1,0 +1,209 @@
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { test } from 'node:test'
+import ts from 'typescript'
+import { DEFAULT_MONTHLY_BUDGET_ID, resolveBudgetId } from '../lib/budgets.ts'
+import { toDateValue, toLocalDateKey } from '../lib/dates.ts'
+
+const componentSource = readFileSync(new URL('./Transactions.vue', import.meta.url), 'utf8')
+const templateEnd = componentSource.indexOf('<script setup lang="ts">')
+const script = componentSource.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)?.[1]
+assert.ok(templateEnd >= 0 && script, 'Transactions must keep a TypeScript setup script')
+const template = componentSource.slice(0, templateEnd)
+const sourceFile = ts.createSourceFile('Transactions.vue.ts', script, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+
+const variableInitializer = (name: string): ts.Expression | undefined => {
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement)) continue
+    for (const declaration of statement.declarationList.declarations) {
+      if (ts.isIdentifier(declaration.name) && declaration.name.text === name) return declaration.initializer
+    }
+  }
+  return undefined
+}
+
+const evaluateComponentFunction = <Result>(name: string, dependencies: Record<string, unknown>): Result => {
+  const initializer = variableInitializer(name)
+  assert.ok(initializer && ts.isArrowFunction(initializer), `Transactions must define ${name} as an arrow function`)
+  const javascript = ts.transpile(initializer.getText(sourceFile), {
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.None
+  })
+  const dependencyNames = Object.keys(dependencies)
+  const dependencyValues = Object.values(dependencies)
+  const evaluate = new Function(...dependencyNames, `return ${javascript}`) as (...args: unknown[]) => Result
+  return evaluate(...dependencyValues)
+}
+
+const assignmentOptions = (
+  operatingBudgets: Array<{ budget: { id: string; name: string; archived: boolean } }>,
+  currentBudgetId?: string | null
+) => evaluateComponentFunction<Array<{ id: string; label: string; archived: boolean }>>(
+  'budgetOptionsForExpense',
+  {
+    goalsStore: { operatingBudgets },
+    DEFAULT_MONTHLY_BUDGET_ID,
+    resolveBudgetId
+  }
+)(currentBudgetId)
+
+test('renders reassignment only for existing expenses on desktop rows, mobile cards, and the edit modal', () => {
+  const markers = [...template.matchAll(/data-testid="budget-assignment-(row|card|edit)"/g)]
+    .map(match => match[1])
+    .sort()
+  assert.deepEqual(markers, ['card', 'edit', 'row'])
+  assert.match(template, /v-if="tx\.type === 'expense'"[\s\S]{0,500}data-testid="budget-assignment-row"/)
+  assert.match(template, /v-if="tx\.type === 'expense'"[\s\S]{0,500}data-testid="budget-assignment-card"/)
+  assert.equal(/v-if="editingOriginalType === 'expense' && editTx\.type === 'expense'"[\s\S]{0,500}data-testid="budget-assignment-edit"/.test(template), true, 'edit budget selector must require a persisted expense as well as expense draft type')
+  assert.equal(/editingOriginalType\.value = tx\.type/.test(script), true, 'openEditModal must record the persisted transaction type')
+  assert.match(template, /data-testid="budget-assignment-row"[\s\S]{0,500}@change="handleBudgetAssignmentChange\(tx, \$event\)"/)
+  assert.match(template, /data-testid="budget-assignment-card"[\s\S]{0,500}@change="handleBudgetAssignmentChange\(tx, \$event\)"/)
+  assert.match(template, /data-testid="budget-assignment-edit"[\s\S]{0,500}v-model="editBudgetId"/)
+  assert.match(template, /data-testid="budget-assignment-apply"[\s\S]{0,200}@click="applyEditBudgetAssignment"/)
+  assert.equal(/<label class="sr-only">\s*Presupuesto asignado\s*<select/.test(template), false, 'inline budget selectors must not be clipped by sr-only labels')
+  assert.equal(/<label class="sr-only" :for="`budget-assignment-row-\$\{tx\.id\}`">Presupuesto asignado<\/label>\s*<select[\s\S]{0,160}:id="`budget-assignment-row-\$\{tx\.id\}`"/.test(template), true, 'row budget selector must have a separate associated label')
+  assert.equal(/<label class="sr-only" :for="`budget-assignment-card-\$\{tx\.id\}`">Presupuesto asignado<\/label>\s*<select[\s\S]{0,160}:id="`budget-assignment-card-\$\{tx\.id\}`"/.test(template), true, 'card budget selector must have a separate associated label')
+
+  const addModalStart = template.indexOf(':open="showAddModal"')
+  const editModalStart = template.indexOf('<!-- Edit Transaction Modal -->')
+  assert.ok(addModalStart >= 0 && editModalStart > addModalStart, 'create and edit modals must remain distinct')
+  assert.doesNotMatch(template.slice(addModalStart, editModalStart), /data-testid="budget-assignment-/)
+})
+
+test('offers the default and active budgets, retaining only an already assigned archived budget', () => {
+  const operatingBudgets = [
+    { budget: { id: 'default-monthly', name: 'Duplicate default', archived: false } },
+    { budget: { id: 'active-monthly', name: 'Monthly', archived: false } },
+    { budget: { id: 'current-archived', name: 'Archived event', archived: true } },
+    { budget: { id: 'other-archived', name: 'Other archived', archived: true } }
+  ]
+
+  assert.deepEqual(assignmentOptions(operatingBudgets, 'current-archived'), [
+    { id: 'default-monthly', label: 'Presupuesto mensual predeterminado', archived: false },
+    { id: 'active-monthly', label: 'Monthly', archived: false },
+    { id: 'current-archived', label: 'Archived event', archived: true }
+  ])
+  assert.deepEqual(assignmentOptions(operatingBudgets), [
+    { id: 'default-monthly', label: 'Presupuesto mensual predeterminado', archived: false },
+    { id: 'active-monthly', label: 'Monthly', archived: false }
+  ])
+})
+
+test('uses the B3 budget-only action, suppressing non-expenses, no-ops, and duplicate in-flight writes', async () => {
+  const calls: Array<[string, string]> = []
+  let financialWrites = 0
+  const pendingIds = new Set<string>(['pending-expense'])
+  const budgetSettingsReady = { value: true }
+  const assignBudget = evaluateComponentFunction<(
+    transaction: { id: string; type: string; budgetId?: string | null },
+    budgetId: string
+  ) => Promise<boolean>>('assignBudgetToExpense', {
+    transactionsStore: {
+      assignExpenseBudget: async (transactionId: string, budgetId: string) => { calls.push([transactionId, budgetId]) },
+      updateTransaction: async () => { financialWrites += 1 }
+    },
+    assigningBudgetIds: { value: pendingIds },
+    budgetSettingsReady,
+    resolveBudgetId,
+    alert: () => undefined
+  })
+
+  assert.equal(await assignBudget({ id: 'expense-1', type: 'expense', budgetId: null }, 'event-1'), true)
+  assert.deepEqual(calls, [['expense-1', 'event-1']])
+  assert.equal(await assignBudget({ id: 'income-1', type: 'income' }, 'event-1'), false)
+  assert.equal(await assignBudget({ id: 'transfer-1', type: 'transfer' }, 'event-1'), false)
+  assert.equal(await assignBudget({ id: 'default-1', type: 'expense' }, DEFAULT_MONTHLY_BUDGET_ID), false)
+  assert.equal(await assignBudget({ id: 'pending-expense', type: 'expense' }, 'event-1'), false)
+  assert.deepEqual(calls, [['expense-1', 'event-1']])
+  assert.equal(financialWrites, 0)
+
+  budgetSettingsReady.value = false
+  assert.equal(await assignBudget({ id: 'unready-expense', type: 'expense' }, 'event-1'), false)
+  assert.deepEqual(calls, [['expense-1', 'event-1']])
+})
+
+test('loads budget settings when the Transactions view is entered', () => {
+  let mountedCallback: ts.ArrowFunction | undefined
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && node.expression.getText(sourceFile) === 'onMounted') {
+      const callback = node.arguments[0]
+      if (callback && ts.isArrowFunction(callback)) mountedCallback = callback
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+
+  assert.ok(mountedCallback, 'Transactions must register an onMounted callback')
+  const mountedBody = mountedCallback.body.getText(sourceFile)
+  assert.match(mountedBody, /await goalsStore\.loadBudgetSettings\(\)/)
+  assert.equal(/syncBudgetSettingsAvailability\(\)/.test(mountedBody), true, 'mount must synchronize budget readiness after loading')
+  assert.equal(/watch\([\s\S]{0,300}syncBudgetSettingsAvailability\s*\)/.test(script), true, 'store load-state changes must update budget readiness')
+})
+
+test('fails closed until settings are loaded for an active workspace without errors', () => {
+  const goalsStore: {
+    budgetSettingsLoading: boolean
+    budgetSettingsError: string | null
+    budgetSettingsContextKey: string | null
+  } = {
+    budgetSettingsLoading: false,
+    budgetSettingsError: 'permission-denied',
+    budgetSettingsContextKey: 'user:workspace'
+  }
+  const budgetSettingsReady = { value: true }
+  const budgetSettingsError = { value: '' }
+  const syncReadiness = evaluateComponentFunction<() => void>('syncBudgetSettingsAvailability', {
+    goalsStore,
+    budgetSettingsReady,
+    budgetSettingsError
+  })
+
+  syncReadiness()
+  assert.equal(budgetSettingsReady.value, false)
+  assert.equal(budgetSettingsError.value, 'permission-denied')
+
+  goalsStore.budgetSettingsLoading = true
+  goalsStore.budgetSettingsError = null
+  syncReadiness()
+  assert.equal(budgetSettingsReady.value, false)
+  assert.equal(budgetSettingsError.value, '')
+
+  goalsStore.budgetSettingsLoading = false
+  goalsStore.budgetSettingsContextKey = null
+  syncReadiness()
+  assert.equal(budgetSettingsReady.value, false)
+  assert.equal(budgetSettingsError.value, 'No hay un espacio de trabajo activo para cargar los presupuestos.')
+
+  goalsStore.budgetSettingsContextKey = 'user:workspace'
+  syncReadiness()
+  assert.equal(budgetSettingsReady.value, true)
+  assert.equal(budgetSettingsError.value, '')
+})
+
+test('pre-fills the edit form with the local calendar day of an evening movement', () => {
+  const ref = <Value>(value: Value) => ({ value })
+  const editTx = ref<Record<string, unknown>>({})
+  const openEditModal = evaluateComponentFunction<(tx: Record<string, unknown>) => void>('openEditModal', {
+    editingTxId: ref(''),
+    editBudgetId: ref(''),
+    editingOriginalBudgetId: ref(''),
+    editingOriginalType: ref(''),
+    editTx,
+    editUploadedReceiptUrl: ref(''),
+    editSelectedFileName: ref(''),
+    editReceiptError: ref(''),
+    showEditModal: ref(false),
+    resolveBudgetId,
+    toDateValue,
+    toLocalDateKey
+  })
+
+  openEditModal({ id: 'tx-1', type: 'expense', accountId: 'a1', amount: -10, description: 'Dinner', date: new Date(2026, 9, 15, 21, 0) })
+
+  assert.equal(editTx.value.date, '2026-10-15')
+})
+
+test('date input defaults never use the UTC day', () => {
+  assert.doesNotMatch(script, /toISOString\(\)\.(substring|slice)\(0, 10\)/)
+  assert.match(script, /date: toLocalDateKey\(\)/)
+})

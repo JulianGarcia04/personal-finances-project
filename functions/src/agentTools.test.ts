@@ -90,6 +90,17 @@ test("buildAgentContextBlock states date, time zone, currency and sign conventio
   }
 });
 
+test("buildAgentContextBlock explains that card purchases count in their statement payment month", () => {
+  const block = buildAgentContextBlock({ now: new Date("2026-10-11T15:00:00-05:00"), timeZone: BOGOTA, currency: "COP" });
+  assert.match(block, /tarjeta de crédito que tiene día de corte y de pago cuentan en el mes en que se paga el extracto/);
+});
+
+test("toLeanTransaction keeps a legacy date-only string on its local calendar day", () => {
+  const names = { accounts: new Map([["a1", "Nu"]]), categories: new Map<string, string>() };
+  const row = toLeanTransaction("t1", { accountId: "a1", amount: -5, type: "expense", date: "2026-10-01" }, names, BOGOTA);
+  assert.equal(row.date, "2026-10-01");
+});
+
 test("toLeanTransaction returns only named, local-dated fields", () => {
   const names = {
     accounts: new Map([["a1", "Nu"], ["a2", "Ahorros"]]),

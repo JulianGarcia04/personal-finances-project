@@ -153,6 +153,17 @@ test('a member can still update budget and limit settings', async () => {
   assert.deepEqual(stored.categoryBudgets, { food: 100 })
 })
 
+test('a member can toggle budget alerts and confirm legacy cap units in the same workspace update', async () => {
+  const ref = doc(member.db, 'workspaces', workspaceId)
+  await updateDoc(ref, { budgetAlertsEnabled: false })
+  await updateDoc(ref, { budgetAlertsEnabled: true, categoryBudgetCurrency: 'COP' })
+  // The categoryBudgetCurrency guard still applies alongside the alert toggle.
+  await assert.rejects(updateDoc(ref, { budgetAlertsEnabled: false, categoryBudgetCurrency: 'USD' }), denied)
+  const stored = (await adminDb.collection('workspaces').doc(workspaceId).get()).data()
+  assert.equal(stored.budgetAlertsEnabled, true)
+  assert.equal(stored.categoryBudgetCurrency, 'COP')
+})
+
 test('an outsider cannot read or update the workspace', async () => {
   const ref = doc(outsider.db, 'workspaces', workspaceId)
   await assert.rejects(getDoc(ref), denied)

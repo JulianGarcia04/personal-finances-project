@@ -4,9 +4,11 @@ import {
   alertCategoryFor,
   budgetAlertLedgerId,
   budgetForCategory,
-  categorySpendForMonth,
+  capInReportingCurrency,
+  categorySpendForScope,
   evaluateBudgetThresholds,
   monthKey,
+  resolveAlertBudgetId,
   spendFieldsChanged
 } from "./budgetAlerts";
 
@@ -25,7 +27,10 @@ const expense = (amount: number, extra: Record<string, unknown> = {}) => ({
 test("monthKey and ledger id are stable and zero-padded", () => {
   assert.equal(monthKey({ year: 2026, month: 0 }), "2026-01");
   assert.equal(monthKey(OCTOBER), "2026-10");
-  assert.equal(budgetAlertLedgerId("ws1", "2026-10", "food"), "ws1_2026-10_food");
+  // The default budget keeps the pre-multiple-budgets id so existing ledgers stay valid.
+  assert.equal(budgetAlertLedgerId("ws1", "default-monthly", "2026-10", "food"), "ws1_2026-10_food");
+  assert.equal(budgetAlertLedgerId("ws1", "house", "2026-10", "food"), "ws1_house_2026-10_food");
+  assert.equal(budgetAlertLedgerId("ws1", "trip", "event", "food"), "ws1_trip_event_food");
 });
 
 test("budgetForCategory only accepts positive finite budgets", () => {
@@ -70,6 +75,9 @@ test("zero or absent budget never alerts", () => {
   assert.deepEqual(evaluateBudgetThresholds(1000, Number.NaN, []), { threshold: null, claim: [] });
 });
 
+const DEFAULT_SCOPE = { id: "default-monthly", kind: "monthly" as const };
+const COP_OPTIONS = { timeZone: BOGOTA, reportingCurrency: "COP", exchangeRates: {} };
+
 test("category spend counts only expenses of that category in the month", () => {
   const rows = [
     expense(100),
@@ -79,41 +87,122 @@ test("category spend counts only expenses of that category in the month", () => 
     { type: "loan", amount: 999, categoryId: "food", currency: "COP", date: OCTOBER_DATE() },
     expense(70, { date: new Date("2026-09-20T17:00:00.000Z") })
   ];
-  assert.equal(categorySpendForMonth(rows, "food", OCTOBER, { timeZone: BOGOTA, primaryCurrency: "COP", exchangeRates: {} }), 100);
+  assert.equal(categorySpendForScope(rows, "food", DEFAULT_SCOPE, OCTOBER, COP_OPTIONS), 100);
 });
 
 test("category spend uses the local month of the configured time zone", () => {
   // 2026-11-01T03:00Z is still October 31 in Bogota (UTC-5).
   const rows = [expense(40, { date: new Date("2026-11-01T03:00:00.000Z") })];
-  const options = { timeZone: BOGOTA, primaryCurrency: "COP", exchangeRates: {} };
-  assert.equal(categorySpendForMonth(rows, "food", OCTOBER, options), 40);
-  assert.equal(categorySpendForMonth(rows, "food", { year: 2026, month: 10 }, options), 0);
+  assert.equal(categorySpendForScope(rows, "food", DEFAULT_SCOPE, OCTOBER, COP_OPTIONS), 40);
+  assert.equal(categorySpendForScope(rows, "food", DEFAULT_SCOPE, { year: 2026, month: 10 }, COP_OPTIONS), 0);
+});
+
+test("legacy date-only strings are local calendar days, not UTC midnight", () => {
+  // new Date("2026-11-01") is Oct 31 19:00 in Bogota; the app reads it as November 1.
+  const rows = [expense(40, { date: "2026-11-01" })];
+  assert.equal(categorySpendForScope(rows, "food", DEFAULT_SCOPE, OCTOBER, COP_OPTIONS), 0);
+  assert.equal(categorySpendForScope(rows, "food", DEFAULT_SCOPE, { year: 2026, month: 10 }, COP_OPTIONS), 40);
 });
 
 test("category spend splits installment purchases per month", () => {
   const rows = [expense(600, { date: new Date("2026-08-10T17:00:00.000Z"), installments: 6 })];
-  assert.equal(categorySpendForMonth(rows, "food", OCTOBER, { timeZone: BOGOTA, primaryCurrency: "COP", exchangeRates: {} }), 100);
+  assert.equal(categorySpendForScope(rows, "food", DEFAULT_SCOPE, OCTOBER, COP_OPTIONS), 100);
 });
 
-test("category spend converts currencies with workspace rates (1:1 when missing)", () => {
-  const rows = [expense(10, { currency: "USD" }), expense(5, { currency: "EUR" }), expense(1000)];
-  const total = categorySpendForMonth(rows, "food", OCTOBER, {
-    timeZone: BOGOTA,
-    primaryCurrency: "COP",
-    exchangeRates: { USD: 4000 }
-  });
-  assert.equal(total, 10 * 4000 + 5 + 1000);
+test("billed card installments count in the statement payment month", () => {
+  // Closing day 25, due day 10: a Sep 28 purchase closes Oct 25 and is paid in November.
+  const card = { statementClosingDay: 25, paymentDueDay: 10 };
+  const billingFor = (accountId?: string | null) => (accountId === "visa" ? card : null);
+  const rows = [
+    expense(300, { accountId: "visa", installments: 3, date: new Date("2026-09-28T17:00:00.000Z") }),
+    expense(90, { accountId: "cash", installments: 3, date: new Date("2026-09-28T17:00:00.000Z") })
+  ];
+  const options = { ...COP_OPTIONS, billingFor };
+  // October: only the cash installment (calendar month + 1); the card's first share is November.
+  assert.equal(categorySpendForScope(rows, "food", DEFAULT_SCOPE, OCTOBER, options), 30);
+  assert.equal(categorySpendForScope(rows, "food", DEFAULT_SCOPE, { year: 2026, month: 10 }, options), 130);
 });
 
-test("alertCategoryFor only returns expenses with a share in the evaluated month", () => {
+test("category spend converts currencies with manual rates and is unknown when a rate is missing", () => {
+  const rows = [expense(10, { currency: "USD" }), expense(1000)];
+  assert.equal(
+    categorySpendForScope(rows, "food", DEFAULT_SCOPE, OCTOBER, { ...COP_OPTIONS, exchangeRates: { USD: 4000 } }),
+    10 * 4000 + 1000
+  );
+  // No 1:1 fallback: the app hides incomplete totals, so no alert can be evaluated.
+  assert.equal(categorySpendForScope([...rows, expense(5, { currency: "EUR" })], "food", DEFAULT_SCOPE, OCTOBER, {
+    ...COP_OPTIONS, exchangeRates: { USD: 4000 }
+  }), null);
+  assert.equal(categorySpendForScope(rows, "food", DEFAULT_SCOPE, OCTOBER, { ...COP_OPTIONS, exchangeRates: { USD: 0 } }), null);
+});
+
+test("default budget spend includes unassigned and default expenses only", () => {
+  const rows = [
+    expense(100),
+    expense(20, { budgetId: null }),
+    expense(5, { budgetId: "default-monthly" }),
+    expense(999, { budgetId: "trip" })
+  ];
+  assert.equal(categorySpendForScope(rows, "food", DEFAULT_SCOPE, OCTOBER, COP_OPTIONS), 125);
+});
+
+test("additional monthly budget spend counts only its own expenses in the month", () => {
+  const scope = { id: "house", kind: "monthly" as const };
+  const rows = [
+    expense(100),
+    expense(40, { budgetId: "house" }),
+    expense(60, { budgetId: "house", installments: 2, date: new Date("2026-09-10T17:00:00.000Z") }),
+    expense(70, { budgetId: "house", date: new Date("2026-09-20T17:00:00.000Z") })
+  ];
+  assert.equal(categorySpendForScope(rows, "food", scope, OCTOBER, COP_OPTIONS), 70);
+});
+
+test("event budget spend is the full committed principal regardless of month", () => {
+  const scope = { id: "trip", kind: "event" as const };
+  const rows = [
+    expense(900, { budgetId: "trip", installments: 3, date: new Date("2026-06-10T17:00:00.000Z") }),
+    expense(100, { budgetId: "trip" }),
+    expense(50),
+    expense(10, { budgetId: "trip", categoryId: "fun" })
+  ];
+  assert.equal(categorySpendForScope(rows, "food", scope, OCTOBER, COP_OPTIONS), 1000);
+});
+
+test("capInReportingCurrency keeps nominal caps and never relabels them", () => {
+  assert.equal(capInReportingCurrency(500, "COP", "COP", {}), 500);
+  assert.equal(capInReportingCurrency(100, "USD", "COP", { USD: 4000 }), 400_000);
+  // Unconfirmed legacy cap units disable the comparison (Dashboard/Goals do the same).
+  assert.equal(capInReportingCurrency(500, null, "COP", {}), null);
+  assert.equal(capInReportingCurrency(100, "USD", "COP", {}), null);
+  assert.equal(capInReportingCurrency(100, "USD", "COP", { USD: -1 }), null);
+});
+
+test("resolveAlertBudgetId maps unassigned expenses to the protected default budget", () => {
+  assert.equal(resolveAlertBudgetId(undefined), "default-monthly");
+  assert.equal(resolveAlertBudgetId(null), "default-monthly");
+  assert.equal(resolveAlertBudgetId(""), "default-monthly");
+  assert.equal(resolveAlertBudgetId("trip"), "trip");
+});
+
+test("alertCategoryFor only returns expenses of the scope with a share in the evaluated month", () => {
   const options = { timeZone: BOGOTA };
-  assert.equal(alertCategoryFor(expense(10), OCTOBER, options), "food");
-  assert.equal(alertCategoryFor(undefined, OCTOBER, options), null);
-  assert.equal(alertCategoryFor({ ...expense(10), type: "transfer" }, OCTOBER, options), null);
-  assert.equal(alertCategoryFor({ ...expense(10), type: "income" }, OCTOBER, options), null);
-  assert.equal(alertCategoryFor(expense(10, { categoryId: "" }), OCTOBER, options), null);
-  assert.equal(alertCategoryFor(expense(10, { date: new Date("2026-09-10T17:00:00.000Z") }), OCTOBER, options), null);
-  assert.equal(alertCategoryFor(expense(0), OCTOBER, options), null);
+  assert.equal(alertCategoryFor(expense(10), DEFAULT_SCOPE, OCTOBER, options), "food");
+  assert.equal(alertCategoryFor(undefined, DEFAULT_SCOPE, OCTOBER, options), null);
+  assert.equal(alertCategoryFor({ ...expense(10), type: "transfer" }, DEFAULT_SCOPE, OCTOBER, options), null);
+  assert.equal(alertCategoryFor({ ...expense(10), type: "income" }, DEFAULT_SCOPE, OCTOBER, options), null);
+  assert.equal(alertCategoryFor(expense(10, { categoryId: "" }), DEFAULT_SCOPE, OCTOBER, options), null);
+  assert.equal(alertCategoryFor(expense(10, { date: new Date("2026-09-10T17:00:00.000Z") }), DEFAULT_SCOPE, OCTOBER, options), null);
+  assert.equal(alertCategoryFor(expense(0), DEFAULT_SCOPE, OCTOBER, options), null);
+  assert.equal(alertCategoryFor(expense(10, { budgetId: "trip" }), DEFAULT_SCOPE, OCTOBER, options), null);
+});
+
+test("alertCategoryFor follows card payment months and event principal", () => {
+  const card = { statementClosingDay: 25, paymentDueDay: 10 };
+  const late = expense(10, { accountId: "visa", date: new Date("2026-09-28T17:00:00.000Z") });
+  assert.equal(alertCategoryFor(late, DEFAULT_SCOPE, OCTOBER, { timeZone: BOGOTA }), null);
+  assert.equal(alertCategoryFor(late, DEFAULT_SCOPE, { year: 2026, month: 10 }, { timeZone: BOGOTA, billingFor: () => card }), "food");
+  const booking = expense(10, { budgetId: "trip", date: new Date("2026-03-01T17:00:00.000Z") });
+  assert.equal(alertCategoryFor(booking, { id: "trip", kind: "event" }, OCTOBER, { timeZone: BOGOTA }), "food");
 });
 
 function OCTOBER_DATE() {
@@ -128,6 +217,8 @@ test("spendFieldsChanged ignores edits that cannot change category spend", () =>
   assert.equal(spendFieldsChanged(base, { ...base, categoryId: "fun" }), true);
   assert.equal(spendFieldsChanged(base, { ...base, currency: "USD" }), true);
   assert.equal(spendFieldsChanged(base, { ...base, installments: 3 }), true);
+  assert.equal(spendFieldsChanged(base, { ...base, budgetId: "trip" }), true);
+  assert.equal(spendFieldsChanged(base, { ...base, accountId: "visa" }), true);
   assert.equal(spendFieldsChanged(base, { ...base, date: new Date("2026-10-11T17:00:00.000Z") }), true);
   assert.equal(spendFieldsChanged({ ...base, type: "transfer" }, base), true);
   assert.equal(spendFieldsChanged(undefined, base), true);

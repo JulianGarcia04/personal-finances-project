@@ -73,6 +73,10 @@ test("80% push says the cap is near, with spend, budget and percent", () => {
   assert.match(push.notification!.body!, /Llevas .*850\.000.* de .*1\.000\.000/);
   assert.match(push.notification!.body!, /Casa · octubre de 2026/);
   assert.deepEqual(push.data, { link: "/goals", workspaceId: "ws1", categoryId: "food", threshold: "80" });
+  const named = buildBudgetAlertPush({ ...baseInput, threshold: 80, budgetId: "house", budgetName: "Hogar" });
+  assert.equal(named.data!.budgetId, "house");
+  assert.match(named.notification!.title!, /Mercado \(Hogar\)/);
+  assert.match(named.notification!.body!, /Casa · Hogar · octubre de 2026/);
 });
 
 test("100% push says the cap was reached and shows the overspend", () => {

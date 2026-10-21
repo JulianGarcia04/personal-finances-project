@@ -25,6 +25,8 @@ export type PushPayload = Omit<MulticastMessage, "tokens">;
 export interface BudgetAlertPushInput extends BudgetAlertEmailInput {
   workspaceId: string;
   categoryId: string;
+  /** Operating budget id; sent only for additional (non-default) budgets. */
+  budgetId?: string;
   /** Public app origin (https). When absent the client resolves `data.link`. */
   appUrl?: string;
 }
@@ -76,7 +78,8 @@ export function buildBudgetAlertPush(input: BudgetAlertPushInput): PushPayload {
       link: BUDGET_ALERT_PUSH_PATH,
       workspaceId: input.workspaceId,
       categoryId: input.categoryId,
-      threshold: String(input.threshold)
+      threshold: String(input.threshold),
+      ...(input.budgetId ? { budgetId: input.budgetId } : {})
     }
   };
   const link = absoluteHttpsLink(input.appUrl, BUDGET_ALERT_PUSH_PATH);

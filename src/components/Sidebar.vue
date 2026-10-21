@@ -306,6 +306,7 @@ const switchWorkspace = async (workspaceId: string) => {
     accountsStore.fetchAccounts(),
     transactionsStore.fetchTransactions(),
     goalsStore.fetchGoals(),
+    goalsStore.loadBudgetSettings(),
     transactionsStore.fetchCategories()
   ])
   

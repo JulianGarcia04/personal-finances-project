@@ -5,13 +5,17 @@ export interface BudgetAlertEmailInput {
   threshold: 80 | 100;
   categoryName: string;
   workspaceName: string;
-  /** Month-to-date spend in `currency`. */
+  /** Month-to-date spend (event budgets: committed principal) in `currency`. */
   spent: number;
-  /** Monthly category budget in `currency`. */
+  /** Category cap converted to `currency`. */
   budget: number;
   currency: string;
-  /** e.g. "octubre de 2026". */
-  monthLabel: string;
+  /** e.g. "octubre de 2026"; absent for event budgets. */
+  monthLabel?: string;
+  /** Operating budget name; absent for the protected default monthly budget. */
+  budgetName?: string;
+  /** Event/project budget: spend is the full assigned principal, not a month. */
+  eventBudget?: boolean;
 }
 
 export interface RenderedEmail {
@@ -46,7 +50,7 @@ export interface BudgetAlertCopy {
   percent: number;
   remaining: number;
   overspend: number;
-  /** Workspace and month, e.g. "Casa · octubre de 2026". */
+  /** Workspace, budget (when not the default) and month, e.g. "Casa · Viaje · octubre de 2026". */
   scope: string;
   subject: string;
   headline: string;
@@ -56,26 +60,30 @@ export interface BudgetAlertCopy {
 export function budgetAlertCopy(input: BudgetAlertEmailInput): BudgetAlertCopy {
   const category = oneLine(input.categoryName) || "Sin categoría";
   const workspace = oneLine(input.workspaceName);
+  const budgetName = oneLine(input.budgetName ?? "");
+  const label = budgetName ? `${category} (${budgetName})` : category;
+  const target = budgetName ? `${category} del presupuesto «${budgetName}»` : `tu presupuesto de ${category}`;
   const percent = Math.round((input.spent / input.budget) * 100);
   const remaining = Math.max(input.budget - input.spent, 0);
   const overspend = Math.max(input.spent - input.budget, 0);
   const reached = input.threshold === 100;
   const money = (value: number) => formatMoney(value, input.currency);
   const subject = reached
-    ? `Ya alcanzaste el tope de ${category}`
-    : `Estás cerca del tope de ${category} (${percent} %)`;
+    ? `Ya alcanzaste el tope de ${label}`
+    : `Estás cerca del tope de ${label} (${percent} %)`;
   const headline = reached
-    ? `Ya alcanzaste el tope de tu presupuesto de ${category}.`
-    : `Estás cerca del tope de tu presupuesto de ${category}.`;
-  const scope = workspace ? `${workspace} · ${input.monthLabel}` : input.monthLabel;
+    ? `Ya alcanzaste el tope de ${target}.`
+    : `Estás cerca del tope de ${target}.`;
+  const month = input.eventBudget ? "" : oneLine(input.monthLabel ?? "");
+  const scope = [workspace, budgetName, month].filter(Boolean).join(" · ");
   return { reached, percent, remaining, overspend, scope, subject, headline, money };
 }
 
 export function renderBudgetAlertEmail(input: BudgetAlertEmailInput): RenderedEmail {
   const { reached, percent, remaining, overspend, scope, subject, headline, money } = budgetAlertCopy(input);
   const advice = reached
-    ? "Cualquier gasto adicional en esta categoría superará lo que planeaste para este mes."
-    : "Revisa tus próximos gastos en esta categoría para no superar lo que planeaste este mes.";
+    ? `Cualquier gasto adicional en esta categoría superará lo que planeaste ${input.eventBudget ? "para este presupuesto" : "para este mes"}.`
+    : `Revisa tus próximos gastos en esta categoría para no superar lo que planeaste ${input.eventBudget ? "para este presupuesto" : "este mes"}.`;
 
   const rows: Array<[string, string]> = [
     ["Gastado", money(input.spent)],

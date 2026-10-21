@@ -68,15 +68,17 @@ test('getFinancialSummary this_month: local-midnight income on the 1st, USD conv
   assert.deepEqual(byCategory, { Salario: 0, Comida: 460_000, 'Tecnología': 100_000 })
   assert.equal(summary.topExpenses[0].amount, 200_000)
   const laptop = summary.topExpenses.find(row => row.id === ids.transactions.laptop)
-  assert.equal(laptop.installmentsInfo, 'cuota 2 de 3 (compra total 300000 COP)')
+  // Visa (closing 25, due 5): bought Sep 10 → September statement, paid in October → share 1 of 3.
+  assert.equal(laptop.installmentsInfo, 'cuota 1 de 3 (compra total 300000 COP)')
 })
 
-test('getFinancialSummary last_month includes the UTC-midnight expense of the 1st and the first installment', async () => {
+test('getFinancialSummary last_month includes the UTC-midnight expense of the 1st and no card installment', async () => {
   const summary = await call('getFinancialSummary', { preset: 'last_month' })
   assert.deepEqual(summary.period, { start: '2026-09-01', end: '2026-09-30', label: 'septiembre de 2026' })
   assert.equal(summary.totals.income, 4_000_000)
-  assert.equal(summary.totals.expenses, 210_000)
-  assert.equal(summary.totals.net, 3_790_000)
+  // Restaurant 80k + UTC-midnight delivery 30k; the Sep 10 laptop's first share is paid on Oct 5.
+  assert.equal(summary.totals.expenses, 110_000)
+  assert.equal(summary.totals.net, 3_890_000)
   assert.ok(summary.topExpenses.some(row => row.id === ids.transactions.utcMidnight && row.date === '2026-09-30'))
 })
 
@@ -85,7 +87,7 @@ test('getFinancialSummary this_week uses Monday to Sunday local days', async () 
   assert.equal(summary.period.start, '2026-10-05')
   assert.equal(summary.period.end, '2026-10-11')
   assert.equal(summary.totals.income, 0)
-  // USD dinner (Oct 5) 200k + laptop share (Oct 10) 100k + market (Oct 11) 200k; bridge (Oct 2) is outside.
+  // USD dinner (Oct 5) 200k + laptop share (Oct 5, Visa due day) 100k + market (Oct 11) 200k; bridge (Oct 2) is outside.
   assert.equal(summary.totals.expenses, 500_000)
 })
 
@@ -100,11 +102,11 @@ test('getFinancialSummary custom range is inclusive in local days', async () => 
 test('getFinancialSummary compareWithPrevious compares this month with last month', async () => {
   const summary = await call('getFinancialSummary', { preset: 'this_month', compareWithPrevious: true })
   assert.equal(summary.comparison.period.start, '2026-09-01')
-  assert.equal(summary.comparison.totals.expenses, 210_000)
+  assert.equal(summary.comparison.totals.expenses, 110_000)
   assert.deepEqual(summary.comparison.deltas, {
     income: { diff: 1_000_000, percent: 25 },
-    expenses: { diff: 350_000, percent: 167 },
-    net: { diff: 650_000, percent: 17 }
+    expenses: { diff: 450_000, percent: 409 },
+    net: { diff: 550_000, percent: 14 }
   })
 })
 

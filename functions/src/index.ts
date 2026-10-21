@@ -44,15 +44,20 @@ import {
 } from "./embeddings";
 import {
   alertCategoryFor,
+  AlertScope,
   BUDGET_ALERTS_COLLECTION,
   budgetAlertLedgerId,
   budgetForCategory,
   BudgetThreshold,
-  categorySpendForMonth,
+  capInReportingCurrency,
+  categorySpendForScope,
   evaluateBudgetThresholds,
   monthKey,
+  resolveAlertBudgetId,
   spendFieldsChanged
 } from "./budgetAlerts";
+import { cardBillingByAccount } from "./agentQueries";
+import { DEFAULT_MONTHLY_BUDGET_ID, parseLegacyCategoryBudgetCurrency } from "./legacyCategoryBudgets";
 import { createGmailSender, SMTP_PASS, SMTP_USER, smtpConfigFromEnvironment, uniqueRecipients } from "./mailer";
 import { BudgetAlertEmailInput, renderBudgetAlertEmail } from "./templates/budgetAlert";
 import { buildBudgetAlertPush, loadPushTokens, memberUidsOf, planBudgetAlertDelivery, sendPushToTokens } from "./push";
@@ -300,8 +305,15 @@ export const syncTransactionEmbedding = onDocumentWritten(
   }
 );
 
-// 3b. Alerts workspace members (email + FCM web push) once per (workspace, category, month, threshold) when a
-// category's month-to-date spend reaches 80% or 100% of workspaces/{id}.categoryBudgets.
+// 3b. Alerts workspace members (email + FCM web push) once per (workspace, budget, period, category,
+// threshold) when a category's spend reaches 80% or 100% of its cap in the expense's operating budget:
+// the protected default monthly budget (budgetId absent/"default-monthly") uses
+// workspaces/{id}.categoryBudgets in its confirmed `categoryBudgetCurrency`; an active additional
+// budget uses budgets/{budgetId}/categoryCaps/{categoryId}.amount in the budget's `capCurrency`.
+// Monthly budgets compare this month's share (card installments in their statement payment month);
+// event budgets compare the full committed principal (period "event"). Same semantics as
+// src/lib/budgetReporting.ts reportBudgetScope: unconfirmed cap units or missing manual rates mean
+// no comparison, so no alert. Archived budgets never alert.
 // Month bucketing and the primary currency come from the workspace owner's profile
 // (users/{ownerId}.country -> time zone, .currency -> primary currency), the same sources the
 // agent uses for a user (timeZoneForCountry / resolvePrimaryCurrency), so every member gets
@@ -329,8 +341,11 @@ export const notifyBudgetThreshold = onDocumentWritten(
     const workspace = workspaceSnap.data();
     if (!workspace || workspace.budgetAlertsEnabled === false) return;
     const categoryId = typeof after.categoryId === "string" ? after.categoryId : "";
-    const budget = budgetForCategory(workspace.categoryBudgets, categoryId);
-    if (!categoryId || budget === 0) return;
+    if (!categoryId) return;
+
+    const target = await loadAlertTarget(workspaceId, workspace, resolveAlertBudgetId(after.budgetId), categoryId);
+    if (!target) return;
+    const { scope } = target;
 
     const ownerSnap = typeof workspace.ownerId === "string" && workspace.ownerId
       ? await db.collection("users").doc(workspace.ownerId).get()
@@ -338,8 +353,20 @@ export const notifyBudgetThreshold = onDocumentWritten(
     const ownerData = ownerSnap?.exists ? ownerSnap.data() : null;
     const timeZone = timeZoneForCountry(ownerData?.country);
     const primaryCurrency = resolvePrimaryCurrency(ownerData);
+    const exchangeRates: Record<string, number> = workspace.exchangeRates && typeof workspace.exchangeRates === "object"
+      ? workspace.exchangeRates
+      : {};
     const month = zonedYearMonth(new Date(event.time), timeZone);
-    if (alertCategoryFor(after, month, { timeZone }) !== categoryId) return;
+    const accountsSnap = await db.collection("accounts").where("workspaceId", "==", workspaceId).get();
+    const billing = cardBillingByAccount(accountsSnap.docs.map((d) => ({ ...d.data(), id: d.id })));
+    const billingFor = (accountId?: string | null) => (accountId ? billing.get(accountId) ?? null : null);
+    if (alertCategoryFor(after, scope, month, { timeZone, billingFor }) !== categoryId) return;
+
+    const budget = capInReportingCurrency(target.cap, target.capCurrency, primaryCurrency, exchangeRates);
+    if (budget === null) {
+      console.warn(`Budget alert for workspace ${workspaceId} skipped: cap units unconfirmed or manual rate missing.`);
+      return;
+    }
 
     const smtp = smtpConfigFromEnvironment();
     const memberUids = memberUidsOf(workspace.members);
@@ -353,15 +380,20 @@ export const notifyBudgetThreshold = onDocumentWritten(
       .where("categoryId", "==", categoryId)
       .where("type", "==", "expense")
       .get();
-    const spent = categorySpendForMonth(txSnap.docs.map((d) => d.data()), categoryId, month, {
+    const spent = categorySpendForScope(txSnap.docs.map((d) => d.data()), categoryId, scope, month, {
       timeZone,
-      primaryCurrency,
-      exchangeRates: workspace.exchangeRates || {}
+      reportingCurrency: primaryCurrency,
+      exchangeRates,
+      billingFor
     });
+    if (spent === null) {
+      console.warn(`Budget alert for workspace ${workspaceId} skipped: an expense has no manual rate to ${primaryCurrency}.`);
+      return;
+    }
 
-    // Claim atomically so concurrent triggers for the same category send one email.
-    const key = monthKey(month);
-    const ledgerRef = db.collection(BUDGET_ALERTS_COLLECTION).doc(budgetAlertLedgerId(workspaceId, key, categoryId));
+    // Claim atomically so concurrent triggers for the same cap send one email.
+    const key = scope.kind === "event" ? "event" : monthKey(month);
+    const ledgerRef = db.collection(BUDGET_ALERTS_COLLECTION).doc(budgetAlertLedgerId(workspaceId, scope.id, key, categoryId));
     const claim = await db.runTransaction(async (t) => {
       const ledger = await t.get(ledgerRef);
       const notified: number[] = Array.isArray(ledger.get("notified")) ? ledger.get("notified") : [];
@@ -369,6 +401,7 @@ export const notifyBudgetThreshold = onDocumentWritten(
       if (result.threshold === null) return null;
       t.set(ledgerRef, {
         workspaceId,
+        budgetId: scope.id,
         categoryId,
         month: key,
         notified: FieldValue.arrayUnion(...result.claim),
@@ -394,8 +427,11 @@ export const notifyBudgetThreshold = onDocumentWritten(
         spent,
         budget,
         currency: primaryCurrency,
-        monthLabel: new Intl.DateTimeFormat("es", { month: "long", year: "numeric", timeZone: "UTC" })
-          .format(Date.UTC(month.year, month.month, 15))
+        ...(scope.kind === "event" ? { eventBudget: true } : {
+          monthLabel: new Intl.DateTimeFormat("es", { month: "long", year: "numeric", timeZone: "UTC" })
+            .format(Date.UTC(month.year, month.month, 15))
+        }),
+        ...(target.budgetName ? { budgetName: target.budgetName } : {})
       };
       if (smtp) {
         const recipients = await resolveMemberEmails(memberUids);
@@ -416,7 +452,13 @@ export const notifyBudgetThreshold = onDocumentWritten(
 
     if (!delivery.push) return;
     try {
-      const payload = buildBudgetAlertPush({ ...alert, workspaceId, categoryId, appUrl: process.env.APP_URL });
+      const payload = buildBudgetAlertPush({
+        ...alert,
+        workspaceId,
+        categoryId,
+        ...(scope.id !== DEFAULT_MONTHLY_BUDGET_ID ? { budgetId: scope.id } : {}),
+        appUrl: process.env.APP_URL
+      });
       const result = await sendPushToTokens(pushTokens, payload, admin.messaging());
       console.log(`Budget alert push for ${ledgerRef.id}: tokens=${result.tokens} sent=${result.sent} failed=${result.failed} removed=${result.removed}`);
     } catch (error) {
@@ -425,6 +467,48 @@ export const notifyBudgetThreshold = onDocumentWritten(
     }
   }
 );
+
+interface AlertTarget {
+  scope: AlertScope;
+  /** Nominal cap in `capCurrency`. */
+  cap: number;
+  /** Null when the default budget's legacy cap units are unconfirmed (or malformed). */
+  capCurrency: string | null;
+  /** Null for the protected default monthly budget. */
+  budgetName: string | null;
+}
+
+/** Cap an expense counts against, or null when its budget/category has no alertable cap. */
+async function loadAlertTarget(
+  workspaceId: string,
+  workspace: Record<string, any>,
+  budgetId: string,
+  categoryId: string
+): Promise<AlertTarget | null> {
+  if (budgetId === DEFAULT_MONTHLY_BUDGET_ID) {
+    const cap = budgetForCategory(workspace.categoryBudgets, categoryId);
+    if (cap === 0) return null;
+    let capCurrency: string | null = null;
+    try {
+      capCurrency = parseLegacyCategoryBudgetCurrency(workspace);
+    } catch {
+      console.warn(`Budget alert for workspace ${workspaceId} skipped: stored categoryBudgetCurrency is malformed.`);
+      return null;
+    }
+    return { scope: { id: budgetId, kind: "monthly" }, cap, capCurrency, budgetName: null };
+  }
+
+  const budgetRef = db.collection("budgets").doc(budgetId);
+  const [budgetSnap, capSnap] = await Promise.all([budgetRef.get(), budgetRef.collection("categoryCaps").doc(categoryId).get()]);
+  const budget = budgetSnap.data();
+  if (!budget || budget.workspaceId !== workspaceId || budget.archived !== false) return null;
+  if (budget.kind !== "monthly" && budget.kind !== "event") return null;
+  const cap = budgetForCategory({ [categoryId]: capSnap.get("amount") }, categoryId);
+  if (cap === 0) return null;
+  const capCurrency = typeof budget.capCurrency === "string" && /^[A-Z]{3}$/.test(budget.capCurrency) ? budget.capCurrency : null;
+  const budgetName = typeof budget.name === "string" && budget.name.trim() ? budget.name.trim() : budgetId;
+  return { scope: { id: budgetId, kind: budget.kind }, cap, capCurrency, budgetName };
+}
 
 /** Emails of workspace members: users/{uid}.email, falling back to Firebase Auth. */
 async function resolveMemberEmails(uids: readonly string[]): Promise<string[]> {
@@ -543,9 +627,10 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
       - Los montos de getFinancialSummary, getWorkspaceSettings y los totales de listAccounts ya vienen convertidos a ${primaryCurrency}; menciona las notes relevantes (por ejemplo tasas de cambio faltantes).
 
       FLUJO PARA PRESUPUESTOS POR CATEGORÍA:
-      - Cuando el usuario pida crear o ajustar presupuestos, PRIMERO llama a getWorkspaceSettings (presupuestos actuales) y a getFinancialSummary con lastCompleteMonths 3 (o hasta 6), groupBy "category" y type "expense" para conocer el promedio mensual real (monthlyAverageExpenses) de cada categoría, calculado solo con meses completos. El key de cada grupo es el categoryId.
+      - Cuando el usuario pida crear o ajustar presupuestos, PRIMERO llama a getWorkspaceSettings (presupuestos actuales y categoryBudgetCurrency) y a getFinancialSummary con lastCompleteMonths 3 (o hasta 6), groupBy "category" y type "expense" para conocer el promedio mensual real (monthlyAverageExpenses) de cada categoría, calculado solo con meses completos. El key de cada grupo es el categoryId.
+      - Si categoryBudgetCurrency está confirmada y difiere de la moneda de reporte o faltan tasas manuales, no derives importes cruzados: pide al usuario los límites en la categoryBudgetCurrency confirmada.
       - Propón límites mensuales realistas basados en los promedios reales (redondeados, con un pequeño margen o recorte según el objetivo del usuario).
-      - Presenta la propuesta y pide confirmación. SOLO después de que el usuario confirme explícitamente, llama a saveCategoryBudgets con confirmed: true.
+      - Presenta la propuesta y pide confirmación. SOLO después de que el usuario confirme explícitamente, llama a saveCategoryBudgets con confirmed: true (y currency igual a categoryBudgetCurrency cuando esté confirmada).
 
       CONSULTAS:
       - Nunca anuncies consultas futuras ("voy a consultar", "déjame revisar", "espera un momento"): llama a las herramientas necesarias en este mismo turno y responde directamente con los resultados.

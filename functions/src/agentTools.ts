@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { HttpError, zonedDateKey, zonedWallClockToInstant } from "./http";
+import { HttpError, storedDateValue, zonedDateKey, zonedWallClockToInstant } from "./http";
 
 // Pure helpers for the chat agent's tools: date context, date parsing, amount
 // signs, lean tool rows and fail-soft tool execution. No firebase-admin here so
@@ -109,6 +109,7 @@ export function buildAgentContextBlock({ now, timeZone, currency }: { now: Date;
       - Bolsillos (cuentas con cuenta principal): su saldo está separado del de la cuenta principal; el total de la cuenta es principal + bolsillos.
       - Cuentas puente (compartidas): saldo negativo = lo que este workspace le debe a quien pagó.
       - Las compras a cuotas guardan el monto total en la fecha de compra.
+      - En resúmenes y presupuestos, las compras con una tarjeta de crédito que tiene día de corte y de pago cuentan en el mes en que se paga el extracto que las incluye (cada cuota un mes después), igual que en el panel de control.
 
       REGLAS DE FECHAS:
       - Convierte "hoy", "ayer", "esta semana", "este mes", "mes pasado", "este año" o fechas relativas a fechas concretas (YYYY-MM-DD) con los rangos anteriores ANTES de llamar herramientas.
@@ -136,14 +137,14 @@ export interface NameMaps {
   categories: Map<string, string>;
 }
 
-function toDate(value: any): Date | null {
-  const date = value?.toDate ? value.toDate() : value != null ? new Date(value) : null;
+function toDate(value: any, timeZone: string): Date | null {
+  const date = value != null ? storedDateValue(value, timeZone) : null;
   return date && !Number.isNaN(date.getTime()) ? date : null;
 }
 
 /** The fields the model needs from a transaction, with names instead of ids. */
 export function toLeanTransaction(id: string, data: Record<string, any>, names: NameMaps, timeZone: string): Record<string, unknown> {
-  const date = toDate(data.date);
+  const date = toDate(data.date, timeZone);
   const amount = Number(data.amount) || 0;
   const row: Record<string, unknown> = {
     id,

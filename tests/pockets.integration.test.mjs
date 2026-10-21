@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test, { after, before } from 'node:test'
-import { collection, deleteDoc, doc, setDoc, updateDoc, writeBatch } from 'firebase/firestore'
+import { collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, updateDoc, where, writeBatch } from 'firebase/firestore'
 import { createPocketFixture, functionsRequire } from './pockets.fixtures.mjs'
 
 let fixture
@@ -982,3 +982,142 @@ test('Admin delete refuses one leg of a mirror pair and leaves both legs and bal
   for (const ref of [localRef, twinRef, referencedOnlyRef, referrerRef]) assert.equal((await ref.get()).exists, true)
   assert.equal((await adminDb.collection('accounts').doc(bridge.id).get()).data().balance, 300)
 })
+
+for (const channel of ['client', 'server']) {
+  for (const hasPockets of [false, true]) {
+    test(`${channel} card payments preserve create/edit/delete balances ${hasPockets ? 'with pockets' : 'without pockets'}`, async () => {
+      const { accountsStore, transactionsStore, db, adminDb, identity, workspaceId } = fixture
+      const { mutateWorkspaceTransaction } = functionsRequire('./lib/pockets.js')
+      const bank = await accountsStore.addAccount({ name: 'Payment savings', type: 'savings', balance: 1_000, currency: 'COP' })
+      const pocket = hasPockets
+        ? await accountsStore.addAccount({ name: 'Reserved savings', type: 'savings', balance: 200, currency: 'COP', parentAccountId: bank.id })
+        : null
+      const card = await accountsStore.addAccount({ name: 'Payment card', type: 'credit', balance: -500, limit: 2_000, currency: 'COP' })
+      const accountIds = [bank.id, card.id, ...(pocket ? [pocket.id] : [])]
+      const movement = {
+        accountId: bank.id, toAccountId: card.id, amount: 100, type: 'transfer',
+        description: 'Credit-card payment', categoryId: '', date: new Date('2026-10-16T12:00:00.000Z'),
+        receiptUrl: null, notes: null, installments: 1
+      }
+      const mutate = async (kind, transactionId, next) => channel === 'client'
+        ? kind === 'created' ? transactionsStore.addTransaction(next)
+          : kind === 'updated' ? transactionsStore.updateTransaction(transactionId, next)
+            : transactionsStore.deleteTransaction(transactionId)
+        : mutateWorkspaceTransaction(adminDb, {
+          kind, transactionId, userId: identity.user.uid, workspaceId, ...(next ? { movement: next } : {})
+        })
+      const snapshot = async () => {
+        const accounts = await Promise.all(accountIds.map(id => getDoc(doc(db, 'accounts', id))))
+        const transactions = await getDocs(query(collection(db, 'transactions'), where('workspaceId', '==', workspaceId)))
+        return {
+          accounts: accounts.map(account => account.data()),
+          transactions: transactions.docs.map(transaction => ({ id: transaction.id, ...transaction.data() }))
+            .sort((a, b) => a.id.localeCompare(b.id))
+        }
+      }
+      const before = await snapshot()
+      const initialBankBalance = hasPockets ? 800 : 1_000
+      const assertBalances = async (paid) => {
+        const state = await snapshot()
+        assert.deepEqual(state.accounts.map(account => account.balance), [
+          initialBankBalance - paid, -500 + paid, ...(pocket ? [200] : [])
+        ])
+        assert.equal(state.accounts.reduce((total, account) => total + account.balance, 0), 500)
+        assert.equal(state.accounts[1].limit + state.accounts[1].balance, 1_500 + paid)
+        await accountsStore.fetchAccounts()
+        assert.deepEqual(accountIds.map(id => accountsStore.getAccountById(id)?.balance), state.accounts.map(account => account.balance))
+        return state
+      }
+      const created = await mutate('created', undefined, movement)
+      const afterCreate = await assertBalances(100)
+      const stored = await getDoc(doc(db, 'transactions', created.id))
+      assert.equal(stored.exists(), true)
+      assert.deepEqual({
+        workspaceId: stored.data().workspaceId, accountId: stored.data().accountId,
+        toAccountId: stored.data().toAccountId, type: stored.data().type,
+        amount: stored.data().amount, currency: stored.data().currency, categoryId: stored.data().categoryId
+      }, { workspaceId, accountId: bank.id, toAccountId: card.id, type: 'transfer', amount: 100, currency: 'COP', categoryId: '' })
+      assert.equal(afterCreate.transactions.length, before.transactions.length + 1)
+      assert.deepEqual(afterCreate.transactions.filter(tx => tx.type !== 'transfer'), before.transactions.filter(tx => tx.type !== 'transfer'))
+
+      if (pocket) {
+        for (const invalid of [
+          { ...movement, accountId: pocket.id },
+          { ...movement, accountId: card.id, toAccountId: pocket.id },
+          { ...movement, amount: 701 }
+        ]) {
+          const unchanged = await snapshot()
+          await assert.rejects(mutate('created', undefined, invalid), /bolsillo|tarjeta|saldo/i)
+          assert.deepEqual(await snapshot(), unchanged)
+        }
+        const unchanged = await snapshot()
+        await assert.rejects(mutate('updated', created.id, { ...movement, accountId: pocket.id }), /bolsillo|tarjeta/i)
+        await assert.rejects(updateDoc(doc(db, 'transactions', created.id), { amount: 101 }), error => error?.code === 'permission-denied')
+        assert.deepEqual(await snapshot(), unchanged)
+
+        const forged = doc(collection(db, 'transactions'))
+        const batch = writeBatch(db)
+        batch.set(forged, { ...stored.data(), accountId: pocket.id, amount: 10 })
+        batch.update(doc(db, 'accounts', pocket.id), {
+          balance: 190, pocketActivity: true, lastPocketMovementId: forged.id, lastPocketMovementType: 'created'
+        })
+        batch.update(doc(db, 'accounts', card.id), {
+          balance: -390, lastPocketMovementId: forged.id, lastPocketMovementType: 'created'
+        })
+        await assert.rejects(batch.commit(), error => error?.code === 'permission-denied')
+        assert.deepEqual(await snapshot(), unchanged)
+      }
+
+      await mutate('updated', created.id, { ...movement, amount: 150 })
+      const afterEdit = await assertBalances(150)
+      assert.equal((await getDoc(doc(db, 'transactions', created.id))).data().amount, 150)
+      assert.equal(afterEdit.transactions.length, afterCreate.transactions.length)
+      await mutate('deleted', created.id)
+      const afterDelete = await assertBalances(0)
+      assert.equal(afterDelete.transactions.some(transaction => transaction.id === created.id), false)
+      assert.deepEqual(afterDelete.transactions, before.transactions)
+      if (pocket) assert.deepEqual(afterDelete.accounts[2], before.accounts[2])
+    })
+  }
+}
+
+for (const attack of ['created', 'updated', 'relinked', 'deleted']) {
+  test(`rules reject forged root-card payment ${attack} without exact linked effects`, async () => {
+    const { accountsStore, transactionsStore, db, workspaceId, identity } = fixture
+    const bank = await accountsStore.addAccount({ name: 'Guarded payment bank', type: 'savings', balance: 1_000, currency: 'COP' })
+    const pocket = await accountsStore.addAccount({ name: 'Guarded reserve', type: 'savings', balance: 200, currency: 'COP', parentAccountId: bank.id })
+    const card = await accountsStore.addAccount({ name: 'Guarded card', type: 'credit', balance: -500, limit: 2_000, currency: 'COP' })
+    const otherCard = await accountsStore.addAccount({ name: 'Other guarded card', type: 'credit', balance: -500, limit: 2_000, currency: 'COP' })
+    const movement = {
+      accountId: bank.id, toAccountId: card.id, amount: 100, type: 'transfer',
+      description: 'Guarded card payment', categoryId: '', date: new Date('2026-10-16T12:00:00.000Z')
+    }
+    const created = attack === 'created' ? null : await transactionsStore.addTransaction(movement)
+    const transactionRef = created ? doc(db, 'transactions', created.id) : doc(collection(db, 'transactions'))
+    const accountIds = [bank.id, pocket.id, card.id, otherCard.id]
+    const snapshot = async () => ({
+      accounts: await Promise.all(accountIds.map(async id => (await getDoc(doc(db, 'accounts', id))).data())),
+      transactions: (await getDocs(query(collection(db, 'transactions'), where('workspaceId', '==', workspaceId))))
+        .docs.map(transaction => ({ id: transaction.id, ...transaction.data() })).sort((a, b) => a.id.localeCompare(b.id))
+    })
+    const before = await snapshot()
+    const batch = writeBatch(db)
+    if (attack === 'created') {
+      batch.set(transactionRef, { ...movement, workspaceId, userId: identity.user.uid, currency: 'COP', createdAt: new Date() })
+    } else if (attack === 'deleted') batch.delete(transactionRef)
+    else batch.update(transactionRef, { amount: 150, ...(attack === 'relinked' ? { toAccountId: otherCard.id } : {}) })
+    batch.update(doc(db, 'accounts', bank.id), {
+      balance: attack === 'created' ? 700 : attack === 'deleted' ? 800 : 650,
+      lastPocketMovementId: transactionRef.id,
+      lastPocketMovementType: attack === 'relinked' ? 'updated' : attack
+    })
+    // A childless root must not bypass linked effects by omitting current markers.
+    batch.update(doc(db, 'accounts', card.id), {
+      balance: attack === 'created' ? -250 : attack === 'deleted' ? -650 : attack === 'relinked' ? -500 : -350
+    })
+    if (attack === 'relinked') batch.update(doc(db, 'accounts', otherCard.id), { balance: -250 })
+    await assert.rejects(batch.commit(), error => error?.code === 'permission-denied')
+    assert.deepEqual(await snapshot(), before, 'rejected batches must preserve every account, transaction and transaction count')
+    if (created) await transactionsStore.deleteTransaction(created.id)
+  })
+}

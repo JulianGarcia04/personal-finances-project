@@ -6,6 +6,8 @@ import { Timestamp } from 'firebase-admin/firestore'
 import { logger } from 'firebase-functions'
 import { HttpsError, onCall } from 'firebase-functions/v2/https'
 import { z } from 'zod'
+import { AgentToolError, parseLocalDate } from './agentTools'
+import { timeZoneForCountry } from './http'
 import { roundMoney } from './money'
 
 /** Maximum statement rows accepted per callable invocation. */
@@ -88,6 +90,22 @@ export function toImportHttpsError(error: unknown): HttpsError {
 
 type PreparedRow = z.infer<typeof rowSchema> & { dateValue: Date }
 
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * Statement row date. The server clock runs in UTC, so a date-only value is that
+ * calendar day at local noon in the user's time zone; timestamps keep the instant sent.
+ */
+export function statementRowDate(value: string, timeZone: string): Date {
+  if (!DATE_ONLY.test(value)) return new Date(value)
+  try {
+    return parseLocalDate(value, timeZone)
+  } catch (error) {
+    if (error instanceof AgentToolError) throw new ImportRejection('Una fecha del extracto no es válida.')
+    throw error
+  }
+}
+
 function isRelated(data: admin.firestore.DocumentData): boolean {
   return typeof data.parentAccountId === 'string' ||
     (Array.isArray(data.childAccountIds) && data.childAccountIds.length > 0)
@@ -132,8 +150,7 @@ export async function importWorkspacePocketStatement(
   })
   if (!input.userId) throw new ImportRejection('El usuario es obligatorio.')
 
-  const rows: PreparedRow[] = parsed.rows.map(row => ({ ...row, dateValue: new Date(row.date) }))
-  const delta = roundMoney(rows.reduce((sum, row) => sum + row.amount, 0))
+  const delta = roundMoney(parsed.rows.reduce((sum, row) => sum + row.amount, 0))
   if (!Number.isFinite(delta)) throw new ImportRejection('El total del extracto no es válido.')
 
   const { workspaceId, accountId, statementImportId } = parsed
@@ -142,7 +159,7 @@ export async function importWorkspacePocketStatement(
   const accountRef = db.collection('accounts').doc(accountId)
   const userRef = db.collection('users').doc(input.userId)
   const workspaceRef = db.collection('workspaces').doc(workspaceId)
-  const transactionRefs = rows.map(() => db.collection('transactions').doc())
+  const transactionRefs = parsed.rows.map(() => db.collection('transactions').doc())
   const createdAt = Timestamp.now()
 
   return db.runTransaction(async transaction => {
@@ -166,6 +183,8 @@ export async function importWorkspacePocketStatement(
       }
       return marker.result as PocketStatementResult
     }
+    const timeZone = timeZoneForCountry(userSnapshot.data()?.country)
+    const rows: PreparedRow[] = parsed.rows.map(row => ({ ...row, dateValue: statementRowDate(row.date, timeZone) }))
     if (!accountSnapshot.exists) throw new ImportRejection('La cuenta seleccionada no existe.')
 
     const account = accountSnapshot.data()!

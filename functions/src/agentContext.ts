@@ -2,7 +2,7 @@ import * as admin from "firebase-admin";
 import { FieldPath, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { z } from "zod";
 import { createWorkspaceAccount, mutateWorkspaceTransaction } from "./pockets";
-import { zonedDateKey } from "./http";
+import { storedDateValue, zonedDateKey } from "./http";
 import {
   AgentToolError,
   localDayRange,
@@ -12,7 +12,17 @@ import {
   signedAmount,
   toLeanTransaction
 } from "./agentTools";
-import { buildBudgetStatus, computeNetWorth, previousPeriod, resolvePeriod, summarize, SummaryTransaction } from "./agentQueries";
+import {
+  billingLookbackStart,
+  buildBudgetStatus,
+  cardBillingByAccount,
+  computeNetWorth,
+  previousPeriod,
+  resolvePeriod,
+  summarize,
+  SummaryTransaction
+} from "./agentQueries";
+import { buildLegacyCategoryBudgetsPatch, parseLegacyCategoryBudgetCurrency } from "./legacyCategoryBudgets";
 import { cosineSimilarity, EMBEDDINGS_COLLECTION, isEmbeddable, queryEmbeddingInput, toVectorArray } from "./embeddings";
 
 // The chat agent's tools as plain definitions built from (db, context), with no
@@ -62,12 +72,23 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
     tools.push({ name, description, inputSchema, run: safeTool(name, inputSchema, fn) });
   };
 
+  // Workspace accounts (names and card billing days), loaded once per request and
+  // invalidated by createAccount.
+  let accountsPromise: Promise<admin.firestore.QueryDocumentSnapshot[]> | null = null;
+  const loadAccounts = (): Promise<admin.firestore.QueryDocumentSnapshot[]> => {
+    accountsPromise ??= db.collection('accounts').where('workspaceId', '==', workspaceId).get()
+      .then(snapshot => snapshot.docs);
+    return accountsPromise;
+  };
+  const loadCardBilling = async () =>
+    cardBillingByAccount((await loadAccounts()).map(docSnap => ({ ...docSnap.data(), id: docSnap.id })));
+
   // Account and category names, loaded once per request (invalidated by createAccount).
   let namesPromise: Promise<NameMaps> | null = null;
   const loadNames = (): Promise<NameMaps> => {
     namesPromise ??= (async () => {
       const [accounts, workspaceCategories, globalCategories] = await Promise.all([
-        db.collection('accounts').where('workspaceId', '==', workspaceId).get(),
+        loadAccounts(),
         db.collection('categories').where('workspaceId', '==', workspaceId).get(),
         db.collection('categories').where('workspaceId', '==', null).get()
       ]);
@@ -76,7 +97,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
         categories.set(docSnap.id, docSnap.data().name || 'Sin nombre');
       });
       return {
-        accounts: new Map(accounts.docs.map(docSnap => [docSnap.id, String(docSnap.data().name || 'Sin nombre')])),
+        accounts: new Map(accounts.map(docSnap => [docSnap.id, String(docSnap.data().name || 'Sin nombre')])),
         categories
       };
     })();
@@ -154,6 +175,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
         parentAccountId
       });
       namesPromise = null;
+      accountsPromise = null;
       const { id, type: createdType, balance: createdBalance, currency: createdCurrency } = created as Record<string, unknown>;
       return { success: true, id, name: created.name, type: createdType, balance: createdBalance, currency: createdCurrency };
     }
@@ -415,26 +437,33 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
   );
 
   // One range query plus older installment purchases whose later shares may fall
-  // inside the range; aggregation itself is pure (agentQueries.ts).
+  // inside the range, and expenses of the two previous months whose card statements may
+  // be paid inside it; aggregation itself is pure (agentQueries.ts).
   const loadSummaryRows = async (start: Date, endExclusive: Date): Promise<SummaryTransaction[]> => {
     const transactions = db.collection('transactions').where('workspaceId', '==', workspaceId);
-    const [inRange, installmentPurchases] = await Promise.all([
+    const [inRange, installmentPurchases, recentExpenses] = await Promise.all([
       transactions
         .where('date', '>=', Timestamp.fromDate(start))
         .where('date', '<', Timestamp.fromDate(endExclusive))
         .orderBy('date', 'desc')
         .get(),
-      transactions.where('type', '==', 'expense').where('installments', '>', 1).get()
+      transactions.where('type', '==', 'expense').where('installments', '>', 1).get(),
+      transactions
+        .where('type', '==', 'expense')
+        .where('date', '>=', Timestamp.fromDate(billingLookbackStart(start, timeZone)))
+        .where('date', '<', Timestamp.fromDate(start))
+        .orderBy('date', 'desc')
+        .get()
     ]);
     const rows = new Map<string, SummaryTransaction>();
-    [...inRange.docs, ...installmentPurchases.docs].forEach(docSnap => {
+    [...inRange.docs, ...installmentPurchases.docs, ...recentExpenses.docs].forEach(docSnap => {
       const data = docSnap.data();
       rows.set(docSnap.id, {
         ...data,
         id: docSnap.id,
         type: String(data.type ?? ''),
         amount: Number(data.amount) || 0,
-        date: data.date?.toDate ? data.date.toDate() : new Date(data.date)
+        date: storedDateValue(data.date, timeZone)
       });
     });
     return [...rows.values()];
@@ -442,7 +471,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
 
   define(
     'getFinancialSummary',
-    `Resumen financiero de un periodo con la misma lógica del panel de control: ingresos, gastos, neto y tasa de ahorro en la moneda principal (${primaryCurrency}), convertidos con las tasas del workspace, cuotas repartidas por mes y sin transferencias ni préstamos. Úsalo SIEMPRE para totales, resúmenes, "¿cuánto gasté…?", gastos por categoría/cuenta/mes/día, comparaciones con el periodo anterior y promedios mensuales (lastCompleteMonths). Define el periodo con preset, con startDate/endDate o con lastCompleteMonths (solo una forma; por defecto el mes en curso). La salida trae period {start, end, label}, totals, groups, topExpenses, comparison y notes.`,
+    `Resumen financiero de un periodo con la misma lógica del panel de control: ingresos, gastos, neto y tasa de ahorro en la moneda principal (${primaryCurrency}), convertidos con las tasas del workspace, cuotas repartidas por mes (las compras con tarjeta de crédito con día de corte y de pago cuentan en el mes en que se paga su extracto) y sin transferencias ni préstamos. Úsalo SIEMPRE para totales, resúmenes, "¿cuánto gasté…?", gastos por categoría/cuenta/mes/día, comparaciones con el periodo anterior y promedios mensuales (lastCompleteMonths). Define el periodo con preset, con startDate/endDate o con lastCompleteMonths (solo una forma; por defecto el mes en curso). La salida trae period {start, end, label}, totals, groups, topExpenses, comparison y notes.`,
     z.object({
       preset: z.enum(['today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month', 'this_year', 'last_year']).optional()
         .describe('Periodo relativo en la zona horaria del usuario (semanas de lunes a domingo; meses y años calendario completos).'),
@@ -461,7 +490,12 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
       const now = clock();
       const period = resolvePeriod(input, now, timeZone);
       const start = input.compareWithPrevious ? previousPeriod(period, timeZone).startInstant : period.startInstant;
-      const [rows, names, ws] = await Promise.all([loadSummaryRows(start, period.endExclusive), loadNames(), loadWorkspace()]);
+      const [rows, names, ws, cardBilling] = await Promise.all([
+        loadSummaryRows(start, period.endExclusive),
+        loadNames(),
+        loadWorkspace(),
+        loadCardBilling()
+      ]);
       return summarize(rows, {
         ...input,
         period,
@@ -469,7 +503,8 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
         timeZone,
         primaryCurrency,
         exchangeRates: ratesOf(ws),
-        names
+        names,
+        cardBilling
       });
     }
   );
@@ -481,21 +516,30 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
     async () => {
       const now = clock();
       const period = resolvePeriod({ preset: 'this_month' }, now, timeZone);
-      const [ws, goalsSnap, rows, names] = await Promise.all([
+      const [ws, goalsSnap, rows, names, cardBilling] = await Promise.all([
         loadWorkspace(),
         db.collection('goals').where('workspaceId', '==', workspaceId).get(),
         loadSummaryRows(period.startInstant, period.endExclusive),
-        loadNames()
+        loadNames(),
+        loadCardBilling()
       ]);
+      const categoryBudgetCurrency = parseLegacyCategoryBudgetCurrency(ws);
       const rates = ratesOf(ws);
       const month = summarize(rows, {
-        period, now, timeZone, primaryCurrency, exchangeRates: rates, names,
+        period, now, timeZone, primaryCurrency, exchangeRates: rates, names, cardBilling,
+        groupBy: 'category', topN: 0
+      });
+      const defaultBudgetRows = rows.filter(row =>
+        row.type !== 'expense' || !row.budgetId || row.budgetId === 'default-monthly'
+      );
+      const defaultBudgetMonth = summarize(defaultBudgetRows, {
+        period, now, timeZone, primaryCurrency, exchangeRates: rates, names, cardBilling,
         groupBy: 'category', topN: 0
       });
       const budgets = buildBudgetStatus({
         categoryBudgets: (ws.categoryBudgets ?? {}) as Record<string, number>,
         expenseLimit: ws.expenseLimit,
-        summary: month,
+        summary: defaultBudgetMonth,
         names
       });
       const budgetIncome = Number(ws.budgetIncome) || 0;
@@ -508,6 +552,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
       const goalNames = new Map(goalsSnap.docs.map(docSnap => [docSnap.id, String(docSnap.data().name || 'Meta')]));
       return {
         currency: primaryCurrency,
+        categoryBudgetCurrency,
         exchangeRates: rates,
         budgetIncome,
         budgetSplit: Object.fromEntries(Object.entries(split).map(([key, percent]) => [
@@ -530,16 +575,27 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
 
   define(
     'saveCategoryBudgets',
-    `Guarda el presupuesto mensual recurrente por categoría (límite de gasto mensual) en la moneda principal (${primaryCurrency}). Sin confirmed: true solo valida y devuelve un resumen para pedir confirmación.`,
+    `Guarda únicamente los límites mensuales heredados por categoría del workspace. Si categoryBudgetCurrency está confirmada en el workspace, currency debe coincidir con ella. Sin confirmed: true solo valida y devuelve un resumen para pedir confirmación.`,
     z.object({
+      currency: z.string().optional().describe('Código de moneda de los límites; cuando categoryBudgetCurrency está confirmada en el workspace, debe coincidir con ella.'),
       budgets: z.array(z.object({
         categoryId: z.string().min(1).describe('El ID de la categoría (obtenido de listCategories o getFinancialSummary con groupBy category)'),
         monthlyLimit: z.number().min(0).describe('Límite mensual de gasto para esta categoría (0 para eliminar el presupuesto)'),
       })).describe('Lista de presupuestos por categoría a guardar'),
       confirmed: confirmedParam,
     }),
-    async ({ budgets, confirmed }) => {
+    async ({ currency, budgets, confirmed }) => {
       const wsRef = db.collection('workspaces').doc(workspaceId);
+      const ws = await loadWorkspace();
+      const confirmedCurrency = parseLegacyCategoryBudgetCurrency(ws);
+      if (confirmedCurrency !== null || currency !== undefined) {
+        buildLegacyCategoryBudgetsPatch(
+          (ws.categoryBudgets ?? {}) as Record<string, number>,
+          budgets,
+          confirmedCurrency,
+          currency ?? confirmedCurrency ?? ''
+        );
+      }
       if (budgets.length === 0) return { success: true, savedBudgets: 0, message: "No había presupuestos para guardar." };
 
       // Every category must belong to the active workspace.
@@ -552,6 +608,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
         throw new AgentToolError(`Categorías no encontradas en el workspace activo: ${unknown.join(', ')}.`);
       }
 
+      const effectiveCurrency = confirmedCurrency ?? primaryCurrency;
       // Last entry wins when the model repeats a category (duplicate field paths are rejected).
       const limits = new Map(budgets.map(b => [b.categoryId, Number(b.monthlyLimit)]));
       if (!isConfirmed(confirmed)) {
@@ -561,7 +618,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
           summary: [...limits].map(([categoryId, monthlyLimit]) => ({
             categoryName: categoryNames.get(categoryId),
             monthlyLimit,
-            currency: primaryCurrency
+            currency: effectiveCurrency
           })),
           message: awaitingConfirmation(confirmed, "Muestra esta propuesta y pide confirmación explícita antes de guardar.")
         };
@@ -577,7 +634,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
       });
       const [firstField, firstValue, ...rest] = fieldUpdates;
       await wsRef.update(firstField as FieldPath, firstValue, ...rest);
-      return { success: true, savedBudgets: limits.size, message: "Presupuestos guardados en el workspace activo." };
+      return { success: true, savedBudgets: limits.size, currency: effectiveCurrency, message: "Presupuestos guardados en el workspace activo." };
     }
   );
 

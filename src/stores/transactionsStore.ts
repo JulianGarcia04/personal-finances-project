@@ -3,7 +3,7 @@ import { db, auth, storage, functions } from '@/lib/firebase'
 import { useAccountsStore } from './accountsStore'
 import { useAuthStore } from './authStore'
 import { Account, Transaction, Category, TransactionType } from '@/types'
-import { getTransactionReplacementDeltas, isPocketRelatedAccount } from '@/lib/pockets'
+import { getTransactionReplacementDeltas, isPocketAccount, isPocketRelatedAccount } from '@/lib/pockets'
 import {
   isSettlementCandidate,
   planMirror,
@@ -12,7 +12,9 @@ import {
   SettlementAccountRecord,
   SettlementLegRecord
 } from '@/lib/mirror'
-import { expenseAmountForDate, getInstallmentCount } from '@/lib/installments'
+import { createCardBillingLookup, expenseAmountForDate, getInstallmentCount } from '@/lib/installments'
+import { parseDateOnly, toDateValue } from '@/lib/dates'
+import { createExpenseBudgetAssigner, selectBudgetExpenses } from '@/lib/transactionClassification'
 import { 
   collection, 
   query, 
@@ -68,7 +70,8 @@ interface PocketMovementTransaction {
 }
 
 function isUsablePocketMovementAccount(account: any): boolean {
-  return account && ['checking', 'savings', 'cash'].includes(account.type) && !account.mirror
+  return account && ['checking', 'savings', 'cash', 'credit'].includes(account.type) && !account.mirror &&
+    (account.type !== 'credit' || !isPocketRelatedAccount(account))
 }
 
 function movementAccountIsPocketRelated(account: any): boolean {
@@ -197,6 +200,11 @@ async function commitPocketMovement(options: {
       const isNewMovement = movement === options.next
       const recordedCurrency = isNewMovement ? options.next?.currency : before?.currency
       if (recordedCurrency !== source.currency) throw new Error('La moneda del movimiento debe coincidir con su cuenta.')
+      const target = movement.toAccountId ? accounts.get(movement.toAccountId) : undefined
+      if ((source.type === 'credit' || target?.type === 'credit') &&
+          (movement.type !== 'transfer' || isPocketAccount(source) || (target && isPocketAccount(target)))) {
+        throw new Error('Las transferencias con tarjetas requieren cuentas principales, no bolsillos.')
+      }
       if (movement.type === 'transfer') {
         const destination = movement.toAccountId && accounts.get(movement.toAccountId)
         if (!destination || movement.amount <= 0 || movement.accountId === movement.toAccountId ||
@@ -311,14 +319,21 @@ export const useTransactionsStore = defineStore('transactions', {
 
       return list
     },
+    expensesForBudget: (state) => (budgetId: string) => {
+      const workspaceId = useAuthStore().activeWorkspaceId
+      if (!auth.currentUser || !workspaceId) return []
+      return selectBudgetExpenses(state.transactions.filter(t => t.workspaceId === workspaceId), budgetId)
+    },
     // Gastos del mes actual agrupados por categoría (para presupuestos).
     // Acepta un convertidor opcional (amount, currency) => amount en moneda principal.
+    // Billed card installments count in the month their statement is paid.
     spendingByCategoryThisMonth: (state) => (convert?: (amount: number, currency: string) => number) => {
       const now = new Date()
+      const billingFor = createCardBillingLookup(useAccountsStore().accounts)
       const result: Record<string, number> = {}
       state.transactions.forEach(t => {
         if (t.type !== 'expense' || !t.categoryId) return
-        const amount = expenseAmountForDate(t, now)
+        const amount = expenseAmountForDate(t, now, billingFor(t.accountId))
         if (amount === 0) return
         const convertedAmount = convert ? convert(amount, t.currency) : amount
         result[t.categoryId] = (result[t.categoryId] || 0) + convertedAmount
@@ -406,7 +421,7 @@ export const useTransactionsStore = defineStore('transactions', {
             id: docSnap.id, 
             ...data,
             // Convertir timestamp de Firestore a Date
-            date: data.date instanceof Timestamp ? data.date.toDate() : new Date(data.date),
+            date: toDateValue(data.date),
             createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate() : new Date(data.createdAt)
           } as Transaction)
         })
@@ -1162,7 +1177,7 @@ export const useTransactionsStore = defineStore('transactions', {
         )
         return {
           ...row,
-          dateValue: new Date(row.date),
+          dateValue: parseDateOnly(row.date),
           categoryId: matchedCategory?.id ?? fallbackCategory?.id ?? ''
         }
       })
@@ -1310,6 +1325,20 @@ export const useTransactionsStore = defineStore('transactions', {
         console.error('Error al importar lote de transacciones:', error)
         throw error
       }
+    },
+
+    // Classification is separate from financial editing, including mirrored expenses.
+    async assignExpenseBudget(transactionId: string, budgetId: string | null): Promise<void> {
+      const authStore = useAuthStore()
+      const assign = createExpenseBudgetAssigner({
+        getUserId: () => auth.currentUser?.uid ?? null,
+        getWorkspaceId: () => authStore.activeWorkspaceId ?? null,
+        findTransaction: id => this.transactions.find(t => t.id === id),
+        writePatch: async (id, { budgetId }) => {
+          await updateDoc(doc(db, 'transactions', id), { budgetId })
+        },
+      })
+      await assign(transactionId, budgetId)
     },
 
     // 6. Editar / Actualizar Transacción

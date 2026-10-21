@@ -1,6 +1,6 @@
 // Pure, framework-free Dashboard KPI math. Every function receives `now` and
 // amounts already converted to the primary currency, so results are deterministic.
-import type { InstallmentTransaction } from './installments.ts'
+import type { CardBilling, CardBillingLookup, InstallmentTransaction } from './installments.ts'
 import { expenseAmountForMonth } from './installments.ts'
 
 export const daysInMonth = (year: number, month: number) => new Date(year, month + 1, 0).getDate()
@@ -35,13 +35,19 @@ export const isDateInPeriod = (date: Date, period: MonthPeriod) =>
   date.getDate() <= period.uptoDay
 
 // Installment-aware expense for a bounded period. Each monthly installment is
-// imputed on the purchase's day-of-month (clamped to the month's last day).
-export const expenseAmountInPeriod = (transaction: InstallmentTransaction, period: MonthPeriod) => {
+// imputed on the purchase's day-of-month, or on the payment due day for a billed card
+// (clamped to the month's last day in both cases).
+export const expenseAmountInPeriod = (
+  transaction: InstallmentTransaction,
+  period: MonthPeriod,
+  billing?: CardBilling | null
+) => {
   const date = transaction.date instanceof Date ? transaction.date : new Date(transaction.date)
   if (Number.isNaN(date.getTime())) return 0
-  const imputedDay = Math.min(date.getDate(), daysInMonth(period.year, period.month))
+  const day = billing ? billing.paymentDueDay : date.getDate()
+  const imputedDay = Math.min(day, daysInMonth(period.year, period.month))
   if (imputedDay > period.uptoDay) return 0
-  return expenseAmountForMonth(transaction, period.year, period.month)
+  return expenseAmountForMonth(transaction, period.year, period.month, billing)
 }
 
 // Rounded % change; an empty previous period reads as +100% (or 0% when both are empty).
@@ -120,8 +126,38 @@ export const spendableUntilMonthEnd = (
   }
 }
 
+export interface MonthEndExpenseSplit {
+  pace: number;
+  committed: number;
+}
+
+// Splits the expenses imputed to `now`'s month for the month-end projection. Shares of
+// purchases dated this month follow the daily pace; shares of earlier purchases (later
+// installments and card statements due this month) are known commitments added once.
+export const splitMonthEndExpenses = <T extends InstallmentTransaction & { currency: string }>(
+  transactions: readonly T[],
+  now: Date,
+  { convert, billingFor, include }: {
+    convert: (amount: number, currency: string) => number;
+    billingFor?: CardBillingLookup;
+    include?: (transaction: T) => boolean;
+  }
+): MonthEndExpenseSplit => {
+  const year = now.getFullYear(), month = now.getMonth()
+  const split: MonthEndExpenseSplit = { pace: 0, committed: 0 }
+  for (const transaction of transactions) {
+    if (transaction.type !== 'expense' || (include && !include(transaction))) continue
+    const amount = expenseAmountForMonth(transaction, year, month, billingFor?.(transaction.accountId))
+    if (amount === 0) continue
+    const date = transaction.date
+    const key = date.getFullYear() === year && date.getMonth() === month ? 'pace' : 'committed'
+    split[key] += convert(amount, transaction.currency)
+  }
+  return split
+}
+
 // Month-end expense projection: purchases made this month extrapolated at the current
-// daily pace, plus installments of earlier purchases already imputed to this month.
+// daily pace, plus amounts of earlier purchases already imputed to this month.
 export const projectMonthEndExpenses = (
   { paceExpensesToDate, committedExpenses, now }: { paceExpensesToDate: number; committedExpenses: number; now: Date }
 ) => {
