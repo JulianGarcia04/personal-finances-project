@@ -113,6 +113,14 @@ test("total budget alert names the whole budget instead of a category", () => {
   assert.match(named.subject, /tope total del presupuesto «Hogar»/);
   assert.match(named.text, /en este presupuesto/);
   assert.doesNotMatch(named.text, /esta categoría/);
-  const main = renderBudgetAlertEmail({ ...baseAlert, threshold: 80, totalBudget: true });
-  assert.match(main.subject, /Estás cerca del tope total de tu presupuesto mensual/);
+});
+
+test("income alert compares the month's spending with the month's income", () => {
+  const near = renderBudgetAlertEmail({ ...baseAlert, threshold: 80, incomeBudget: true, spent: 4_250_000, budget: 5_000_000 });
+  assert.match(near.subject, /Ya gastaste el 85 % de tus ingresos del mes/);
+  assert.match(near.text, /Ingresos del mes: /);
+  assert.doesNotMatch(near.text, /esta categoría/);
+  const reached = renderBudgetAlertEmail({ ...baseAlert, threshold: 100, incomeBudget: true, spent: 5_200_000, budget: 5_000_000 });
+  assert.match(reached.subject, /Tus gastos del mes ya alcanzaron tus ingresos/);
+  assert.match(reached.text, /Te pasaste por: /);
 });

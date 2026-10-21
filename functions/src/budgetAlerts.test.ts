@@ -6,8 +6,11 @@ import {
   budgetForCategory,
   capInReportingCurrency,
   categorySpendForScope,
+  countsTowardMonthlySpend,
   countsTowardScopeTotal,
-  defaultBudgetUsage,
+  incomeReference,
+  monthlyExpenseTotal,
+  monthlyIncomeTotal,
   scopeTotalSpend,
   TOTAL_ALERT_SUBJECT,
   evaluateBudgetThresholds,
@@ -253,38 +256,64 @@ test("event scope total is the full committed principal and unknown when a rate 
   assert.equal(scopeTotalSpend([...txs, expense(5, { budgetId: "viaje", currency: "USD" })], VIAJE, OCTOBER, COP_OPTIONS), null);
 });
 
-test("default budget usage mirrors the dashboard: capped spend over the sum of positive caps", () => {
-  const txs = [
-    expense(150),
-    expense(20, { categoryId: "fun" }),
-    expense(999, { categoryId: "uncapped" }),
-    expense(999, { budgetId: "hogar" })
-  ];
-  const caps = { food: 100, fun: 50, zero: 0 };
-  assert.deepEqual(defaultBudgetUsage(txs, caps, "COP", OCTOBER, COP_OPTIONS), { spent: 120, limit: 150 });
-});
-
-test("default budget usage is unknown without confirmed cap units, positive caps or rates", () => {
-  const txs = [expense(150), expense(5, { categoryId: "fun", currency: "USD" })];
-  assert.equal(defaultBudgetUsage(txs, { food: 100 }, null, OCTOBER, COP_OPTIONS), null);
-  assert.equal(defaultBudgetUsage(txs, { food: 0 }, "COP", OCTOBER, COP_OPTIONS), null);
-  assert.equal(defaultBudgetUsage(txs, { food: 100, fun: 50 }, "COP", OCTOBER, COP_OPTIONS), null);
-  assert.equal(defaultBudgetUsage(txs, { food: 100 }, "USD", OCTOBER, COP_OPTIONS), null);
-});
-
 test("countsTowardScopeTotal only accepts expenses of the scope with a share in the period", () => {
   const options = { timeZone: BOGOTA };
   assert.equal(countsTowardScopeTotal(expense(10, { budgetId: "hogar", categoryId: undefined }), HOGAR, OCTOBER, options), true);
   assert.equal(countsTowardScopeTotal(expense(10, { budgetId: "otro" }), HOGAR, OCTOBER, options), false);
   assert.equal(countsTowardScopeTotal(expense(10, { budgetId: "hogar", date: new Date("2026-09-10T17:00:00.000Z") }), HOGAR, OCTOBER, options), false);
   assert.equal(countsTowardScopeTotal(undefined, HOGAR, OCTOBER, options), false);
-  // Default budget: only categories with a positive cap feed the dashboard total.
-  const caps = { food: 100 };
-  assert.equal(countsTowardScopeTotal(expense(10), DEFAULT_SCOPE, OCTOBER, { ...options, cappedCategories: caps }), true);
-  assert.equal(countsTowardScopeTotal(expense(10, { categoryId: "fun" }), DEFAULT_SCOPE, OCTOBER, { ...options, cappedCategories: caps }), false);
 });
 
 test("total alerts use their own ledger slot", () => {
   assert.equal(budgetAlertLedgerId("ws", "default-monthly", "2026-10", TOTAL_ALERT_SUBJECT), "ws_2026-10___total");
   assert.equal(budgetAlertLedgerId("ws", "hogar", "event", TOTAL_ALERT_SUBJECT), "ws_hogar_event___total");
+});
+
+const income = (amount: number, extra: Record<string, unknown> = {}) => ({
+  type: "income",
+  amount: Math.abs(amount),
+  currency: "COP",
+  date: new Date("2026-10-15T17:00:00.000Z"),
+  ...extra
+});
+
+test("monthly income counts only income registered in the local month, converted", () => {
+  const txs = [
+    income(5_000_000),
+    income(100, { currency: "USD" }),
+    income(999, { date: new Date("2026-09-30T17:00:00.000Z") }),
+    expense(999),
+    { type: "transfer", amount: 999, currency: "COP", date: new Date("2026-10-15T17:00:00.000Z") }
+  ];
+  assert.equal(monthlyIncomeTotal(txs, OCTOBER, { ...COP_OPTIONS, exchangeRates: { USD: 4000 } }), 5_400_000);
+  assert.equal(monthlyIncomeTotal(txs, OCTOBER, COP_OPTIONS), null);
+});
+
+test("monthly expense total counts every budget's month share", () => {
+  const txs = [
+    expense(100),
+    expense(50, { budgetId: "hogar", categoryId: undefined }),
+    expense(70, { budgetId: "viaje" }),
+    expense(999, { date: new Date("2026-09-10T17:00:00.000Z") }),
+    income(999)
+  ];
+  assert.equal(monthlyExpenseTotal(txs, OCTOBER, COP_OPTIONS), 220);
+  assert.equal(monthlyExpenseTotal([...txs, expense(1, { currency: "USD" })], OCTOBER, COP_OPTIONS), null);
+});
+
+test("income reference is the larger of planner and real income, falling back to either", () => {
+  assert.equal(incomeReference(5_000_000, 6_000_000), 6_000_000);
+  assert.equal(incomeReference(5_000_000, 1_000_000), 5_000_000);
+  assert.equal(incomeReference(0, 3_000_000), 3_000_000);
+  assert.equal(incomeReference(5_000_000, null), 5_000_000);
+  assert.equal(incomeReference(undefined, 0), null);
+  assert.equal(incomeReference(0, null), null);
+});
+
+test("countsTowardMonthlySpend accepts any budget's expense with a share in the month", () => {
+  const options = { timeZone: BOGOTA };
+  assert.equal(countsTowardMonthlySpend(expense(10, { budgetId: "hogar", categoryId: undefined }), OCTOBER, options), true);
+  assert.equal(countsTowardMonthlySpend(expense(10, { date: new Date("2026-09-10T17:00:00.000Z") }), OCTOBER, options), false);
+  assert.equal(countsTowardMonthlySpend(income(10), OCTOBER, options), false);
+  assert.equal(countsTowardMonthlySpend(undefined, OCTOBER, options), false);
 });

@@ -102,7 +102,7 @@ Vault está diseñado para correr completamente offline utilizando **Firebase Em
    ENCRYPTION_SECRET=vault-super-secure-encryption-secret-32-chars
    ```
 
-   **Alertas de presupuesto por correo (opcional):** el trigger `notifyBudgetThreshold` envía un correo a los miembros del workspace cuando una categoría llega al 80 % o al 100 % de su tope, o cuando lo hace el tope total del presupuesto (el `totalLimit` de los presupuestos creados; en el presupuesto principal, el mismo "% usado" del Dashboard: gasto de las categorías con tope, cada una recortada a su tope, sobre la suma de los topes), usando `nodemailer` sobre Gmail SMTP. Requiere una cuenta de Gmail con verificación en dos pasos y una **contraseña de aplicación** (https://myaccount.google.com/apppasswords); la contraseña normal de la cuenta no funciona.
+   **Alertas de presupuesto por correo (opcional):** el trigger `notifyBudgetThreshold` envía un correo a los miembros del workspace cuando una categoría llega al 80 % o al 100 % de su tope, o cuando lo hace el tope total del presupuesto (el `totalLimit` de los presupuestos creados) o cuando el gasto total del mes llega al 80 % o al 100 % de los ingresos del mes (el mayor entre el ingreso del planificador 50/30/20 y los ingresos registrados en el mes), usando `nodemailer` sobre Gmail SMTP. Requiere una cuenta de Gmail con verificación en dos pasos y una **contraseña de aplicación** (https://myaccount.google.com/apppasswords); la contraseña normal de la cuenta no funciona.
    * **Local (emuladores):** crea `functions/.secret.local` (no se versiona) con:
      ```env
      SMTP_USER=tu-cuenta@gmail.com

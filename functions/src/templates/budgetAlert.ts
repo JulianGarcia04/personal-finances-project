@@ -18,6 +18,8 @@ export interface BudgetAlertEmailInput {
   eventBudget?: boolean;
   /** Alert on the budget's overall cap; `categoryName` is ignored. */
   totalBudget?: boolean;
+  /** Alert on the month's total spending vs the month's income (`budget` is the income). */
+  incomeBudget?: boolean;
 }
 
 export interface RenderedEmail {
@@ -72,12 +74,12 @@ export function budgetAlertCopy(input: BudgetAlertEmailInput): BudgetAlertCopy {
   const overspend = Math.max(input.spent - input.budget, 0);
   const reached = input.threshold === 100;
   const money = (value: number) => formatMoney(value, input.currency);
-  const subject = reached
-    ? `Ya alcanzaste el ${capOf(label)}`
-    : `Estás cerca del ${capOf(label)} (${percent} %)`;
-  const headline = reached
-    ? `Ya alcanzaste el ${capOf(target)}.`
-    : `Estás cerca del ${capOf(target)}.`;
+  const subject = input.incomeBudget
+    ? reached ? "Tus gastos del mes ya alcanzaron tus ingresos" : `Ya gastaste el ${percent} % de tus ingresos del mes`
+    : reached ? `Ya alcanzaste el ${capOf(label)}` : `Estás cerca del ${capOf(label)} (${percent} %)`;
+  const headline = input.incomeBudget
+    ? reached ? "Tus gastos del mes ya alcanzaron tus ingresos." : `Ya gastaste el ${percent} % de tus ingresos del mes.`
+    : reached ? `Ya alcanzaste el ${capOf(target)}.` : `Estás cerca del ${capOf(target)}.`;
   const month = input.eventBudget ? "" : oneLine(input.monthLabel ?? "");
   const scope = [workspace, budgetName, month].filter(Boolean).join(" · ");
   return { reached, percent, remaining, overspend, scope, subject, headline, money };
@@ -86,13 +88,17 @@ export function budgetAlertCopy(input: BudgetAlertEmailInput): BudgetAlertCopy {
 export function renderBudgetAlertEmail(input: BudgetAlertEmailInput): RenderedEmail {
   const { reached, percent, remaining, overspend, scope, subject, headline, money } = budgetAlertCopy(input);
   const where = input.totalBudget ? "en este presupuesto" : "en esta categoría";
-  const advice = reached
-    ? `Cualquier gasto adicional ${where} superará lo que planeaste ${input.eventBudget ? "para este presupuesto" : "para este mes"}.`
-    : `Revisa tus próximos gastos ${where} para no superar lo que planeaste ${input.eventBudget ? "para este presupuesto" : "este mes"}.`;
+  const advice = input.incomeBudget
+    ? reached
+      ? "Cualquier gasto adicional este mes será más de lo que ganaste."
+      : "Revisa tus próximos gastos para no gastar más de lo que ganas este mes."
+    : reached
+      ? `Cualquier gasto adicional ${where} superará lo que planeaste ${input.eventBudget ? "para este presupuesto" : "para este mes"}.`
+      : `Revisa tus próximos gastos ${where} para no superar lo que planeaste ${input.eventBudget ? "para este presupuesto" : "este mes"}.`;
 
   const rows: Array<[string, string]> = [
     ["Gastado", money(input.spent)],
-    ["Presupuesto", money(input.budget)],
+    [input.incomeBudget ? "Ingresos del mes" : "Presupuesto", money(input.budget)],
     ["Porcentaje usado", `${percent} %`],
     ["Disponible", money(remaining)]
   ];

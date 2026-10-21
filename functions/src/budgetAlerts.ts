@@ -1,4 +1,4 @@
-import { CardBilling, expenseAmountForMonth, YearMonth } from "./http";
+import { CardBilling, expenseAmountForMonth, storedDateValue, YearMonth, zonedYearMonth } from "./http";
 import { DEFAULT_MONTHLY_BUDGET_ID } from "./legacyCategoryBudgets";
 
 // Pure budget-alert logic for the notifyBudgetThreshold trigger. No firebase-admin here.
@@ -138,20 +138,15 @@ export function categorySpendForScope(
   return Math.round(total * 100) / 100;
 }
 
-/**
- * Whether an expense feeds `scope`'s overall cap in the evaluated period. For the default
- * budget pass `cappedCategories`: its total (like the dashboard) only covers capped categories.
- */
+/** Whether an expense feeds an additional budget's overall cap (`totalLimit`) in the evaluated period. */
 export function countsTowardScopeTotal(
   tx: Record<string, any> | undefined,
   scope: AlertScope,
   month: YearMonth,
-  options: { timeZone: string; billingFor?: BillingLookup; cappedCategories?: Record<string, unknown> | null }
+  options: { timeZone: string; billingFor?: BillingLookup }
 ): boolean {
   if (!tx || tx.type !== "expense") return false;
   if (resolveAlertBudgetId(tx.budgetId) !== scope.id) return false;
-  if (options.cappedCategories !== undefined &&
-      (typeof tx.categoryId !== "string" || budgetForCategory(options.cappedCategories, tx.categoryId) === 0)) return false;
   return scopeAmount(tx, scope, month, options.timeZone, options.billingFor) > 0;
 }
 
@@ -177,31 +172,68 @@ export function scopeTotalSpend(
   return Math.round(total * 100) / 100;
 }
 
-/**
- * Overall usage of the default monthly budget, mirroring the dashboard (Dashboard.vue budget
- * summary): limit is the sum of positive category caps, spent is each capped category's spend
- * clamped to its cap. Null when caps are unconfirmed/absent or any rate is missing.
- */
-export function defaultBudgetUsage(
-  transactions: readonly Record<string, any>[],
-  categoryCaps: Record<string, unknown> | null | undefined,
-  capCurrency: string | null,
+// Workspace-wide "spending vs income" alert (the default budget's overall cap). Mirrors the
+// real month totals in src/views/Goals.vue realMonthTotals: every expense's month share (any
+// budget, card installments in their payment month) against income registered in the month.
+
+/** Whether an expense (any budget) has a share in the evaluated month. */
+export function countsTowardMonthlySpend(
+  tx: Record<string, any> | undefined,
+  month: YearMonth,
+  options: { timeZone: string; billingFor?: BillingLookup }
+): boolean {
+  if (!tx || tx.type !== "expense") return false;
+  return expenseAmountForMonth(tx, month.year, month.month, options.timeZone, options.billingFor?.(tx.accountId) ?? null) > 0;
+}
+
+/** Month share of every expense, converted; null when a manual rate is missing. */
+export function monthlyExpenseTotal(
+  transactions: Iterable<Record<string, any>>,
   month: YearMonth,
   options: SpendOptions
-): { spent: number; limit: number } | null {
-  const scope: AlertScope = { id: DEFAULT_MONTHLY_BUDGET_ID, kind: "monthly" };
-  const categoryIds = Object.keys(categoryCaps ?? {}).filter((id) => budgetForCategory(categoryCaps, id) > 0);
-  if (categoryIds.length === 0) return null;
-  let spent = 0;
-  let limit = 0;
-  for (const categoryId of categoryIds) {
-    const cap = capInReportingCurrency(budgetForCategory(categoryCaps, categoryId), capCurrency, options.reportingCurrency, options.exchangeRates);
-    const categorySpent = categorySpendForScope(transactions, categoryId, scope, month, options);
-    if (cap === null || categorySpent === null) return null;
-    limit += cap;
-    spent += Math.min(categorySpent, cap);
+): number | null {
+  let total = 0;
+  for (const tx of transactions) {
+    if (tx.type !== "expense") continue;
+    const amount = expenseAmountForMonth(tx, month.year, month.month, options.timeZone, options.billingFor?.(tx.accountId) ?? null);
+    if (amount === 0) continue;
+    const rate = manualRate(tx.currency, options.reportingCurrency, options.exchangeRates);
+    if (rate === null) return null;
+    total += amount * rate;
   }
-  return { spent: Math.round(spent * 100) / 100, limit: Math.round(limit * 100) / 100 };
+  return Math.round(total * 100) / 100;
+}
+
+/** Income registered in the local month, converted; null when a manual rate is missing. */
+export function monthlyIncomeTotal(
+  transactions: Iterable<Record<string, any>>,
+  month: YearMonth,
+  options: SpendOptions
+): number | null {
+  let total = 0;
+  for (const tx of transactions) {
+    if (tx.type !== "income") continue;
+    const local = zonedYearMonth(storedDateValue(tx.date, options.timeZone), options.timeZone);
+    if (local.year !== month.year || local.month !== month.month) continue;
+    const amount = Math.abs(Number(tx.amount) || 0);
+    if (amount === 0) continue;
+    const rate = manualRate(tx.currency, options.reportingCurrency, options.exchangeRates);
+    if (rate === null) return null;
+    total += amount * rate;
+  }
+  return Math.round(total * 100) / 100;
+}
+
+/**
+ * Income the month's spending is compared with: the larger of the planner's monthly income
+ * (workspaces.budgetIncome) and the income actually registered, so a month with extra income
+ * widens the margin while an early month (salary not yet registered) still has the planner as
+ * floor. Either alone when the other is absent/unknown; null when neither is positive.
+ */
+export function incomeReference(plannerIncome: unknown, realIncome: number | null): number | null {
+  const planner = Number(plannerIncome);
+  const candidates = [Number.isFinite(planner) ? planner : 0, realIncome ?? 0].filter((value) => value > 0);
+  return candidates.length === 0 ? null : Math.max(...candidates);
 }
 
 /**
