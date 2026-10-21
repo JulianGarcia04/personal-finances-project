@@ -961,12 +961,13 @@ watch(() => authStore.activeWorkspaceId, (workspaceId, previousWorkspaceId) => {
 
 const settleDebt = computed(() => (settleAccount.value ? -settleAccount.value.balance : 0))
 
+// Settlements use main accounts; a bank with pockets is fine, a pocket itself is not.
 const settleSourceAccounts = computed(() =>
-  accountsStore.accounts.filter(acc => acc.id !== settleAccount.value?.id && !acc.mirror)
+  accountsStore.accounts.filter(acc => acc.id !== settleAccount.value?.id && !acc.mirror && !isPocketAccount(acc))
 )
 
 const settleDestinationAccounts = computed(() =>
-  mirrorAccounts.value.filter(acc => acc.id !== settleAccount.value?.mirror?.accountId)
+  mirrorAccounts.value.filter(acc => acc.id !== settleAccount.value?.mirror?.accountId && !isPocketAccount(acc))
 )
 
 const openSettleModal = async (account: Account) => {

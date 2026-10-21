@@ -129,6 +129,20 @@ function publishPocketDeltas(
 }
 
 class ImportMustUsePocketCallable extends Error {}
+class SettlementMustUseServer extends Error {}
+
+// Bridge settlements touching an account with pockets need server-stamped pocket
+// movement markers, which the client rules cannot grant to a cross-workspace pair.
+type BridgeSettlementRequest =
+  | {
+      action: 'settle'; workspaceId: string; bridgeAccountId: string; receivableAccountId: string;
+      fromAccountId: string; toAccountId: string; amount: number; date: number; expectedBridgeBalance: number
+    }
+  | { action: 'reverse' | 'delete'; workspaceId: string; transactionId: string }
+
+async function callBridgeSettlement(request: BridgeSettlementRequest): Promise<void> {
+  await httpsCallable(functions, 'bridgeSettlement')(request)
+}
 
 function importContextIsCurrent(userId: string, workspaceId: string): boolean {
   return auth.currentUser?.uid === userId && useAuthStore().activeWorkspaceId === workspaceId
@@ -713,7 +727,8 @@ export const useTransactionsStore = defineStore('transactions', {
       const authStore = useAuthStore()
       const workspaceId = authStore.activeWorkspaceId
       const userId = auth.currentUser?.uid
-      if (transactionTouchesPocket(accountsStore, tx)) {
+      // Mirror pairs span two workspaces: deleteMirrorPair routes them, pockets included.
+      if (!tx.mirrorOf && transactionTouchesPocket(accountsStore, tx)) {
         if (!workspaceId || !userId) throw new Error('Usuario o Workspace no inicializado')
         this.loading = true
         try {
@@ -788,22 +803,29 @@ export const useTransactionsStore = defineStore('transactions', {
         throw new Error('No se encontró la pata espejo; no se eliminó ninguna transacción.')
       }
 
-      const batch = writeBatch(db)
-      // Revierte una pata con la misma convención de signos que deleteTransaction.
-      const reverse = (leg: { type: string; accountId: string; toAccountId?: string | null; amount: number }) => {
-        if (leg.type === 'transfer' && leg.toAccountId) {
-          batch.update(doc(db, 'accounts', leg.accountId), { balance: increment(leg.amount) })
-          batch.update(doc(db, 'accounts', leg.toAccountId), { balance: increment(-leg.amount) })
-        } else {
-          batch.update(doc(db, 'accounts', leg.accountId), { balance: increment(-leg.amount) })
+      const twin = twinSnap.data() as any
+      const legAccounts = await Promise.all([...accountIdsForTransaction(tx), ...accountIdsForTransaction(twin)]
+        .map(accountId => getDoc(doc(db, 'accounts', accountId))))
+      if (legAccounts.some(snap => snap.exists() && movementAccountIsPocketRelated(snap.data()))) {
+        await callBridgeSettlement({ action: 'delete', workspaceId: tx.workspaceId, transactionId: tx.id })
+      } else {
+        const batch = writeBatch(db)
+        // Revierte una pata con la misma convención de signos que deleteTransaction.
+        const reverse = (leg: { type: string; accountId: string; toAccountId?: string | null; amount: number }) => {
+          if (leg.type === 'transfer' && leg.toAccountId) {
+            batch.update(doc(db, 'accounts', leg.accountId), { balance: increment(leg.amount) })
+            batch.update(doc(db, 'accounts', leg.toAccountId), { balance: increment(-leg.amount) })
+          } else {
+            batch.update(doc(db, 'accounts', leg.accountId), { balance: increment(-leg.amount) })
+          }
         }
-      }
 
-      batch.delete(doc(db, 'transactions', tx.id))
-      reverse(tx)
-      batch.delete(twinSnap.ref)
-      reverse(twinSnap.data() as any)
-      await batch.commit()
+        batch.delete(doc(db, 'transactions', tx.id))
+        reverse(tx)
+        batch.delete(twinSnap.ref)
+        reverse(twin)
+        await batch.commit()
+      }
 
       // Puede haber tocado varias cuentas locales: releer es más corto y más fiable
       // que parchear saldo por saldo a mano.
@@ -865,7 +887,7 @@ export const useTransactionsStore = defineStore('transactions', {
           const currentMirror = bridgeData.mirror
           // Pocket balances only change through version-checked pocket movements.
           if ([from, bridgeData, receivable, to].some(movementAccountIsPocketRelated)) {
-            throw new Error('Las liquidaciones de cuentas puente no se pueden combinar con bolsillos.')
+            throw new SettlementMustUseServer()
           }
 
           if (
@@ -947,6 +969,19 @@ export const useTransactionsStore = defineStore('transactions', {
           transaction.update(bridgeRef, { balance: bridgeBalance + deltas.bridge })
           transaction.update(receivableRef, { balance: receivableBalance + deltas.receivable })
           transaction.update(toRef, { balance: toBalance + deltas.to })
+        }).catch(async error => {
+          if (!(error instanceof SettlementMustUseServer)) throw error
+          await callBridgeSettlement({
+            action: 'settle',
+            workspaceId,
+            bridgeAccountId,
+            receivableAccountId: receivableId,
+            fromAccountId,
+            toAccountId,
+            amount: settlementAmount,
+            date: transactionDate.getTime(),
+            expectedBridgeBalance
+          })
         })
 
         await accountsStore.fetchAccounts()
@@ -991,7 +1026,6 @@ export const useTransactionsStore = defineStore('transactions', {
           if (!data) return false
           accountsById[accountSnaps[index].id] = { ...data, id: accountSnaps[index].id } as SettlementAccountRecord
         }
-        if (Object.values(accountsById).some(movementAccountIsPocketRelated)) return false
         planSettlementReversal({ first: current, second: twin, accountsById })
 
         const workspaceIds = [...new Set([current.workspaceId, twin.workspaceId])]
@@ -1068,7 +1102,7 @@ export const useTransactionsStore = defineStore('transactions', {
           }
 
           if (Object.values(accountsById).some(movementAccountIsPocketRelated)) {
-            throw new Error('Las liquidaciones de cuentas puente no se pueden combinar con bolsillos.')
+            throw new SettlementMustUseServer()
           }
           const plan = planSettlementReversal({ first: requested, second: twin, accountsById })
           const paidLeg = requested.id === plan.paidLegId ? requested : twin
@@ -1129,6 +1163,9 @@ export const useTransactionsStore = defineStore('transactions', {
           transaction.update(doc(db, 'accounts', plan.toAccountId), {
             balance: balancesById[plan.toAccountId] + plan.deltas.to
           })
+        }).catch(async error => {
+          if (!(error instanceof SettlementMustUseServer)) throw error
+          await callBridgeSettlement({ action: 'reverse', workspaceId: activeWorkspaceId, transactionId })
         })
 
         this.reversibleSettlementIds = this.reversibleSettlementIds.filter(id => id !== transactionId)

@@ -196,7 +196,7 @@ export type WorkspaceTransactionMutation = {
   movement?: WorkspaceTransactionMovement
 }
 
-function isPocketRelated(data: admin.firestore.DocumentData): boolean {
+export function isPocketRelated(data: admin.firestore.DocumentData): boolean {
   return typeof data.parentAccountId === 'string' ||
     (Array.isArray(data.childAccountIds) && data.childAccountIds.length > 0)
 }

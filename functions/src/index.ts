@@ -69,6 +69,7 @@ import { createGmailSender, SMTP_PASS, SMTP_USER, smtpConfigFromEnvironment, uni
 import { BudgetAlertEmailInput, renderBudgetAlertEmail } from "./templates/budgetAlert";
 import { buildBudgetAlertPush, loadPushTokens, memberUidsOf, planBudgetAlertDelivery, PushTokenEntry, sendPushToTokens } from "./push";
 export { importPocketStatement } from "./pocketImports";
+export { bridgeSettlement } from "./settlements";
 
 const corsHandler = cors({ origin: true });
 admin.initializeApp();

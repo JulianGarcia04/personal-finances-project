@@ -92,8 +92,8 @@ const childEnvironment = {
 }
 
 const testCommand = uiMode
-  ? 'node --test --test-concurrency=1 tests/pockets.integration.test.mjs tests/pockets.imports.integration.test.mjs && node --test tests/pockets.ui.test.mjs'
-  : 'node --test --test-concurrency=1 tests/pockets.integration.test.mjs tests/pockets.imports.integration.test.mjs'
+  ? 'node --test --test-concurrency=1 tests/pockets.integration.test.mjs tests/pockets.imports.integration.test.mjs tests/settlements.pockets.integration.test.mjs && node --test tests/pockets.ui.test.mjs'
+  : 'node --test --test-concurrency=1 tests/pockets.integration.test.mjs tests/pockets.imports.integration.test.mjs tests/settlements.pockets.integration.test.mjs'
 const command = [
   'emulators:exec', '--project', projectId, '--only', 'auth,firestore,functions',
   '--config', 'functions/firebase.pockets-imports.json', testCommand
