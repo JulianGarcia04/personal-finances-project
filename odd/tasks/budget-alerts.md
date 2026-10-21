@@ -92,3 +92,5 @@ Branch `feat/budget-alerts-push` (from main 08ba2be). Runner: `pnpm --filter fun
 - S2 default budget: alert 80/100 on dashboard usage. Ledger slot `__total`.
 - Route: inline (no writer reason). RED: TS2305/TS2353 missing exports/field; GREEN functions 167/167.
 - Trigger now queries all workspace expenses (was per category) and delivers category then total sequentially via deliverBudgetAlert.
+- Commit `f397417`. Independent verify (Risk item 6): S1 PASS, S2 PASS, category alerts unchanged vs main (ledger ids, copy, claim/retry), no blockers; functions 167/167. Advisories: trigger wiring still has no direct test; each qualifying write reads all workspace expenses; total ledger uses `categoryId: "__total"`.
+- Next step: user decides merge to main + deploy functions.
