@@ -6,6 +6,10 @@ import {
   budgetForCategory,
   capInReportingCurrency,
   categorySpendForScope,
+  countsTowardScopeTotal,
+  defaultBudgetUsage,
+  scopeTotalSpend,
+  TOTAL_ALERT_SUBJECT,
   evaluateBudgetThresholds,
   monthKey,
   resolveAlertBudgetId,
@@ -222,4 +226,65 @@ test("spendFieldsChanged ignores edits that cannot change category spend", () =>
   assert.equal(spendFieldsChanged(base, { ...base, date: new Date("2026-10-11T17:00:00.000Z") }), true);
   assert.equal(spendFieldsChanged({ ...base, type: "transfer" }, base), true);
   assert.equal(spendFieldsChanged(undefined, base), true);
+});
+
+const HOGAR = { id: "hogar", kind: "monthly" as const };
+const VIAJE = { id: "viaje", kind: "event" as const };
+
+test("scope total spend counts every expense of the budget in the month, categorized or not", () => {
+  const txs = [
+    expense(100, { budgetId: "hogar" }),
+    expense(50, { budgetId: "hogar", categoryId: "fun" }),
+    expense(30, { budgetId: "hogar", categoryId: undefined }),
+    expense(999, { budgetId: "otro" }),
+    expense(999),
+    expense(999, { budgetId: "hogar", date: new Date("2026-09-10T17:00:00.000Z") }),
+    { type: "income", amount: 999, budgetId: "hogar", currency: "COP", date: new Date("2026-10-10T17:00:00.000Z") }
+  ];
+  assert.equal(scopeTotalSpend(txs, HOGAR, OCTOBER, COP_OPTIONS), 180);
+});
+
+test("event scope total is the full committed principal and unknown when a rate is missing", () => {
+  const txs = [
+    expense(100, { budgetId: "viaje", date: new Date("2026-01-10T17:00:00.000Z") }),
+    expense(20, { budgetId: "viaje", categoryId: "fun" })
+  ];
+  assert.equal(scopeTotalSpend(txs, VIAJE, OCTOBER, COP_OPTIONS), 120);
+  assert.equal(scopeTotalSpend([...txs, expense(5, { budgetId: "viaje", currency: "USD" })], VIAJE, OCTOBER, COP_OPTIONS), null);
+});
+
+test("default budget usage mirrors the dashboard: capped spend over the sum of positive caps", () => {
+  const txs = [
+    expense(150),
+    expense(20, { categoryId: "fun" }),
+    expense(999, { categoryId: "uncapped" }),
+    expense(999, { budgetId: "hogar" })
+  ];
+  const caps = { food: 100, fun: 50, zero: 0 };
+  assert.deepEqual(defaultBudgetUsage(txs, caps, "COP", OCTOBER, COP_OPTIONS), { spent: 120, limit: 150 });
+});
+
+test("default budget usage is unknown without confirmed cap units, positive caps or rates", () => {
+  const txs = [expense(150), expense(5, { categoryId: "fun", currency: "USD" })];
+  assert.equal(defaultBudgetUsage(txs, { food: 100 }, null, OCTOBER, COP_OPTIONS), null);
+  assert.equal(defaultBudgetUsage(txs, { food: 0 }, "COP", OCTOBER, COP_OPTIONS), null);
+  assert.equal(defaultBudgetUsage(txs, { food: 100, fun: 50 }, "COP", OCTOBER, COP_OPTIONS), null);
+  assert.equal(defaultBudgetUsage(txs, { food: 100 }, "USD", OCTOBER, COP_OPTIONS), null);
+});
+
+test("countsTowardScopeTotal only accepts expenses of the scope with a share in the period", () => {
+  const options = { timeZone: BOGOTA };
+  assert.equal(countsTowardScopeTotal(expense(10, { budgetId: "hogar", categoryId: undefined }), HOGAR, OCTOBER, options), true);
+  assert.equal(countsTowardScopeTotal(expense(10, { budgetId: "otro" }), HOGAR, OCTOBER, options), false);
+  assert.equal(countsTowardScopeTotal(expense(10, { budgetId: "hogar", date: new Date("2026-09-10T17:00:00.000Z") }), HOGAR, OCTOBER, options), false);
+  assert.equal(countsTowardScopeTotal(undefined, HOGAR, OCTOBER, options), false);
+  // Default budget: only categories with a positive cap feed the dashboard total.
+  const caps = { food: 100 };
+  assert.equal(countsTowardScopeTotal(expense(10), DEFAULT_SCOPE, OCTOBER, { ...options, cappedCategories: caps }), true);
+  assert.equal(countsTowardScopeTotal(expense(10, { categoryId: "fun" }), DEFAULT_SCOPE, OCTOBER, { ...options, cappedCategories: caps }), false);
+});
+
+test("total alerts use their own ledger slot", () => {
+  assert.equal(budgetAlertLedgerId("ws", "default-monthly", "2026-10", TOTAL_ALERT_SUBJECT), "ws_2026-10___total");
+  assert.equal(budgetAlertLedgerId("ws", "hogar", "event", TOTAL_ALERT_SUBJECT), "ws_hogar_event___total");
 });

@@ -107,3 +107,12 @@ test("budget alert email for an event budget has no month and no monthly advice"
   assert.match(email.text, /Casa · Viaje\n/);
   assert.doesNotMatch(email.text, /octubre|este mes/);
 });
+
+test("total budget alert names the whole budget instead of a category", () => {
+  const named = renderBudgetAlertEmail({ ...baseAlert, threshold: 100, spent: 1_000_000, budgetName: "Hogar", totalBudget: true });
+  assert.match(named.subject, /tope total del presupuesto «Hogar»/);
+  assert.match(named.text, /en este presupuesto/);
+  assert.doesNotMatch(named.text, /esta categoría/);
+  const main = renderBudgetAlertEmail({ ...baseAlert, threshold: 80, totalBudget: true });
+  assert.match(main.subject, /Estás cerca del tope total de tu presupuesto mensual/);
+});

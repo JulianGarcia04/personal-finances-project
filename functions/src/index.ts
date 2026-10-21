@@ -51,16 +51,20 @@ import {
   BudgetThreshold,
   capInReportingCurrency,
   categorySpendForScope,
+  countsTowardScopeTotal,
+  defaultBudgetUsage,
   evaluateBudgetThresholds,
   monthKey,
   resolveAlertBudgetId,
-  spendFieldsChanged
+  scopeTotalSpend,
+  spendFieldsChanged,
+  TOTAL_ALERT_SUBJECT
 } from "./budgetAlerts";
 import { cardBillingByAccount } from "./agentQueries";
 import { DEFAULT_MONTHLY_BUDGET_ID, parseLegacyCategoryBudgetCurrency } from "./legacyCategoryBudgets";
 import { createGmailSender, SMTP_PASS, SMTP_USER, smtpConfigFromEnvironment, uniqueRecipients } from "./mailer";
 import { BudgetAlertEmailInput, renderBudgetAlertEmail } from "./templates/budgetAlert";
-import { buildBudgetAlertPush, loadPushTokens, memberUidsOf, planBudgetAlertDelivery, sendPushToTokens } from "./push";
+import { buildBudgetAlertPush, loadPushTokens, memberUidsOf, planBudgetAlertDelivery, PushTokenEntry, sendPushToTokens } from "./push";
 export { importPocketStatement } from "./pocketImports";
 
 const corsHandler = cors({ origin: true });
@@ -305,8 +309,12 @@ export const syncTransactionEmbedding = onDocumentWritten(
   }
 );
 
-// 3b. Alerts workspace members (email + FCM web push) once per (workspace, budget, period, category,
-// threshold) when a category's spend reaches 80% or 100% of its cap in the expense's operating budget:
+// 3b. Alerts workspace members (email + FCM web push) once per (workspace, budget, period, cap,
+// threshold) when spend reaches 80% or 100% of a cap in the expense's operating budget. Caps are
+// each category cap and the budget's overall cap: an additional budget's `totalLimit` against all
+// its expenses (reportBudgetScope totalComparison), and for the default budget the dashboard's
+// overall usage (capped categories' spend, each clamped to its cap, over the sum of caps).
+// Category caps:
 // the protected default monthly budget (budgetId absent/"default-monthly") uses
 // workspaces/{id}.categoryBudgets in its confirmed `categoryBudgetCurrency`; an active additional
 // budget uses budgets/{budgetId}/categoryCaps/{categoryId}.amount in the budget's `capCurrency`.
@@ -340,12 +348,9 @@ export const notifyBudgetThreshold = onDocumentWritten(
     const workspaceSnap = await db.collection("workspaces").doc(workspaceId).get();
     const workspace = workspaceSnap.data();
     if (!workspace || workspace.budgetAlertsEnabled === false) return;
-    const categoryId = typeof after.categoryId === "string" ? after.categoryId : "";
-    if (!categoryId) return;
-
-    const target = await loadAlertTarget(workspaceId, workspace, resolveAlertBudgetId(after.budgetId), categoryId);
-    if (!target) return;
-    const { scope } = target;
+    const budgetScope = await loadBudgetScope(workspaceId, workspace, resolveAlertBudgetId(after.budgetId));
+    if (!budgetScope) return;
+    const { scope } = budgetScope;
 
     const ownerSnap = typeof workspace.ownerId === "string" && workspace.ownerId
       ? await db.collection("users").doc(workspace.ownerId).get()
@@ -360,13 +365,17 @@ export const notifyBudgetThreshold = onDocumentWritten(
     const accountsSnap = await db.collection("accounts").where("workspaceId", "==", workspaceId).get();
     const billing = cardBillingByAccount(accountsSnap.docs.map((d) => ({ ...d.data(), id: d.id })));
     const billingFor = (accountId?: string | null) => (accountId ? billing.get(accountId) ?? null : null);
-    if (alertCategoryFor(after, scope, month, { timeZone, billingFor }) !== categoryId) return;
 
-    const budget = capInReportingCurrency(target.cap, target.capCurrency, primaryCurrency, exchangeRates);
-    if (budget === null) {
-      console.warn(`Budget alert for workspace ${workspaceId} skipped: cap units unconfirmed or manual rate missing.`);
-      return;
-    }
+    // Which caps this write can move: its category cap and/or the budget's overall cap.
+    const categoryId = typeof after.categoryId === "string" ? after.categoryId : "";
+    const categoryCap = categoryId && alertCategoryFor(after, scope, month, { timeZone, billingFor }) === categoryId
+      ? await budgetScope.categoryCap(categoryId)
+      : 0;
+    const totalApplies = budgetScope.totalLimit !== null
+      ? countsTowardScopeTotal(after, scope, month, { timeZone, billingFor })
+      : scope.id === DEFAULT_MONTHLY_BUDGET_ID &&
+        countsTowardScopeTotal(after, scope, month, { timeZone, billingFor, cappedCategories: workspace.categoryBudgets ?? {} });
+    if (categoryCap === 0 && !totalApplies) return;
 
     const smtp = smtpConfigFromEnvironment();
     const memberUids = memberUidsOf(workspace.members);
@@ -377,117 +386,86 @@ export const notifyBudgetThreshold = onDocumentWritten(
 
     const txSnap = await db.collection("transactions")
       .where("workspaceId", "==", workspaceId)
-      .where("categoryId", "==", categoryId)
       .where("type", "==", "expense")
       .get();
-    const spent = categorySpendForScope(txSnap.docs.map((d) => d.data()), categoryId, scope, month, {
-      timeZone,
-      reportingCurrency: primaryCurrency,
-      exchangeRates,
-      billingFor
-    });
-    if (spent === null) {
-      console.warn(`Budget alert for workspace ${workspaceId} skipped: an expense has no manual rate to ${primaryCurrency}.`);
-      return;
-    }
+    const transactions = txSnap.docs.map((d) => d.data());
+    const spendOptions = { timeZone, reportingCurrency: primaryCurrency, exchangeRates, billingFor };
+    const subjects: BudgetAlertSubject[] = [];
 
-    // Claim atomically so concurrent triggers for the same cap send one email.
-    const key = scope.kind === "event" ? "event" : monthKey(month);
-    const ledgerRef = db.collection(BUDGET_ALERTS_COLLECTION).doc(budgetAlertLedgerId(workspaceId, scope.id, key, categoryId));
-    const claim = await db.runTransaction(async (t) => {
-      const ledger = await t.get(ledgerRef);
-      const notified: number[] = Array.isArray(ledger.get("notified")) ? ledger.get("notified") : [];
-      const result = evaluateBudgetThresholds(spent, budget, notified);
-      if (result.threshold === null) return null;
-      t.set(ledgerRef, {
-        workspaceId,
-        budgetId: scope.id,
-        categoryId,
-        month: key,
-        notified: FieldValue.arrayUnion(...result.claim),
-        lastSpent: spent,
-        budget,
-        currency: primaryCurrency,
-        updatedAt: FieldValue.serverTimestamp()
-      }, { merge: true });
-      return result as { threshold: BudgetThreshold; claim: BudgetThreshold[] };
-    });
-    if (!claim) return;
-
-    let alert: BudgetAlertEmailInput;
-    try {
-      const categorySnap = await db.collection("categories").doc(categoryId).get();
-      const categoryName = typeof categorySnap.get("name") === "string" && categorySnap.get("name")
-        ? categorySnap.get("name") as string
-        : categoryId;
-      alert = {
-        threshold: claim.threshold,
-        categoryName,
-        workspaceName: typeof workspace.name === "string" ? workspace.name : "",
-        spent,
-        budget,
-        currency: primaryCurrency,
-        ...(scope.kind === "event" ? { eventBudget: true } : {
-          monthLabel: new Intl.DateTimeFormat("es", { month: "long", year: "numeric", timeZone: "UTC" })
-            .format(Date.UTC(month.year, month.month, 15))
-        }),
-        ...(target.budgetName ? { budgetName: target.budgetName } : {})
-      };
-      if (smtp) {
-        const recipients = await resolveMemberEmails(memberUids);
-        if (recipients.length === 0) {
-          console.warn(`Budget alert for workspace ${workspaceId} has no recipient emails.`);
-        } else {
-          await createGmailSender(smtp)({ to: recipients, ...renderBudgetAlertEmail(alert) });
-        }
+    if (categoryCap > 0) {
+      const budget = capInReportingCurrency(categoryCap, budgetScope.capCurrency, primaryCurrency, exchangeRates);
+      const spent = categorySpendForScope(transactions, categoryId, scope, month, spendOptions);
+      if (budget === null || spent === null) {
+        console.warn(`Budget alert for workspace ${workspaceId} skipped: cap units unconfirmed or manual rate missing.`);
+      } else {
+        subjects.push({ subjectId: categoryId, spent, budget });
       }
-    } catch (error) {
-      // Release the claim so the platform retry can send it again.
-      await ledgerRef.update({ notified: FieldValue.arrayRemove(...claim.claim) }).catch((releaseError) => {
-        console.error(`Could not release budget alert claim ${ledgerRef.id}:`, releaseError);
-      });
-      console.error(`Budget alert email for ${ledgerRef.id} failed.`);
-      throw error;
+    }
+    if (totalApplies) {
+      let usage: { spent: number; limit: number } | null = null;
+      if (budgetScope.totalLimit !== null) {
+        const limit = capInReportingCurrency(budgetScope.totalLimit, budgetScope.capCurrency, primaryCurrency, exchangeRates);
+        const spent = scopeTotalSpend(transactions, scope, month, spendOptions);
+        usage = limit === null || spent === null ? null : { spent, limit };
+      } else {
+        usage = defaultBudgetUsage(transactions, workspace.categoryBudgets, budgetScope.capCurrency, month, spendOptions);
+      }
+      if (usage === null) {
+        console.warn(`Budget total alert for workspace ${workspaceId} skipped: cap units unconfirmed or manual rate missing.`);
+      } else {
+        subjects.push({ subjectId: TOTAL_ALERT_SUBJECT, spent: usage.spent, budget: usage.limit });
+      }
     }
 
-    if (!delivery.push) return;
-    try {
-      const payload = buildBudgetAlertPush({
-        ...alert,
-        workspaceId,
-        categoryId,
-        ...(scope.id !== DEFAULT_MONTHLY_BUDGET_ID ? { budgetId: scope.id } : {}),
-        appUrl: process.env.APP_URL
-      });
-      const result = await sendPushToTokens(pushTokens, payload, admin.messaging());
-      console.log(`Budget alert push for ${ledgerRef.id}: tokens=${result.tokens} sent=${result.sent} failed=${result.failed} removed=${result.removed}`);
-    } catch (error) {
-      // Best-effort channel: never undo the claim or fail the trigger.
-      console.error(`Budget alert push for ${ledgerRef.id} failed: ${(error as { code?: string })?.code ?? "unknown error"}`);
+    // Sequential: an email failure rethrows (platform retry); already-claimed subjects stay
+    // deduped by the ledger, so the retry only re-sends what failed.
+    for (const subject of subjects) {
+      await deliverBudgetAlert({
+        workspaceId, workspace, budgetScope, month, primaryCurrency, smtp, memberUids, pushTokens,
+        pushEnabled: delivery.push
+      }, subject);
     }
   }
 );
 
-interface AlertTarget {
+interface BudgetScopeInfo {
   scope: AlertScope;
-  /** Nominal cap in `capCurrency`. */
-  cap: number;
   /** Null when the default budget's legacy cap units are unconfirmed (or malformed). */
   capCurrency: string | null;
   /** Null for the protected default monthly budget. */
   budgetName: string | null;
+  /** Positive overall cap of an additional budget (nominal, `capCurrency`); null when absent. */
+  totalLimit: number | null;
+  /** Positive nominal category cap, or 0 when the category has none. */
+  categoryCap: (categoryId: string) => Promise<number>;
 }
 
-/** Cap an expense counts against, or null when its budget/category has no alertable cap. */
-async function loadAlertTarget(
+/** One cap being alerted: a category of the scope, or the scope's overall cap (TOTAL_ALERT_SUBJECT). */
+interface BudgetAlertSubject {
+  subjectId: string;
+  spent: number;
+  budget: number;
+}
+
+interface BudgetAlertContext {
+  workspaceId: string;
+  workspace: Record<string, any>;
+  budgetScope: BudgetScopeInfo;
+  month: { year: number; month: number };
+  primaryCurrency: string;
+  smtp: ReturnType<typeof smtpConfigFromEnvironment>;
+  memberUids: string[];
+  pushTokens: PushTokenEntry[];
+  pushEnabled: boolean;
+}
+
+/** Operating budget an expense counts against; null when archived, foreign or malformed. */
+async function loadBudgetScope(
   workspaceId: string,
   workspace: Record<string, any>,
-  budgetId: string,
-  categoryId: string
-): Promise<AlertTarget | null> {
+  budgetId: string
+): Promise<BudgetScopeInfo | null> {
   if (budgetId === DEFAULT_MONTHLY_BUDGET_ID) {
-    const cap = budgetForCategory(workspace.categoryBudgets, categoryId);
-    if (cap === 0) return null;
     let capCurrency: string | null = null;
     try {
       capCurrency = parseLegacyCategoryBudgetCurrency(workspace);
@@ -495,19 +473,119 @@ async function loadAlertTarget(
       console.warn(`Budget alert for workspace ${workspaceId} skipped: stored categoryBudgetCurrency is malformed.`);
       return null;
     }
-    return { scope: { id: budgetId, kind: "monthly" }, cap, capCurrency, budgetName: null };
+    return {
+      scope: { id: budgetId, kind: "monthly" },
+      capCurrency,
+      budgetName: null,
+      totalLimit: null,
+      categoryCap: async (categoryId) => budgetForCategory(workspace.categoryBudgets, categoryId)
+    };
   }
 
   const budgetRef = db.collection("budgets").doc(budgetId);
-  const [budgetSnap, capSnap] = await Promise.all([budgetRef.get(), budgetRef.collection("categoryCaps").doc(categoryId).get()]);
-  const budget = budgetSnap.data();
+  const budget = (await budgetRef.get()).data();
   if (!budget || budget.workspaceId !== workspaceId || budget.archived !== false) return null;
   if (budget.kind !== "monthly" && budget.kind !== "event") return null;
-  const cap = budgetForCategory({ [categoryId]: capSnap.get("amount") }, categoryId);
-  if (cap === 0) return null;
   const capCurrency = typeof budget.capCurrency === "string" && /^[A-Z]{3}$/.test(budget.capCurrency) ? budget.capCurrency : null;
   const budgetName = typeof budget.name === "string" && budget.name.trim() ? budget.name.trim() : budgetId;
-  return { scope: { id: budgetId, kind: budget.kind }, cap, capCurrency, budgetName };
+  const totalLimit = budgetForCategory({ total: budget.totalLimit }, "total");
+  return {
+    scope: { id: budgetId, kind: budget.kind },
+    capCurrency,
+    budgetName,
+    totalLimit: totalLimit > 0 ? totalLimit : null,
+    categoryCap: async (categoryId) => {
+      const capSnap = await budgetRef.collection("categoryCaps").doc(categoryId).get();
+      return budgetForCategory({ [categoryId]: capSnap.get("amount") }, categoryId);
+    }
+  };
+}
+
+/** Claims the subject's newly reached threshold, then emails and pushes members. */
+async function deliverBudgetAlert(ctx: BudgetAlertContext, subject: BudgetAlertSubject): Promise<void> {
+  const { workspaceId, workspace, budgetScope, month, primaryCurrency, smtp, memberUids, pushTokens } = ctx;
+  const { scope } = budgetScope;
+  const { subjectId, spent, budget } = subject;
+  const isTotal = subjectId === TOTAL_ALERT_SUBJECT;
+
+  // Claim atomically so concurrent triggers for the same cap send one email.
+  const key = scope.kind === "event" ? "event" : monthKey(month);
+  const ledgerRef = db.collection(BUDGET_ALERTS_COLLECTION).doc(budgetAlertLedgerId(workspaceId, scope.id, key, subjectId));
+  const claim = await db.runTransaction(async (t) => {
+    const ledger = await t.get(ledgerRef);
+    const notified: number[] = Array.isArray(ledger.get("notified")) ? ledger.get("notified") : [];
+    const result = evaluateBudgetThresholds(spent, budget, notified);
+    if (result.threshold === null) return null;
+    t.set(ledgerRef, {
+      workspaceId,
+      budgetId: scope.id,
+      categoryId: subjectId,
+      month: key,
+      notified: FieldValue.arrayUnion(...result.claim),
+      lastSpent: spent,
+      budget,
+      currency: primaryCurrency,
+      updatedAt: FieldValue.serverTimestamp()
+    }, { merge: true });
+    return result as { threshold: BudgetThreshold; claim: BudgetThreshold[] };
+  });
+  if (!claim) return;
+
+  let alert: BudgetAlertEmailInput;
+  try {
+    let categoryName = "";
+    if (!isTotal) {
+      const categorySnap = await db.collection("categories").doc(subjectId).get();
+      categoryName = typeof categorySnap.get("name") === "string" && categorySnap.get("name")
+        ? categorySnap.get("name") as string
+        : subjectId;
+    }
+    alert = {
+      threshold: claim.threshold,
+      categoryName,
+      workspaceName: typeof workspace.name === "string" ? workspace.name : "",
+      spent,
+      budget,
+      currency: primaryCurrency,
+      ...(scope.kind === "event" ? { eventBudget: true } : {
+        monthLabel: new Intl.DateTimeFormat("es", { month: "long", year: "numeric", timeZone: "UTC" })
+          .format(Date.UTC(month.year, month.month, 15))
+      }),
+      ...(budgetScope.budgetName ? { budgetName: budgetScope.budgetName } : {}),
+      ...(isTotal ? { totalBudget: true } : {})
+    };
+    if (smtp) {
+      const recipients = await resolveMemberEmails(memberUids);
+      if (recipients.length === 0) {
+        console.warn(`Budget alert for workspace ${workspaceId} has no recipient emails.`);
+      } else {
+        await createGmailSender(smtp)({ to: recipients, ...renderBudgetAlertEmail(alert) });
+      }
+    }
+  } catch (error) {
+    // Release the claim so the platform retry can send it again.
+    await ledgerRef.update({ notified: FieldValue.arrayRemove(...claim.claim) }).catch((releaseError) => {
+      console.error(`Could not release budget alert claim ${ledgerRef.id}:`, releaseError);
+    });
+    console.error(`Budget alert email for ${ledgerRef.id} failed.`);
+    throw error;
+  }
+
+  if (!ctx.pushEnabled) return;
+  try {
+    const payload = buildBudgetAlertPush({
+      ...alert,
+      workspaceId,
+      categoryId: isTotal ? "" : subjectId,
+      ...(scope.id !== DEFAULT_MONTHLY_BUDGET_ID ? { budgetId: scope.id } : {}),
+      appUrl: process.env.APP_URL
+    });
+    const result = await sendPushToTokens(pushTokens, payload, admin.messaging());
+    console.log(`Budget alert push for ${ledgerRef.id}: tokens=${result.tokens} sent=${result.sent} failed=${result.failed} removed=${result.removed}`);
+  } catch (error) {
+    // Best-effort channel: never undo the claim or fail the trigger.
+    console.error(`Budget alert push for ${ledgerRef.id} failed: ${(error as { code?: string })?.code ?? "unknown error"}`);
+  }
 }
 
 /** Emails of workspace members: users/{uid}.email, falling back to Firebase Auth. */

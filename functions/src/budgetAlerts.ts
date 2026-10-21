@@ -25,6 +25,8 @@ import { DEFAULT_MONTHLY_BUDGET_ID } from "./legacyCategoryBudgets";
 export const BUDGET_ALERTS_COLLECTION = "budgetAlerts";
 export const BUDGET_ALERT_THRESHOLDS = [80, 100] as const;
 export type BudgetThreshold = (typeof BUDGET_ALERT_THRESHOLDS)[number];
+/** Ledger slot (in place of a category id) for alerts on a budget's overall cap. */
+export const TOTAL_ALERT_SUBJECT = "__total";
 
 export type BillingLookup = (accountId?: string | null) => CardBilling | null;
 
@@ -134,6 +136,72 @@ export function categorySpendForScope(
     total += amount * rate;
   }
   return Math.round(total * 100) / 100;
+}
+
+/**
+ * Whether an expense feeds `scope`'s overall cap in the evaluated period. For the default
+ * budget pass `cappedCategories`: its total (like the dashboard) only covers capped categories.
+ */
+export function countsTowardScopeTotal(
+  tx: Record<string, any> | undefined,
+  scope: AlertScope,
+  month: YearMonth,
+  options: { timeZone: string; billingFor?: BillingLookup; cappedCategories?: Record<string, unknown> | null }
+): boolean {
+  if (!tx || tx.type !== "expense") return false;
+  if (resolveAlertBudgetId(tx.budgetId) !== scope.id) return false;
+  if (options.cappedCategories !== undefined &&
+      (typeof tx.categoryId !== "string" || budgetForCategory(options.cappedCategories, tx.categoryId) === 0)) return false;
+  return scopeAmount(tx, scope, month, options.timeZone, options.billingFor) > 0;
+}
+
+/**
+ * Spend of a whole operating budget (every category, uncategorized included), like
+ * budgetReporting.ts reportBudgetScope totalComparison. Null when a manual rate is missing.
+ */
+export function scopeTotalSpend(
+  transactions: Iterable<Record<string, any>>,
+  scope: AlertScope,
+  month: YearMonth,
+  options: SpendOptions
+): number | null {
+  let total = 0;
+  for (const tx of transactions) {
+    if (tx.type !== "expense" || resolveAlertBudgetId(tx.budgetId) !== scope.id) continue;
+    const amount = scopeAmount(tx, scope, month, options.timeZone, options.billingFor);
+    if (amount === 0) continue;
+    const rate = manualRate(tx.currency, options.reportingCurrency, options.exchangeRates);
+    if (rate === null) return null;
+    total += amount * rate;
+  }
+  return Math.round(total * 100) / 100;
+}
+
+/**
+ * Overall usage of the default monthly budget, mirroring the dashboard (Dashboard.vue budget
+ * summary): limit is the sum of positive category caps, spent is each capped category's spend
+ * clamped to its cap. Null when caps are unconfirmed/absent or any rate is missing.
+ */
+export function defaultBudgetUsage(
+  transactions: readonly Record<string, any>[],
+  categoryCaps: Record<string, unknown> | null | undefined,
+  capCurrency: string | null,
+  month: YearMonth,
+  options: SpendOptions
+): { spent: number; limit: number } | null {
+  const scope: AlertScope = { id: DEFAULT_MONTHLY_BUDGET_ID, kind: "monthly" };
+  const categoryIds = Object.keys(categoryCaps ?? {}).filter((id) => budgetForCategory(categoryCaps, id) > 0);
+  if (categoryIds.length === 0) return null;
+  let spent = 0;
+  let limit = 0;
+  for (const categoryId of categoryIds) {
+    const cap = capInReportingCurrency(budgetForCategory(categoryCaps, categoryId), capCurrency, options.reportingCurrency, options.exchangeRates);
+    const categorySpent = categorySpendForScope(transactions, categoryId, scope, month, options);
+    if (cap === null || categorySpent === null) return null;
+    limit += cap;
+    spent += Math.min(categorySpent, cap);
+  }
+  return { spent: Math.round(spent * 100) / 100, limit: Math.round(limit * 100) / 100 };
 }
 
 /**

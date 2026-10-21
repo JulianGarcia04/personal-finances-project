@@ -85,3 +85,10 @@ Branch `feat/budget-alerts-push` (from main 08ba2be). Runner: `pnpm --filter fun
 - Open product questions: alerts on a budget's `totalLimit` (overall cap) are not implemented. Event-budget alerts (once per budget/category across its whole life) follow the reporting comparison but were not explicitly requested.
 - (2026-10-21) Merge `e424645` (origin/main + alerts reconciled with multiple budgets; functions 160/160, rules 38/38, root 218/218, budgets security 76/76). main fast-forwarded and pushed. Deployed functions + firestore:rules + hosting to vault-41b34 (`--force` only to accept retry policy for notifyBudgetThreshold; verified all 6 deployed functions exist in source, nothing deleted). notifyBudgetThreshold created; SMTP secrets granted. Independent verifier not re-run for the reconciliation: rules delta vs origin/main is purely additive and covered by rules tests.
 - Pending: real-device push + real Gmail smoke test by user.
+
+# Phase 3: overall budget cap alerts (branch feat/budget-total-alerts)
+- L (2026-10-21) "quiero que lo haga — No existen alertas por el tope total de un presupuesto, solo por categoría." / "y tambien con el presupuesto por default que hay" / "no solamente con los presupuestos creados". Decision (AskUserQuestion): default budget total = "Igual al Dashboard" (Dashboard.vue:881-895: capped categories' spend clamped per cap over sum of positive caps).
+- S1 additional budgets with `totalLimit`: alert 80/100 on all scope expenses (uncategorized included), monthly share or event principal, cap in `capCurrency` (reportBudgetScope totalComparison).
+- S2 default budget: alert 80/100 on dashboard usage. Ledger slot `__total`.
+- Route: inline (no writer reason). RED: TS2305/TS2353 missing exports/field; GREEN functions 167/167.
+- Trigger now queries all workspace expenses (was per category) and delivers category then total sequentially via deliverBudgetAlert.
