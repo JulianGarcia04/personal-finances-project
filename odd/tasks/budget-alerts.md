@@ -45,3 +45,25 @@ ask-on-risk. Forecast ~400-550 authored lines.
 
 ## Next step
 Parent: native review assessment of the three work-unit commits; manual smoke test with real Gmail app password.
+
+---
+
+# Phase 2: push notifications (FCM)
+
+Branch `feat/budget-alerts-push` (from main 08ba2be). Runner: `pnpm --filter functions test`, `pnpm exec vue-tsc --noEmit`, `pnpm test:emulators:rules`.
+
+## Specs
+- S1 "vamos a hacerlo por correo con mi correo personal pero también vamos a usar cloud messaging": the same budget threshold alerts (80% / 100%) are delivered by email (Gmail SMTP, unchanged) AND by Firebase Cloud Messaging web push.
+- S2 (assumption) Push opt-in per device from Configuración: request browser permission, register FCM token in `users/{uid}/pushTokens/{token}` ({token, userAgent, createdAt}); user can disable on that device (delete token).
+- S3 (assumption) Server sends push to every workspace member's registered tokens after claiming the threshold; push failures never block or undo the email; invalid/unregistered tokens are deleted.
+- S4 Requires a web app manifest + `firebase-messaging-sw.js` service worker; iOS only receives push when installed to the home screen.
+- S5 VAPID public key provided via `VITE_FIREBASE_VAPID_KEY`; push UI hidden/disabled with explanation when missing or unsupported.
+
+## Tasks
+- P1 client: SW, manifest, push lib, Settings UI, rules for pushTokens — delegated (parallel writer, unit A).
+- P2 server: FCM send in notifyBudgetThreshold + invalid token cleanup + tests — delegated (parallel writer, unit B).
+- P3 independent verify (Risk item 2: firestore rules/permissions) + docs.
+
+## Log
+- L1 (2026-10-20) "bueno vamos a hacerlo por correo con mi correo personal pero también vamos a usar cloud messaging"
+- Route: parallel writers (two independent units, disjoint edit surfaces, contract = token doc path/shape fixed in S2).
