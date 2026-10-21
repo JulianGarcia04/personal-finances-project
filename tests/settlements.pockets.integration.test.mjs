@@ -262,6 +262,46 @@ test('settlements without pockets keep working through the existing client path'
   })
 })
 
+test('concurrent duplicate settlements and reversals apply only once', async () => {
+  const { ids } = await seedBridge({ toPocket: 200 })
+  const { settleBridge, reverseBridgeSettlement } = functionsRequire('./lib/settlements.js')
+  const request = {
+    userId: fixture.identity.user.uid, workspaceId: fixture.workspaceId, bridgeAccountId: ids.bridge,
+    receivableAccountId: ids.receivable, fromAccountId: ids.from, toAccountId: ids.to,
+    amount: 120, date: settlementDate.getTime(), expectedBridgeBalance: -300
+  }
+
+  const settles = await Promise.allSettled([
+    settleBridge(fixture.adminDb, request),
+    settleBridge(fixture.adminDb, request),
+    httpsCallable(fixture.functions, 'bridgeSettlement')({ action: 'settle', ...request, userId: undefined })
+  ])
+
+  assert.equal(settles.filter(result => result.status === 'fulfilled').length, 1)
+  for (const result of settles.filter(result => result.status === 'rejected')) {
+    assert.match(result.reason.message, /cambió el saldo del puente/)
+  }
+  const expectedAfterSettle = {
+    from: 880, fromPocket: undefined, bridge: -180, source: -300, receivable: 180, to: 620, toPocket: 200
+  }
+  assert.deepEqual(await balances(ids), expectedAfterSettle)
+  const { local } = await settlementLegs(ids)
+
+  const reversals = await Promise.allSettled([
+    reverseBridgeSettlement(fixture.adminDb, { userId: request.userId, workspaceId: request.workspaceId, transactionId: local.id }),
+    reverseBridgeSettlement(fixture.adminDb, { userId: request.userId, workspaceId: request.workspaceId, transactionId: local.id })
+  ])
+
+  assert.equal(reversals.filter(result => result.status === 'fulfilled').length, 1)
+  // The loser sees the leg already marked reversedBy, so it is no longer a reversible settlement.
+  assert.match(reversals.find(result => result.status === 'rejected').reason.message, /no es una liquidación reversible/)
+  assert.deepEqual(await balances(ids), {
+    from: 1_000, fromPocket: undefined, bridge: -300, source: -300, receivable: 300, to: 500, toPocket: 200
+  })
+  const reversalDocs = await fixture.adminDb.collection('transactions').where('reversalOf', '==', local.id).get()
+  assert.equal(reversalDocs.size, 1)
+})
+
 test('the settlement callable refuses users outside the workspaces and leaves balances untouched', async () => {
   const { ids } = await seedBridge({ toPocket: 200 })
   const before = await balances(ids)
