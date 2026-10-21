@@ -99,3 +99,4 @@ Branch `feat/budget-alerts-push` (from main 08ba2be). Runner: `pnpm --filter fun
 - RED: TS2305/TS2353 (missing exports, incomeBudget field). GREEN: functions 170/170.
 - Independent verify of 3553e34 (Risk item 6): all 6 checks PASS, no blockers, 170/170. Advisory A1 (income with undefined/garbage date threw RangeError, failing the whole trigger) fixed: RED 170/1 -> GREEN 171/0. Accepted advisories: missing tx currency = no alert (no 1:1, consistent with category alerts); planner income assumed in owner's primary currency; income edits alone never trigger; each current-month expense reads all workspace expenses+incomes; push data can't distinguish income vs total alert; trigger wiring still without direct test.
 - Next step: user decides merge to main + push + deploy functions.
+- (2026-10-21) Merged feat/budget-total-alerts (ff to d59e4ab), pushed, deployed functions to vault-41b34: all 7 functions updated. Pending: real smoke test by user.
