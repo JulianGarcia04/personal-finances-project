@@ -167,6 +167,21 @@ test('a pocket itself cannot pay or receive a settlement', async () => {
   assert.equal(await transactionCount(ids), 0)
 })
 
+test('refuses a bridge mirrored to its own workspace when an account has pockets', async () => {
+  const { ids } = await seedBridge({ fromPocket: 100 })
+  await fixture.adminDb.collection('accounts').doc(ids.receivable).update({ workspaceId: fixture.workspaceId })
+  await fixture.adminDb.collection('accounts').doc(ids.bridge).update({ 'mirror.workspaceId': fixture.workspaceId })
+  await fixture.accountsStore.fetchAccounts()
+  const before = await balances(ids)
+
+  await assert.rejects(fixture.transactionsStore.settleMirror({
+    bridgeAccountId: ids.bridge, amount: 100, fromAccountId: ids.from, toAccountId: ids.from, date: settlementDate
+  }), /otro workspace/)
+
+  assert.deepEqual(await balances(ids), before)
+  assert.equal(await transactionCount(ids), 0)
+})
+
 test('reverses a settlement that touched an account with pockets', async () => {
   const { ids } = await seedBridge({ toPocket: 200 })
   await settle(ids, 120)

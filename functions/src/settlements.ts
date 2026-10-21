@@ -138,6 +138,10 @@ export async function settleBridge(db: Firestore, input: SettleBridgeInput): Pro
     if (!mirror?.workspaceId || mirror.accountId !== input.receivableAccountId) {
       throw new SettlementRejection('El espejo cambió; vuelve a cargar la cuenta antes de liquidar')
     }
+    // Same-workspace mirrors would let one account both pay and receive, dropping a delta.
+    if (mirror.workspaceId === input.workspaceId) {
+      throw new SettlementRejection('La cuenta puente debe reflejar otro workspace')
+    }
     await assertMemberOfBoth(db, transaction, input.userId, input.workspaceId, [input.workspaceId, mirror.workspaceId])
     const accounts = await readSettlementAccounts(db, transaction, [
       input.fromAccountId, input.bridgeAccountId, input.receivableAccountId, input.toAccountId
@@ -316,7 +320,7 @@ export async function deleteBridgeSettlement(db: Firestore, input: SettlementLeg
   await db.runTransaction(async transaction => {
     const legs = await readLinkedLegs(db, transaction, input.transactionId, input.workspaceId)
     if (legs.some(leg => leg.type !== 'transfer' || leg.categoryId !== '' || !leg.toAccountId)) {
-      throw new SettlementRejection('Solo las liquidaciones de cuentas puente se eliminan junto con su pata vinculada.')
+      throw new SettlementRejection('Este par vinculado no es una liquidación de cuenta puente; no se puede eliminar mientras una de sus cuentas tenga bolsillos.')
     }
     await assertMemberOfBoth(db, transaction, input.userId, input.workspaceId, legs.map(leg => leg.workspaceId))
     const accounts = await readSettlementAccounts(db, transaction, legs.flatMap(leg => [leg.accountId, leg.toAccountId!]))
