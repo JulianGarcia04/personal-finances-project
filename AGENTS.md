@@ -113,6 +113,13 @@ Vault está diseñado para correr completamente offline utilizando **Firebase Em
    * Opcional: `ALERTS_FROM="Vault <tu-cuenta@gmail.com>"` en `functions/.env` para personalizar el remitente (por defecto `Vault <SMTP_USER>`; Gmail solo permite tu cuenta o sus alias).
    * Las alertas se activan o desactivan por workspace en **Configuración → Workspace** (campo `budgetAlertsEnabled`, activo por defecto).
 
+   **Alertas de presupuesto por notificación push (opcional):** el mismo trigger envía también una notificación web push (Firebase Cloud Messaging) a cada dispositivo que la haya activado. El correo se envía primero; si la push falla, el correo no se ve afectado, y los tokens inválidos se eliminan automáticamente. Si no hay SMTP configurado pero hay dispositivos registrados, se envía solo la push.
+   * **Clave VAPID:** en Firebase Console → Configuración del proyecto → Cloud Messaging → Certificados de push web, genera un par de claves y agrega la clave pública al `.env` del frontend como `VITE_FIREBASE_VAPID_KEY=...`. Sin ella, el interruptor aparece deshabilitado.
+   * **Activación por dispositivo:** en **Configuración**, interruptor "Notificaciones push en este dispositivo". El token se guarda en `users/{uid}/pushTokens/{token}` (solo el dueño puede leerlo o borrarlo).
+   * **iPhone/iPad:** solo recibe push si Vault se instala con *Compartir → Agregar a pantalla de inicio* y la activación se hace desde la app instalada.
+   * Opcional: `APP_URL=https://tu-dominio` en `functions/.env` para que el clic en la notificación use un enlace absoluto; sin ella, el service worker abre `/goals`.
+   * El service worker (`public/firebase-messaging-sw.js`) debe servirse por HTTPS (o `localhost`). FCM no tiene emulador: la push solo se puede probar contra el proyecto real.
+
 3. **Iniciar Servidores:**
    * **Frontend (Vite):** `pnpm dev`
    * **Firebase Emulators (Auth, Firestore, Storage, Functions):** `pnpm emulators` (consola en `http://localhost:4000`)
