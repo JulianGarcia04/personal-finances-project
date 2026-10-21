@@ -38,6 +38,7 @@ import { onMounted } from 'vue'
 import Sidebar from '@/components/Sidebar.vue'
 import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { onForegroundMessage } from '@/lib/push'
 
 const authStore = useAuthStore()
 const settingsStore = useSettingsStore()
@@ -47,6 +48,8 @@ onMounted(async () => {
   const user = await authStore.init()
   if (user) {
     await settingsStore.loadSettings()
+    // Show push alerts that arrive while the app is open on any page (no-op if this device never opted in).
+    onForegroundMessage().catch((err) => console.warn('Push foreground listener unavailable:', err))
   }
 })
 </script>

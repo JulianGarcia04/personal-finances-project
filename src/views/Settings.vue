@@ -147,6 +147,29 @@
               </label>
             </div>
 
+            <!-- Web push for budget alerts (per device, not per workspace). -->
+            <div class="p-4 sm:p-6">
+              <label class="flex items-start justify-between gap-4 min-h-11" :class="pushToggleDisabled ? 'cursor-not-allowed' : 'cursor-pointer'">
+                <span class="min-w-0 space-y-1">
+                  <span class="block font-display font-medium text-sm text-text-primary">Notificaciones push en este dispositivo</span>
+                  <span class="block text-text-muted text-xs">Recibe en este dispositivo las mismas alertas de presupuesto (80 % y 100 %) que llegan por correo.</span>
+                  <span class="block text-xs" :class="pushStatusClass" role="status" aria-live="polite">{{ pushStatusText }}</span>
+                  <span class="block text-text-muted text-xs">En iPhone o iPad primero usa «Compartir → Agregar a pantalla de inicio» y abre Vault desde ese ícono.</span>
+                </span>
+                <span class="relative inline-flex items-center shrink-0 min-h-11 -mt-2.5">
+                  <input
+                    type="checkbox"
+                    :checked="pushStatus === 'enabled'"
+                    :disabled="pushToggleDisabled"
+                    @change="handlePushToggle"
+                    aria-label="Notificaciones push en este dispositivo"
+                    class="sr-only peer"
+                  >
+                  <div class="relative w-11 h-6 bg-slate-800 rounded-full peer peer-focus:ring-2 peer-focus:ring-accent-emerald/20 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-slate-400 after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent-emerald peer-checked:after:bg-background peer-disabled:opacity-50"></div>
+                </span>
+              </label>
+            </div>
+
             <!-- Create workspace -->
             <div class="p-4 sm:p-6 space-y-3">
               <div>
@@ -514,6 +537,7 @@ import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useGoalsStore } from '@/stores/goalsStore'
 import { ApiKeySchema, CategorySchema } from '@/schemas'
+import { getPushStatus, enablePush, disablePush, onForegroundMessage, type PushStatus } from '@/lib/push'
 import { 
   Utensils, Car, Film, Lightbulb, Heart, GraduationCap, TrendingUp, HelpCircle,
   ShoppingBag, Home, Gift, Coffee, Plane, DollarSign, PiggyBank, Smartphone,
@@ -736,6 +760,7 @@ onMounted(async () => {
   await goalsStore.loadBudgetSettings()
   Object.assign(rateInputs, goalsStore.exchangeRates)
   budgetAlertsEnabled.value = goalsStore.budgetAlertsEnabled
+  await refreshPushStatus()
 })
 
 // Workspace Management
@@ -794,6 +819,58 @@ const handleBudgetAlertsChange = async () => {
   } catch (err) {
     console.error('Error actualizando alertas de presupuesto:', err)
     budgetAlertsEnabled.value = !enabled
+  }
+}
+
+// Web push (per device)
+const pushStatus = ref<PushStatus | 'loading'>('loading')
+const pushBusy = ref(false)
+const pushError = ref('')
+const pushToggleDisabled = computed(() =>
+  pushBusy.value || ['loading', 'unsupported', 'missing-vapid', 'denied'].includes(pushStatus.value)
+)
+const pushStatusText = computed(() => {
+  if (pushError.value) return pushError.value
+  switch (pushStatus.value) {
+    case 'enabled': return 'Activadas en este dispositivo.'
+    case 'disabled': return 'Desactivadas en este dispositivo.'
+    case 'denied': return 'Bloqueadas por el navegador. Permite las notificaciones de este sitio en la configuración del navegador.'
+    case 'unsupported': return 'Este navegador no soporta notificaciones push.'
+    case 'missing-vapid': return 'Falta configurar la clave VAPID (VITE_FIREBASE_VAPID_KEY).'
+    default: return 'Verificando…'
+  }
+})
+const pushStatusClass = computed(() => {
+  if (pushError.value || pushStatus.value === 'denied') return 'text-accent-rose'
+  if (pushStatus.value === 'enabled') return 'text-accent-emerald'
+  return 'text-text-muted'
+})
+const refreshPushStatus = async () => {
+  try {
+    pushStatus.value = await getPushStatus()
+    if (pushStatus.value === 'enabled') await onForegroundMessage()
+  } catch (err) {
+    console.error('Error consultando notificaciones push:', err)
+    pushStatus.value = 'unsupported'
+  }
+}
+const handlePushToggle = async (event: Event) => {
+  const input = event.target as HTMLInputElement
+  const uid = authStore.user?.uid
+  if (!uid || pushBusy.value) {
+    input.checked = pushStatus.value === 'enabled'
+    return
+  }
+  pushBusy.value = true
+  pushError.value = ''
+  try {
+    pushStatus.value = input.checked ? await enablePush(uid) : await disablePush(uid)
+  } catch (err) {
+    console.error('Error actualizando notificaciones push:', err)
+    pushError.value = 'No se pudieron actualizar las notificaciones. Intenta de nuevo.'
+  } finally {
+    input.checked = pushStatus.value === 'enabled'
+    pushBusy.value = false
   }
 }
 

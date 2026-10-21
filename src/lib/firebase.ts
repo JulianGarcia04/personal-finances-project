@@ -33,4 +33,4 @@ if (import.meta.env.DEV) {
   }
 }
 
-export { app, auth, db, storage, functions }
+export { app, auth, db, storage, functions, firebaseConfig }

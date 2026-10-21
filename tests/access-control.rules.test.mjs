@@ -11,7 +11,7 @@ import { initializeApp, deleteApp } from 'firebase/app'
 import { getAuth, connectAuthEmulator, createUserWithEmailAndPassword } from 'firebase/auth'
 import {
   getFirestore, connectFirestoreEmulator, terminate,
-  doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, collection, arrayUnion
+  doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, collection, arrayUnion, serverTimestamp
 } from 'firebase/firestore'
 
 const projectId = 'demo-vault-access'
@@ -197,6 +197,44 @@ test('transaction embeddings are server-only, even for workspace members', async
   await assert.rejects(getDocs(collection(owner.db, 'transactionEmbeddings')), denied)
   await assert.rejects(setDoc(doc(member.db, 'transactionEmbeddings', embeddingId), { workspaceId, embedding: [0] }), denied)
   await assert.rejects(deleteDoc(doc(owner.db, 'transactionEmbeddings', embeddingId)), denied)
+})
+
+test('a user can register, read and delete their own push token', async () => {
+  const token = `fcm-owner-${Date.now()}`
+  const ref = doc(owner.db, 'users', owner.uid, 'pushTokens', token)
+  await setDoc(ref, { token, userAgent: 'test-agent', createdAt: serverTimestamp() })
+  assert.equal((await getDoc(ref)).data().token, token)
+  assert.equal((await getDocs(collection(owner.db, 'users', owner.uid, 'pushTokens'))).size >= 1, true)
+  // Re-registering the same device token keeps working.
+  await setDoc(ref, { token, userAgent: 'test-agent-2', createdAt: serverTimestamp() })
+  await deleteDoc(ref)
+  assert.equal((await adminDb.collection('users').doc(owner.uid).collection('pushTokens').doc(token).get()).exists, false)
+})
+
+test('push tokens are private to their owner, even within a shared workspace', async () => {
+  const token = `fcm-private-${Date.now()}`
+  await adminDb.collection('users').doc(owner.uid).collection('pushTokens').doc(token)
+    .set({ token, userAgent: 'admin', createdAt: new Date() })
+  for (const other of [member, outsider]) {
+    const ref = doc(other.db, 'users', owner.uid, 'pushTokens', token)
+    await assert.rejects(getDoc(ref), denied)
+    await assert.rejects(getDocs(collection(other.db, 'users', owner.uid, 'pushTokens')), denied)
+    await assert.rejects(deleteDoc(ref), denied)
+    await assert.rejects(setDoc(doc(other.db, 'users', owner.uid, 'pushTokens', `forged-${other.uid}`), {
+      token: `forged-${other.uid}`, userAgent: 'x', createdAt: serverTimestamp()
+    }), denied)
+  }
+  assert.equal((await adminDb.collection('users').doc(owner.uid).collection('pushTokens').doc(token).get()).exists, true)
+})
+
+test('push token documents must match the expected shape', async () => {
+  const col = (id) => doc(owner.db, 'users', owner.uid, 'pushTokens', id)
+  const id = `fcm-shape-${Date.now()}`
+  await assert.rejects(setDoc(col(id), { token: 'different-token', userAgent: 'x', createdAt: serverTimestamp() }), denied)
+  await assert.rejects(setDoc(col(id), { token: id, userAgent: 'x', createdAt: serverTimestamp(), extra: true }), denied)
+  await assert.rejects(setDoc(col(id), { token: id, userAgent: 'x', createdAt: new Date(0) }), denied)
+  await assert.rejects(setDoc(col(id), { token: id, userAgent: 'x'.repeat(1025), createdAt: serverTimestamp() }), denied)
+  await assert.rejects(setDoc(col(id), { token: id, userAgent: 42, createdAt: serverTimestamp() }), denied)
 })
 
 test('only the owner can delete the workspace', async () => {

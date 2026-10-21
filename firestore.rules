@@ -456,6 +456,21 @@ service cloud.firestore {
       match /secure/{documentId} {
         allow read, write: if isOwner(userId);
       }
+
+      // FCM web push tokens, one doc per device. Owner-only; the server
+      // (admin SDK) reads them to send budget alerts and prunes stale ones.
+      match /pushTokens/{tokenId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) &&
+          request.resource.data.keys().hasOnly(['token', 'userAgent', 'createdAt']) &&
+          request.resource.data.keys().hasAll(['token', 'userAgent', 'createdAt']) &&
+          request.resource.data.token is string &&
+          request.resource.data.token == tokenId &&
+          request.resource.data.token.size() <= 1024 &&
+          request.resource.data.userAgent is string &&
+          request.resource.data.userAgent.size() <= 1024 &&
+          request.resource.data.createdAt == request.time;
+      }
     }
 
     match /workspaces/{workspaceId} {
