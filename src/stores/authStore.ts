@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { auth, db } from '@/lib/firebase'
+import { disablePush, hasPushRegistration } from '@/lib/push'
 import { 
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword, 
@@ -135,6 +136,12 @@ export const useAuthStore = defineStore('auth', {
     async logout(): Promise<void> {
       this.loading = true
       try {
+        // Unregister this device first so the next user of this browser never
+        // receives the previous user's alerts. Best-effort: never blocks logout.
+        const uid = auth.currentUser?.uid
+        if (uid && hasPushRegistration()) {
+          await disablePush(uid).catch((err) => console.warn('Push unregister on logout failed:', err))
+        }
         await signOut(auth)
         this.user = null
         this.profile = null

@@ -7,7 +7,7 @@ import {
   type Messaging
 } from 'firebase/messaging'
 import { doc, setDoc, deleteDoc, serverTimestamp } from 'firebase/firestore'
-import { app, db, firebaseConfig } from '@/lib/firebase'
+import { app, auth, db, firebaseConfig } from '@/lib/firebase'
 
 export type PushStatus = 'enabled' | 'disabled' | 'denied' | 'unsupported' | 'missing-vapid'
 
@@ -19,9 +19,12 @@ const TOKEN_STORAGE_KEY = 'vault.pushToken'
 let messagingPromise: Promise<Messaging | null> | null = null
 let foregroundUnsubscribe: (() => void) | null = null
 
+// Stored as "<uid> <token>" so a browser shared by several users never reports
+// another user's registration as this user's.
 function readStoredToken(): string | null {
   try {
-    return localStorage.getItem(TOKEN_STORAGE_KEY)
+    const [owner, token] = (localStorage.getItem(TOKEN_STORAGE_KEY) || '').split(' ')
+    return owner && token && owner === auth.currentUser?.uid ? token : null
   } catch {
     return null
   }
@@ -29,11 +32,17 @@ function readStoredToken(): string | null {
 
 function writeStoredToken(token: string | null) {
   try {
-    if (token) localStorage.setItem(TOKEN_STORAGE_KEY, token)
+    const uid = auth.currentUser?.uid
+    if (token && uid) localStorage.setItem(TOKEN_STORAGE_KEY, `${uid} ${token}`)
     else localStorage.removeItem(TOKEN_STORAGE_KEY)
   } catch {
     // Storage can be unavailable (private mode); the token doc is the source of truth.
   }
+}
+
+/** True when the signed-in user registered this device for push. */
+export function hasPushRegistration(): boolean {
+  return readStoredToken() !== null
 }
 
 function hasBrowserPushApis(): boolean {
