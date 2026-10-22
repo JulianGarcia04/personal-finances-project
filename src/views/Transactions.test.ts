@@ -207,3 +207,8 @@ test('date input defaults never use the UTC day', () => {
   assert.doesNotMatch(script, /toISOString\(\)\.(substring|slice)\(0, 10\)/)
   assert.match(script, /date: toLocalDateKey\(\)/)
 })
+
+test('the new-movement form can create a missing category inline and selects it', () => {
+  assert.match(template, /<CategoryQuickCreate[\s\S]*?:type="newTx\.type"[\s\S]*?@created="handleNewTxCategoryCreated"/)
+  assert.match(script!, /newTx\.value\.categoryId = category\.id/)
+})

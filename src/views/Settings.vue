@@ -538,10 +538,8 @@ import { useAccountsStore } from '@/stores/accountsStore'
 import { useGoalsStore } from '@/stores/goalsStore'
 import { ApiKeySchema, CategorySchema } from '@/schemas'
 import { getPushStatus, enablePush, disablePush, onForegroundMessage, type PushStatus } from '@/lib/push'
-import { 
-  Utensils, Car, Film, Lightbulb, Heart, GraduationCap, TrendingUp, HelpCircle,
-  ShoppingBag, Home, Gift, Coffee, Plane, DollarSign, PiggyBank, Smartphone,
-  Activity, Scissors, BookOpen, Wrench, Shield,
+import { CATEGORY_COLORS, CATEGORY_ICONS, getCategoryIconComponent } from '@/lib/categoryIcons'
+import {
   Trash2 as TrashIcon, Plus as PlusIcon, Mail as MailIcon, Check as CheckIcon,
   KeyRound as KeyRoundIcon, Sparkles, Users, Globe, Tags
 } from 'lucide-vue-next'
@@ -620,50 +618,9 @@ const newCatColor = ref('#10b981')
 const newCatIcon = ref('HelpCircle')
 const loadingCategory = ref(false)
 
-const presetColors = [
-  '#10b981', // Emerald
-  '#f43f5e', // Rose
-  '#3b82f6', // Blue
-  '#fbbf24', // Amber
-  '#ec4899', // Pink
-  '#8b5cf6', // Violet
-  '#14b8a6', // Teal
-  '#6366f1', // Indigo
-  '#6b7280', // Gray
-]
-
-const availableIcons = [
-  { name: 'Utensils', label: 'Comida' },
-  { name: 'Car', label: 'Transporte' },
-  { name: 'Film', label: 'Entretenimiento' },
-  { name: 'Lightbulb', label: 'Servicios' },
-  { name: 'Heart', label: 'Salud' },
-  { name: 'GraduationCap', label: 'Educación' },
-  { name: 'TrendingUp', label: 'Ingresos' },
-  { name: 'HelpCircle', label: 'Otros' },
-  { name: 'ShoppingBag', label: 'Compras' },
-  { name: 'Home', label: 'Hogar' },
-  { name: 'Gift', label: 'Regalos' },
-  { name: 'Coffee', label: 'Café/Snacks' },
-  { name: 'Plane', label: 'Viajes' },
-  { name: 'DollarSign', label: 'Finanzas' },
-  { name: 'PiggyBank', label: 'Ahorro' },
-  { name: 'Smartphone', label: 'Tecnología' },
-  { name: 'Activity', label: 'Deporte' },
-  { name: 'Scissors', label: 'Cuidado' },
-  { name: 'BookOpen', label: 'Libros' },
-  { name: 'Wrench', label: 'Soporte' },
-  { name: 'Shield', label: 'Seguros' }
-]
-
-const getIconComponent = (iconName: string) => {
-  const icons: Record<string, any> = {
-    Utensils, Car, Film, Lightbulb, Heart, GraduationCap, TrendingUp, HelpCircle,
-    ShoppingBag, Home, Gift, Coffee, Plane, DollarSign, PiggyBank, Smartphone,
-    Activity, Scissors, BookOpen, Wrench, Shield
-  }
-  return icons[iconName] || HelpCircle
-}
+const presetColors = CATEGORY_COLORS
+const availableIcons = CATEGORY_ICONS
+const getIconComponent = getCategoryIconComponent
 
 const isDefaultCategory = (name: string) => {
   return ['Comida', 'Transporte', 'Entretenimiento', 'Servicios', 'Salud', 'Educación', 'Ingresos', 'Otros'].includes(name)

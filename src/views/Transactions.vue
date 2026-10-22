@@ -519,8 +519,27 @@
 
             <!-- Category (Expense/Income only) -->
             <div v-else-if="newTx.type === 'expense' || newTx.type === 'income'" class="space-y-1">
-              <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Categoría</label>
+              <div class="flex items-center justify-between gap-2">
+                <label for="new-tx-category" class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Categoría</label>
+                <button
+                  v-if="!creatingNewTxCategory"
+                  type="button"
+                  class="inline-flex items-center gap-1 text-[10px] font-semibold text-accent-emerald hover:underline cursor-pointer"
+                  @click="creatingNewTxCategory = true"
+                >
+                  <PlusIcon class="w-3 h-3" />
+                  Nueva
+                </button>
+              </div>
+              <CategoryQuickCreate
+                v-if="creatingNewTxCategory"
+                :type="newTx.type"
+                @created="handleNewTxCategoryCreated"
+                @cancel="creatingNewTxCategory = false"
+              />
               <select
+                v-else
+                id="new-tx-category"
                 v-model="newTx.categoryId"
                 required
                 class="field"
@@ -1016,7 +1035,7 @@ import { useGoalsStore } from '@/stores/goalsStore'
 import { DEFAULT_MONTHLY_BUDGET_ID, resolveBudgetId } from '@/lib/budgets'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useAuthStore } from '@/stores/authStore'
-import { Transaction, TransactionType } from '@/types'
+import type { Category, Transaction, TransactionType } from '@/types'
 import { TransactionSchema } from '@/schemas'
 import { getMonthlyInstallmentAmount } from '@/lib/installments'
 import { toDateValue, toLocalDateKey } from '@/lib/dates'
@@ -1036,6 +1055,7 @@ import {
   SlidersHorizontal as SlidersHorizontalIcon
 } from 'lucide-vue-next'
 import BaseSheet from '@/components/ui/BaseSheet.vue'
+import CategoryQuickCreate from '@/components/CategoryQuickCreate.vue'
 
 const accountsStore = useAccountsStore()
 const transactionsStore = useTransactionsStore()
@@ -1363,6 +1383,12 @@ const availableNewSourceAccounts = computed(() => {
 })
 
 // Filtrar categorías según tipo seleccionado (ingreso o gasto)
+const creatingNewTxCategory = ref(false)
+const handleNewTxCategoryCreated = (category: Category) => {
+  newTx.value.categoryId = category.id
+  creatingNewTxCategory.value = false
+}
+
 const availableCategories = computed(() => {
   const type = newTx.value.type
   return transactionsStore.categories.filter(c => c.type === type || c.type === 'both')
@@ -1376,6 +1402,7 @@ const getUserName = (uid?: string) => {
 
 const closeAddModal = () => {
   showAddModal.value = false
+  creatingNewTxCategory.value = false
   pocketTransferSelection.value = false
   newTx.value = {
     type: 'expense',

@@ -375,7 +375,7 @@
           Tip: también puedes pedirle al <span class="text-accent-emerald font-semibold">Asesor IA</span> que analice tus gastos y te proponga presupuestos.
         </p>
 
-        <div v-if="expenseCategories.length === 0" class="text-center py-8 text-text-muted text-sm">
+        <div v-if="expenseCategories.length === 0" class="text-center py-6 text-text-muted text-sm">
           No hay categorías de gasto creadas.
         </div>
 
@@ -401,7 +401,9 @@
               {{ goalsStore.categoryBudgetCurrency.status === 'confirmed' ? goalsStore.categoryBudgetCurrency.code : '???' }}
             </span>
             <input
+              :id="`base-cap-${cat.id}`"
               :value="categoryBudgetInputs[cat.id] ?? ''"
+              :aria-label="`Límite mensual de ${cat.name}`"
               type="number"
               inputmode="decimal"
               min="0"
@@ -434,6 +436,22 @@
             </div>
           </div>
         </div>
+
+        <CategoryQuickCreate
+          v-if="creatingBaselineCategory"
+          type="expense"
+          @created="handleBaselineCategoryCreated"
+          @cancel="creatingBaselineCategory = false"
+        />
+        <button
+          v-else
+          type="button"
+          class="w-full min-h-11 inline-flex items-center justify-center gap-2 rounded-xl border border-dashed border-white/15 text-xs font-semibold text-text-secondary hover:text-accent-emerald hover:border-accent-emerald/40 transition-all cursor-pointer"
+          @click="creatingBaselineCategory = true"
+        >
+          <PlusIcon class="w-4 h-4" />
+          Nueva categoría
+        </button>
       </div>
 
       <!-- 50/30/20 vs realidad del mes -->
@@ -515,13 +533,33 @@
           <div class="space-y-2 rounded-xl bg-slate-950/40 border border-white/5 p-3">
             <div>
               <h4 class="text-xs font-semibold text-text-primary">Límites por categoría · {{ budgetCapCurrencyInput || 'moneda seleccionada' }}</h4>
-              <p class="text-[10px] text-text-muted mt-1">En blanco elimina sólo ese límite. El presupuesto base y sus categoryBudgets no cambian.</p>
+              <p class="text-[10px] text-text-muted mt-1">Agrega sólo las categorías que quieres limitar. Quitar una elimina sólo ese límite; el presupuesto base y sus categoryBudgets no cambian.</p>
             </div>
-            <div v-if="budgetCategoryCapIds.length === 0" class="text-[10px] text-text-muted">No hay categorías de gasto disponibles.</div>
-            <label v-for="categoryId in budgetCategoryCapIds" :key="categoryId" class="flex items-center justify-between gap-3 border-t border-white/5 pt-2.5">
-              <span class="min-w-0 flex-1 text-xs font-medium text-text-secondary truncate">{{ categoryName(categoryId) }}</span>
-              <input :value="budgetCategoryCapInputs[categoryId] ?? ''" type="number" inputmode="decimal" min="0" step="any" class="field w-36 sm:w-40 shrink-0 text-right tabular-nums" placeholder="Sin límite" @change="(event) => updateBudgetCategoryCapInput(categoryId, (event.target as HTMLInputElement).value)" />
-            </label>
+            <p v-if="budgetSelectedCategoryIds.length === 0" class="text-[11px] text-text-muted">Todavía no hay límites por categoría.</p>
+            <div v-for="categoryId in budgetSelectedCategoryIds" :key="categoryId" class="flex items-center gap-2 border-t border-white/5 pt-2.5">
+              <span
+                class="shrink-0 w-7 h-7 rounded-lg flex items-center justify-center"
+                :style="{ backgroundColor: categoryColor(categoryId) + '20', color: categoryColor(categoryId) }"
+              >
+                <component :is="getCategoryIcon(categoryIcon(categoryId))" class="w-3.5 h-3.5" />
+              </span>
+              <label :for="`budget-cap-${categoryId}`" class="min-w-0 flex-1 text-xs font-medium text-text-secondary truncate">{{ categoryName(categoryId) }}</label>
+              <input :id="`budget-cap-${categoryId}`" :value="budgetCategoryCapInputs[categoryId] ?? ''" type="number" inputmode="decimal" min="0" step="any" class="field w-32 sm:w-40 shrink-0 text-right tabular-nums" placeholder="Sin límite" @change="(event) => updateBudgetCategoryCapInput(categoryId, (event.target as HTMLInputElement).value)" />
+              <button
+                type="button"
+                class="tap shrink-0 flex items-center justify-center rounded-lg text-text-muted hover:text-accent-rose hover:bg-accent-rose/10 transition-all cursor-pointer"
+                :aria-label="`Quitar ${categoryName(categoryId)}`"
+                @click="removeBudgetCategory(categoryId)"
+              >
+                <XIcon class="w-4 h-4" />
+              </button>
+            </div>
+            <CategoryPicker
+              :categories="expenseCategories"
+              :selected-ids="budgetSelectedCategoryIds"
+              :suggestions="budgetSuggestedCategories"
+              @select="addBudgetCategory"
+            />
           </div>
 
           <p v-if="budgetManagementError" role="alert" class="text-xs text-accent-rose">{{ budgetManagementError }}</p>
@@ -687,14 +725,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed, watch } from 'vue'
+import { ref, reactive, onMounted, computed, watch, nextTick } from 'vue'
 import { useGoalsStore } from '@/stores/goalsStore'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { SUPPORTED_CURRENCIES, currencyOptionsWith, defaultCurrencyCode } from '@/lib/currencies'
-import { Goal, OperatingBudgetDraft, OperatingBudgetPatch } from '@/types'
+import type { Category, Goal, OperatingBudgetDraft, OperatingBudgetPatch } from '@/types'
 import BaseSheet from '@/components/ui/BaseSheet.vue'
+import CategoryPicker from '@/components/CategoryPicker.vue'
+import CategoryQuickCreate from '@/components/CategoryQuickCreate.vue'
+import { suggestCategoriesBySpending } from '@/lib/categoryPicker'
+import { getCategoryIconComponent } from '@/lib/categoryIcons'
 import { DEFAULT_MONTHLY_BUDGET_ID } from '@/lib/budgets'
 import { reportBudgetScope } from '@/lib/budgetReporting'
 import type { BudgetWorkspaceBudgetSnapshot } from '@/lib/budgetWorkspaceAdapter'
@@ -707,9 +749,7 @@ import {
   Trash2 as TrashIcon,
   Plus as PlusIcon,
   Wallet as WalletIcon,
-  Utensils, Car, Film, Lightbulb, Heart, GraduationCap, TrendingUp, HelpCircle,
-  ShoppingBag, Home, Gift, Coffee, Plane, DollarSign, PiggyBank, Smartphone,
-  Activity, Scissors, BookOpen, Wrench, Shield
+  X as XIcon
 } from 'lucide-vue-next'
 import { Chart, registerables } from 'chart.js'
 
@@ -733,6 +773,9 @@ const budgetTotalLimitInput = ref<string | number>('')
 const budgetStartDateInput = ref('')
 const budgetEndDateInput = ref('')
 const budgetCategoryCapInputs = reactive<Record<string, number | undefined>>({})
+// Categories shown in the sheet, in the order the user added them.
+const budgetSelectedCategoryIds = ref<string[]>([])
+const creatingBaselineCategory = ref(false)
 const budgetManagementError = ref('')
 const savingOperatingBudget = ref(false)
 const legacyCategoryBudgetCurrencyInput = ref(defaultCurrencyCode(settingsStore.currency))
@@ -777,10 +820,13 @@ const activeOperatingBudgets = computed(() =>
 const archivedOperatingBudgets = computed(() =>
   goalsStore.operatingBudgets.filter(entry => entry.budget.archived)
 )
-const budgetCategoryCapIds = computed(() => [...new Set([
-  ...expenseCategories.value.map(category => category.id),
-  ...Object.keys(budgetCategoryCapInputs)
-])])
+const budgetSuggestedCategories = computed(() => suggestCategoriesBySpending({
+  categories: expenseCategories.value,
+  transactions: transactionsStore.transactions,
+  now: new Date(),
+  excludeIds: budgetSelectedCategoryIds.value,
+  amountOf: tx => goalsStore.convertToPrimary(Math.abs(tx.amount), tx.currency, userCurrency.value)
+}))
 // Billed card installments count in the month their statement is paid.
 const cardBillingFor = computed(() => createCardBillingLookup(accountsStore.accounts))
 
@@ -883,8 +929,11 @@ const baselineCategoryReport = (categoryId: string) =>
     : undefined
 const baselineCategoryAmount = (categoryId: string): number =>
   baselineCategoryReport(categoryId)?.monthlyAllocation.amount ?? 0
-const categoryName = (categoryId: string) =>
-  expenseCategories.value.find(category => category.id === categoryId)?.name ?? categoryId
+const findExpenseCategory = (categoryId: string) =>
+  expenseCategories.value.find(category => category.id === categoryId)
+const categoryName = (categoryId: string) => findExpenseCategory(categoryId)?.name ?? categoryId
+const categoryIcon = (categoryId: string) => findExpenseCategory(categoryId)?.icon ?? 'HelpCircle'
+const categoryColor = (categoryId: string) => findExpenseCategory(categoryId)?.color ?? '#94a3b8'
 const budgetCategoryCapEntries = (entry: BudgetWorkspaceBudgetSnapshot): Array<{ categoryId: string; amount: number }> =>
   Object.entries(entry.categoryCaps)
     .map(([categoryId, amount]) => ({ categoryId, amount }))
@@ -904,7 +953,31 @@ const openBudgetModal = (entry?: BudgetWorkspaceBudgetSnapshot) => {
   budgetManagementError.value = ''
   for (const key of Object.keys(budgetCategoryCapInputs)) delete budgetCategoryCapInputs[key]
   if (entry) Object.assign(budgetCategoryCapInputs, entry.categoryCaps)
+  budgetSelectedCategoryIds.value = Object.keys(entry?.categoryCaps ?? {})
+    .sort((left, right) => categoryName(left).localeCompare(categoryName(right)))
   showBudgetModal.value = true
+}
+
+const focusField = async (id: string) => {
+  await nextTick()
+  document.getElementById(id)?.focus()
+}
+
+const addBudgetCategory = (categoryId: string) => {
+  if (!budgetSelectedCategoryIds.value.includes(categoryId)) {
+    budgetSelectedCategoryIds.value = [...budgetSelectedCategoryIds.value, categoryId]
+  }
+  void focusField(`budget-cap-${categoryId}`)
+}
+
+const removeBudgetCategory = (categoryId: string) => {
+  budgetSelectedCategoryIds.value = budgetSelectedCategoryIds.value.filter(id => id !== categoryId)
+  delete budgetCategoryCapInputs[categoryId]
+}
+
+const handleBaselineCategoryCreated = (category: Category) => {
+  creatingBaselineCategory.value = false
+  void focusField(`base-cap-${category.id}`)
 }
 
 const updateBudgetCategoryCapInput = (categoryId: string, rawValue: string) => {
@@ -1280,12 +1353,5 @@ const budgetStatusLabel = (categoryId: string) => {
   return ''
 }
 
-const getCategoryIcon = (iconName: string) => {
-  const icons: Record<string, any> = {
-    Utensils, Car, Film, Lightbulb, Heart, GraduationCap, TrendingUp, HelpCircle,
-    ShoppingBag, Home, Gift, Coffee, Plane, DollarSign, PiggyBank, Smartphone,
-    Activity, Scissors, BookOpen, Wrench, Shield
-  }
-  return icons[iconName] || HelpCircle
-}
+const getCategoryIcon = getCategoryIconComponent
 </script>

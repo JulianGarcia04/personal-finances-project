@@ -172,3 +172,16 @@ test('currency fields are selectors prefilled from the configured currency', () 
   assertContains(/legacyCategoryBudgetCurrencyInput = ref\(defaultCurrencyCode\(settingsStore\.currency\)\)/, 'legacy cap currency must be prefilled')
   assertContains(/budgetCapCurrencyInput\.value = entry\?\.budget\.capCurrency \?\? defaultCurrencyCode\(settingsStore\.currency\)/, 'new budgets must be prefilled')
 })
+
+test('budget sheet lists only the chosen categories and adds or creates more inline with spending suggestions', () => {
+  assertContains(/<CategoryPicker[\s\S]*?:selected-ids="budgetSelectedCategoryIds"[\s\S]*?:suggestions="budgetSuggestedCategories"[\s\S]*?@select="addBudgetCategory"/, 'the budget sheet must embed the inline category picker')
+  assertContains(/suggestCategoriesBySpending\(/, 'suggestions must come from recent spending')
+  assertContains(/v-for="categoryId in budgetSelectedCategoryIds"/, 'only selected categories render a cap input')
+  assertNotContains(/budgetCategoryCapIds/, 'the sheet must no longer render one input per existing category')
+  assertContains(/:aria-label="`Quitar \$\{categoryName\(categoryId\)\}`"/, 'each chosen category needs a remove control')
+})
+
+test('baseline monthly budget can create a missing category without leaving the page', () => {
+  assertContains(/<CategoryQuickCreate[\s\S]*?@created="handleBaselineCategoryCreated"/, 'the baseline list must offer inline category creation')
+  assertContains(/:id="`base-cap-\$\{cat\.id\}`"/, 'baseline inputs need ids so a new category can receive focus')
+})
