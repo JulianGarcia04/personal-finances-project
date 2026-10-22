@@ -73,6 +73,37 @@ export const selfFundedBudgetIds = (
   return funded
 }
 
+export interface BudgetMoveCandidate {
+  type: string
+  accountId: string
+  categoryId?: string | null
+  budgetId?: string | null
+  date: Date
+}
+
+/**
+ * Default-budget movements an event budget can take over: any expense or income from a linked
+ * account and any expense in a capped category, within the budget's dates (end day inclusive).
+ */
+export const budgetMoveCandidates = <T extends BudgetMoveCandidate>(
+  transactions: readonly T[],
+  options: { linkedAccountIds: readonly string[]; categoryIds: readonly string[]; startDate?: Date | null; endDate?: Date | null }
+): T[] => {
+  const linked = new Set(options.linkedAccountIds)
+  const capped = new Set(options.categoryIds)
+  const start = options.startDate?.getTime() ?? -Infinity
+  const end = options.endDate
+    ? new Date(options.endDate.getFullYear(), options.endDate.getMonth(), options.endDate.getDate() + 1).getTime()
+    : Infinity
+  return transactions.filter(transaction => {
+    if (!canCarryBudget(transaction.type) || resolveBudgetId(transaction.budgetId) !== DEFAULT_MONTHLY_BUDGET_ID) return false
+    const time = transaction.date.getTime()
+    if (time < start || time >= end) return false
+    return linked.has(transaction.accountId)
+      || (transaction.type === 'expense' && !!transaction.categoryId && capped.has(transaction.categoryId))
+  })
+}
+
 /** The default budget is the absence of a reference, so it is stored as null. */
 export const budgetIdToPersist = (type: string, budgetId?: string | null): string | null =>
   canCarryBudget(type) && budgetId && budgetId !== DEFAULT_MONTHLY_BUDGET_ID ? budgetId : null

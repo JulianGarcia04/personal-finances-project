@@ -6,6 +6,7 @@ import {
   eventBudgetCommittedAllocation,
   budgetIdForAccount,
   budgetIdToPersist,
+  budgetMoveCandidates,
   canAssignBudget,
   canCarryBudget,
   linkedAccountConflicts,
@@ -267,4 +268,33 @@ test('a movement of a linked account can only go to that account\'s budget', () 
   assert.equal(canAssignBudget(budgets, 'cash-casa', 'other'), false)
   assert.equal(canAssignBudget(budgets, 'bank', 'casa'), true)
   assert.equal(canAssignBudget(budgets, '', DEFAULT_MONTHLY_BUDGET_ID), true)
+})
+
+test('existing default-budget movements from linked accounts or capped categories can move to an event budget', () => {
+  const day = (iso: string) => new Date(`${iso}T12:00:00`)
+  const transactions = [
+    { id: 'linked-expense', type: 'expense', accountId: 'cash-casa', categoryId: 'food', date: day('2026-10-05') },
+    { id: 'linked-income', type: 'income', accountId: 'cash-casa', categoryId: 'sales', date: day('2026-10-06') },
+    { id: 'capped-expense', type: 'expense', accountId: 'bank', categoryId: 'furniture', date: day('2026-10-07') },
+    // Income is never matched by category: it only enters through a linked account.
+    { id: 'capped-income', type: 'income', accountId: 'bank', categoryId: 'furniture', date: day('2026-10-07') },
+    { id: 'already-assigned', type: 'expense', accountId: 'cash-casa', budgetId: 'viaje', date: day('2026-10-08') },
+    { id: 'explicit-default', type: 'expense', accountId: 'cash-casa', budgetId: DEFAULT_MONTHLY_BUDGET_ID, date: day('2026-10-08') },
+    { id: 'transfer', type: 'transfer', accountId: 'cash-casa', date: day('2026-10-08') },
+    { id: 'unrelated', type: 'expense', accountId: 'bank', categoryId: 'food', date: day('2026-10-08') },
+    { id: 'before-start', type: 'expense', accountId: 'cash-casa', date: day('2026-09-30') },
+    { id: 'on-end-day', type: 'expense', accountId: 'cash-casa', date: new Date('2026-10-31T23:30:00') },
+    { id: 'after-end', type: 'expense', accountId: 'cash-casa', date: day('2026-11-01') }
+  ]
+  const ids = (options: Parameters<typeof budgetMoveCandidates>[1]) =>
+    budgetMoveCandidates(transactions, options).map(transaction => transaction.id)
+
+  assert.deepEqual(ids({
+    linkedAccountIds: ['cash-casa'],
+    categoryIds: ['furniture'],
+    startDate: day('2026-10-01'),
+    endDate: new Date('2026-10-31T00:00:00')
+  }), ['linked-expense', 'linked-income', 'capped-expense', 'explicit-default', 'on-end-day'])
+  assert.deepEqual(ids({ linkedAccountIds: [], categoryIds: [] }), [])
+  assert.equal(ids({ linkedAccountIds: ['cash-casa'], categoryIds: [] }).length, 6)
 })

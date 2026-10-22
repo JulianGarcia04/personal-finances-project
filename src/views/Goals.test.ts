@@ -65,6 +65,7 @@ test('S7: handleSaveOperatingBudget accepts numeric v-model values from number i
   }).outputText
 
   const createdDrafts: unknown[] = []
+  const offeredMoves: string[] = []
   const savedCaps: Array<{ budgetId: string; caps: Record<string, number> }> = []
   const state = {
     editingOperatingBudget: { value: null as unknown },
@@ -82,6 +83,7 @@ test('S7: handleSaveOperatingBudget accepts numeric v-model values from number i
     budgetLinkConflicts: { value: [] as unknown[] },
     budgetLinkedAccountIds: { value: [] as string[] },
     linkableOperatingBudgets: { value: [] as unknown[] },
+    openMoveSheet: (budgetId: string) => { offeredMoves.push(budgetId) },
     goalsStore: {
       operatingBudgets: [] as unknown[],
       async createOperatingBudget(draft: Record<string, unknown>) {
@@ -103,13 +105,14 @@ test('S7: handleSaveOperatingBudget accepts numeric v-model values from number i
       editingOperatingBudget, budgetNameInput, budgetKindInput, budgetCapCurrencyInput,
       budgetTotalLimitInput, budgetStartDateInput, budgetEndDateInput, budgetCategoryCapInputs,
       budgetManagementError, savingOperatingBudget, showBudgetModal, goalsStore,
-      budgetLinkConflicts, budgetLinkedAccountIds, linkableOperatingBudgets
+      budgetLinkConflicts, budgetLinkedAccountIds, linkableOperatingBudgets, openMoveSheet
     } = ctx;
     ${transpiled}
     return handleSaveOperatingBudget();`
   )
 
   await run(state)
+  assert.deepEqual(offeredMoves, ['budget-1'])
   assert.equal(state.budgetManagementError.value, '')
   assert.equal(state.showBudgetModal.value, false)
   assert.deepEqual(createdDrafts, [{
@@ -245,6 +248,7 @@ test('saving a budget that takes a linked account removes the link from its prev
     budgetLinkedAccountIds: { value: ['cash-casa', 'cash-new'] },
     budgetLinkConflicts: { value: [{ accountId: 'cash-casa', budgetId: 'ventas', budgetName: 'Ventas Casa' }] },
     linkableOperatingBudgets: { value: [{ id: 'ventas', name: 'Ventas Casa', archived: false, linkedAccountIds: ['cash-casa', 'cash-ventas'] }] },
+    openMoveSheet: () => undefined,
     goalsStore: {
       operatingBudgets: [] as unknown[],
       async createOperatingBudget(draft: Record<string, unknown>) { created.push(draft); return { id: 'toro', ...draft, archived: false } },
@@ -256,7 +260,7 @@ test('saving a budget that takes a linked account removes the link from its prev
     editingOperatingBudget, budgetNameInput, budgetKindInput, budgetCapCurrencyInput,
     budgetTotalLimitInput, budgetStartDateInput, budgetEndDateInput, budgetCategoryCapInputs,
     budgetManagementError, savingOperatingBudget, showBudgetModal, goalsStore,
-    budgetLinkConflicts, budgetLinkedAccountIds, linkableOperatingBudgets
+    budgetLinkConflicts, budgetLinkedAccountIds, linkableOperatingBudgets, openMoveSheet
   } = ctx;
   ${transpiled}
   return handleSaveOperatingBudget();`)
@@ -280,4 +284,62 @@ test('budget cards show available funds and the cap with accessible progress bar
   const { percentOf, progressTone } = new Function(`${javascript}\nreturn { percentOf, progressTone }`)()
   assert.deepEqual([percentOf(80, 100), percentOf(150, 100), percentOf(5, 0), percentOf(0, 0)], [80, 150, 100, 0])
   assert.deepEqual([progressTone(79), progressTone(80), progressTone(100)], ['bg-accent-emerald', 'bg-accent-amber', 'bg-accent-rose'])
+})
+
+test('an event budget offers to move its existing movements, with a per-row preview', () => {
+  assert.match(goalsView, /v-if="budgetMoveCandidatesById\.get\(entry\.budget\.id\)\?\.length"[\s\S]{0,200}data-testid="budget-move-open"/)
+  assert.match(goalsView, /data-testid="budget-move-sheet"/)
+  assert.match(goalsView, /:checked="moveSelectedIds\.has\(tx\.id\)"[\s\S]{0,120}@change="toggleMoveCandidate\(tx\.id\)"/)
+  assert.match(goalsView, /data-testid="budget-move-apply" :disabled="movingMovements \|\| moveSelectedIds\.size === 0"/)
+  // Saving a budget offers the move right away.
+  assert.match(goalsView, /showBudgetModal\.value = false\s+\/\/ Offer to bring in the movements that already belong here\.\s+openMoveSheet\(budgetId\)/)
+})
+
+test('moving existing movements uses budget-only updates and keeps failures selected', async () => {
+  const declaration = goalsView.match(/const applyMoveSelection = async \(\) => \{[\s\S]*?\n\}/)?.[0]
+  assert.ok(declaration, 'Goals.vue must define applyMoveSelection')
+  const javascript = ts.transpileModule(declaration, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext }
+  }).outputText
+  const calls: Array<[string, string]> = []
+  let closed = 0
+  const ref = <T>(value: T) => ({ value })
+  const state = {
+    moveSheetBudgetId: ref('casa'),
+    moveSelectedIds: ref(new Set(Array.from({ length: 12 }, (_, index) => `tx-${index}`))),
+    movingMovements: ref(false),
+    moveError: ref(''),
+    moveProgress: ref(0),
+    moveTotal: ref(0)
+  }
+  const apply = new Function(
+    'moveSheetBudgetId', 'moveSelectedIds', 'movingMovements', 'moveError', 'moveProgress', 'moveTotal',
+    'transactionsStore', 'closeMoveSheet', 'MOVE_BATCH_SIZE',
+    `${javascript}\nreturn applyMoveSelection`
+  )(
+    state.moveSheetBudgetId, state.moveSelectedIds, state.movingMovements, state.moveError, state.moveProgress, state.moveTotal,
+    {
+      assignExpenseBudget: async (id: string, budgetId: string) => {
+        calls.push([id, budgetId])
+        if (id === 'tx-11') throw new Error('denied')
+      }
+    },
+    () => { closed += 1 },
+    10
+  ) as () => Promise<void>
+
+  await apply()
+  assert.equal(calls.length, 12)
+  assert.ok(calls.every(([, budgetId]) => budgetId === 'casa'))
+  assert.deepEqual([...state.moveSelectedIds.value], ['tx-11'])
+  assert.equal(state.moveError.value, 'Se movieron 11 de 12. Los que quedaron marcados no se pudieron mover; inténtalo de nuevo.')
+  assert.equal(state.moveProgress.value, 12)
+  assert.equal(state.movingMovements.value, false)
+  assert.equal(closed, 0)
+
+  calls.length = 0
+  state.moveSelectedIds.value = new Set(['tx-1'])
+  await apply()
+  assert.deepEqual(calls, [['tx-1', 'casa']])
+  assert.equal(closed, 1)
 })

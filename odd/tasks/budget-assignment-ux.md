@@ -18,8 +18,8 @@ Branch: `feat/budget-assignment-ux` · Delivery: single-pr with size exception (
 - [x] T2 · S1, S2, S4, S8 · inline · assigner allows income; selector at creation; link UI + inheritance; microcopy · commit 3eb09d2 (UI proof pending, L5)
 - [x] T3 · S5, S6, S8 · inline · reporting funds/available, monthly income and self-funded spending exclusion (client + alert), card bars · Risk item 3 · commit 0e3e5eb
 - [x] T6 · S2, S8 · inline · lock linked-account movements to their budget (create, contribution, reassignment) · Risk: none · commit a098754
-- [x] T4 · S7 · inline · funds alert in `budgetAlerts.ts` (email + push, ledger slot `__funds`) · Risk item 3 (shared trigger) · commit in L10
-- [ ] T5 · S3, S8 · inline · preview + bulk move
+- [x] T4 · S7 · inline · funds alert in `budgetAlerts.ts` (email + push, ledger slot `__funds`) · Risk item 3 (shared trigger) · commit 2c01e61
+- [x] T5 · S3, S8 · inline · preview + bulk move (card button + sheet offered after saving) · Risk: none · commit in L11
 
 ## Log
 - L1 (2026-10-21): "Hay un problema, yo tengo plata ahorrada pero en mis presupuestos se tienen en cuenta toda mi plata ahorrada. Entonces quiero analicemos esa parte"
@@ -32,3 +32,4 @@ Branch: `feat/budget-assignment-ux` · Delivery: single-pr with size exception (
 - L8 (2026-10-22): "todo en un solo PR con size-exception". Delivery set to single-pr; T3 and T6 committed separately (T3 names Risk item 3).
 - L9: T3 committed as 0e3e5eb (260/260, functions 173/173, vue-tsc clean in the T3-only state). T6 committed next on top.
 - L10: T4 `scopeFundsTotal` + funds email/push copy RED→GREEN (TS2305/TS2353 first); trigger adds a `funds` subject when an additional budget with funds > 0 gets spending. functions 176/176, `pnpm test` 262/262. AGENTS.md and README updated. Next: T5 bulk move, then mounted UI proof and one independent verifier at feature end.
+- L11: T5 `budgetMoveCandidates` RED→GREEN; Goals card button "Mover N movimientos existentes" and sheet with per-row checkboxes, select all, progress and partial-failure retry; offered after saving a budget. Moves reuse `assignExpenseBudget` 10 at a time. Candidates skip mirror-account expenses and accounts linked to another budget. `pnpm test` 265/265, `vue-tsc` clean. Next: mounted UI proof (S8) and one independent verifier for the feature.

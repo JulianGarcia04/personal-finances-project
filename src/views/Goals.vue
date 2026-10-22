@@ -365,6 +365,16 @@
             <span>Cuentas ligadas: {{ entry.budget.linkedAccountIds.map(accountName).join(', ') }}</span>
           </p>
           <p class="text-[10px] text-text-muted">Los movimientos entran a este presupuesto cuando se lo asignas o cuando salen de una cuenta ligada.</p>
+          <button
+            v-if="budgetMoveCandidatesById.get(entry.budget.id)?.length"
+            type="button"
+            data-testid="budget-move-open"
+            class="tap w-full sm:w-auto inline-flex items-center justify-center gap-2 px-3 rounded-xl border border-accent-emerald/30 bg-accent-emerald/10 text-xs font-semibold text-accent-emerald hover:bg-accent-emerald/15 transition-colors cursor-pointer"
+            @click="openMoveSheet(entry.budget.id)"
+          >
+            <MoveIcon class="w-3.5 h-3.5 shrink-0" />
+            Mover {{ movementCountLabel(budgetMoveCandidatesById.get(entry.budget.id)!.length) }} existentes
+          </button>
           <p v-if="entry.budget.kind === 'event' && (entry.budget.startDate || entry.budget.endDate)" class="text-[10px] text-text-muted">
             Periodo de referencia: {{ entry.budget.startDate ? formatDate(entry.budget.startDate) : 'Sin inicio' }} – {{ entry.budget.endDate ? formatDate(entry.budget.endDate) : 'Sin fin' }}
           </p>
@@ -825,6 +835,54 @@
           </div>
         </template>
     </BaseSheet>
+
+    <!-- Move existing default-budget movements into an event budget -->
+    <BaseSheet :open="!!moveSheetBudget" :title="`Mover movimientos a «${moveSheetBudget?.name ?? ''}»`" :close-on-backdrop="!movingMovements" @close="closeMoveSheet">
+      <div class="space-y-3" data-testid="budget-move-sheet">
+        <p class="text-[11px] text-text-muted">
+          Estos movimientos están en el presupuesto mensual predeterminado y salen de una cuenta ligada o son de una categoría con tope<span v-if="moveSheetBudget?.startDate || moveSheetBudget?.endDate">, dentro del periodo del presupuesto</span>. Desmarca los que no quieras mover.
+        </p>
+        <div class="flex items-center justify-between text-[11px]">
+          <span class="text-text-secondary tabular-nums">{{ moveSelectedIds.size }} de {{ moveSheetCandidates.length }} seleccionados</span>
+          <button type="button" class="tap px-2 text-accent-emerald font-semibold cursor-pointer" :disabled="movingMovements" @click="toggleAllMoveCandidates">
+            {{ moveSelectedIds.size === moveSheetCandidates.length ? 'Desmarcar todos' : 'Marcar todos' }}
+          </button>
+        </div>
+        <ul class="divide-y divide-white/5 rounded-xl border border-border/60 bg-slate-950/40">
+          <li v-for="tx in moveSheetCandidates" :key="tx.id">
+            <label class="flex items-center gap-3 px-3 py-2.5 min-h-11 cursor-pointer">
+              <input
+                type="checkbox"
+                class="w-4 h-4 shrink-0 accent-emerald-500"
+                :checked="moveSelectedIds.has(tx.id)"
+                :disabled="movingMovements"
+                @change="toggleMoveCandidate(tx.id)"
+              />
+              <span class="min-w-0 flex-1">
+                <span class="block truncate text-sm text-text-primary">{{ tx.description || 'Sin descripción' }}</span>
+                <span class="block truncate text-[10px] text-text-muted">{{ formatDate(tx.date) }} · {{ accountName(tx.accountId) }}</span>
+              </span>
+              <span class="shrink-0 text-sm font-semibold tabular-nums" :class="tx.type === 'income' ? 'text-accent-emerald' : 'text-text-primary'">
+                {{ tx.type === 'income' ? '+' : '−' }}{{ formatCurrency(Math.abs(tx.amount), tx.currency) }}
+              </span>
+            </label>
+          </li>
+        </ul>
+        <p v-if="movingMovements" role="status" class="text-[11px] text-text-secondary tabular-nums">Moviendo {{ moveProgress }} de {{ moveTotal }}…</p>
+        <p v-if="moveError" role="alert" class="text-[11px] text-accent-rose">{{ moveError }}</p>
+      </div>
+
+      <template #footer>
+        <div class="flex gap-3">
+          <button type="button" :disabled="movingMovements" @click="closeMoveSheet" class="flex-1 min-h-11 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all cursor-pointer disabled:opacity-50">
+            Ahora no
+          </button>
+          <button type="button" data-testid="budget-move-apply" :disabled="movingMovements || moveSelectedIds.size === 0" @click="applyMoveSelection" class="flex-1 min-h-11 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
+            Mover {{ movementCountLabel(moveSelectedIds.size) }}
+          </button>
+        </div>
+      </template>
+    </BaseSheet>
   </div>
 </template>
 
@@ -840,7 +898,7 @@ import BaseSheet from '@/components/ui/BaseSheet.vue'
 import CategoryPicker from '@/components/CategoryPicker.vue'
 import { suggestCategoriesBySpending, visibleBaselineCategories } from '@/lib/categoryPicker'
 import { getCategoryIconComponent } from '@/lib/categoryIcons'
-import { DEFAULT_MONTHLY_BUDGET_ID, budgetIdForAccount, linkedAccountConflicts, linkedBudgetForAccount, resolveBudgetId, selfFundedBudgetIds } from '@/lib/budgets'
+import { DEFAULT_MONTHLY_BUDGET_ID, budgetIdForAccount, budgetMoveCandidates, canAssignBudget, linkedAccountConflicts, linkedBudgetForAccount, resolveBudgetId, selfFundedBudgetIds } from '@/lib/budgets'
 import { reportBudgetScope } from '@/lib/budgetReporting'
 import type { BudgetWorkspaceBudgetSnapshot } from '@/lib/budgetWorkspaceAdapter'
 import { createCardBillingLookup, expenseAmountForDate } from '@/lib/installments'
@@ -854,7 +912,8 @@ import {
   Wallet as WalletIcon,
   X as XIcon,
   Link2 as LinkIcon,
-  Check as CheckIcon
+  Check as CheckIcon,
+  ArrowRightLeft as MoveIcon
 } from 'lucide-vue-next'
 import { Chart, registerables } from 'chart.js'
 
@@ -1133,6 +1192,90 @@ const budgetCategoryCapEntries = (entry: BudgetWorkspaceBudgetSnapshot): Array<{
   Object.entries(entry.categoryCaps)
     .map(([categoryId, amount]) => ({ categoryId, amount }))
     .sort((left, right) => left.categoryId.localeCompare(right.categoryId))
+// Default-budget movements an active event budget can take over (S3).
+const budgetMoveCandidatesById = computed(() => {
+  const candidates = new Map<string, Array<(typeof transactionsStore.transactions)[number]>>()
+  for (const entry of goalsStore.operatingBudgets) {
+    const budget = entry.budget
+    if (budget.kind !== 'event' || budget.archived) continue
+    candidates.set(budget.id, budgetMoveCandidates(transactionsStore.transactions, {
+      linkedAccountIds: budget.linkedAccountIds ?? [],
+      categoryIds: Object.keys(entry.categoryCaps),
+      startDate: budget.startDate,
+      endDate: budget.endDate
+    }).filter(transaction =>
+      // Mirror-account expenses are replicated elsewhere, and a movement of another budget's linked account stays there.
+      !(transaction.type === 'expense' && accountsStore.getAccountById(transaction.accountId)?.mirror)
+      && canAssignBudget(linkableOperatingBudgets.value, transaction.accountId, budget.id)))
+  }
+  return candidates
+})
+const movementCountLabel = (count: number) => `${count} ${count === 1 ? 'movimiento' : 'movimientos'}`
+
+const moveSheetBudgetId = ref('')
+const moveSelectedIds = ref(new Set<string>())
+const movingMovements = ref(false)
+const moveProgress = ref(0)
+const moveTotal = ref(0)
+const moveError = ref('')
+const moveSheetBudget = computed(() =>
+  goalsStore.operatingBudgets.find(entry => entry.budget.id === moveSheetBudgetId.value)?.budget ?? null)
+const moveSheetCandidates = computed(() => budgetMoveCandidatesById.value.get(moveSheetBudgetId.value) ?? [])
+
+const openMoveSheet = (budgetId: string) => {
+  const candidates = budgetMoveCandidatesById.value.get(budgetId) ?? []
+  if (!candidates.length) return
+  moveSheetBudgetId.value = budgetId
+  moveSelectedIds.value = new Set(candidates.map(transaction => transaction.id))
+  moveError.value = ''
+}
+const closeMoveSheet = () => {
+  if (movingMovements.value) return
+  moveSheetBudgetId.value = ''
+  moveSelectedIds.value = new Set()
+  moveError.value = ''
+}
+const toggleMoveCandidate = (transactionId: string) => {
+  const next = new Set(moveSelectedIds.value)
+  if (next.has(transactionId)) next.delete(transactionId)
+  else next.add(transactionId)
+  moveSelectedIds.value = next
+}
+const toggleAllMoveCandidates = () => {
+  moveSelectedIds.value = moveSelectedIds.value.size === moveSheetCandidates.value.length
+    ? new Set()
+    : new Set(moveSheetCandidates.value.map(transaction => transaction.id))
+}
+
+// Budget-only updates through the same assigner as a single reassignment, a few at a time.
+const MOVE_BATCH_SIZE = 10
+const applyMoveSelection = async () => {
+  const budgetId = moveSheetBudgetId.value
+  const ids = [...moveSelectedIds.value]
+  if (!budgetId || !ids.length || movingMovements.value) return
+  movingMovements.value = true
+  moveError.value = ''
+  moveProgress.value = 0
+  moveTotal.value = ids.length
+  const failed: string[] = []
+  try {
+    for (let index = 0; index < ids.length; index += MOVE_BATCH_SIZE) {
+      const batch = ids.slice(index, index + MOVE_BATCH_SIZE)
+      const results = await Promise.allSettled(batch.map(id => transactionsStore.assignExpenseBudget(id, budgetId)))
+      results.forEach((result, position) => { if (result.status === 'rejected') failed.push(batch[position]) })
+      moveProgress.value = Math.min(index + batch.length, ids.length)
+    }
+  } finally {
+    movingMovements.value = false
+  }
+  if (failed.length) {
+    moveSelectedIds.value = new Set(failed)
+    moveError.value = `Se movieron ${ids.length - failed.length} de ${ids.length}. Los que quedaron marcados no se pudieron mover; inténtalo de nuevo.`
+    return
+  }
+  closeMoveSheet()
+}
+
 const isValidCurrencyCode = (value: string): boolean => /^[A-Z]{3}$/.test(value.trim())
 
 const dateInputValue = (value?: Date): string => value ? toLocalDateKey(toDateValue(value)) : ''
@@ -1280,6 +1423,8 @@ const handleSaveOperatingBudget = async () => {
       })
     }
     showBudgetModal.value = false
+    // Offer to bring in the movements that already belong here.
+    openMoveSheet(budgetId)
   } catch (error) {
     budgetManagementError.value = error instanceof Error ? error.message : 'No se pudo guardar el presupuesto.'
   } finally {
