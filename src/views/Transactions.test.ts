@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import ts from 'typescript'
-import { DEFAULT_MONTHLY_BUDGET_ID, canCarryBudget, resolveBudgetId } from '../lib/budgets.ts'
+import { DEFAULT_MONTHLY_BUDGET_ID, canAssignBudget, canCarryBudget, resolveBudgetId } from '../lib/budgets.ts'
 import { toDateValue, toLocalDateKey } from '../lib/dates.ts'
 
 const componentSource = readFileSync(new URL('./Transactions.vue', import.meta.url), 'utf8')
@@ -35,17 +35,22 @@ const evaluateComponentFunction = <Result>(name: string, dependencies: Record<st
   return evaluate(...dependencyValues)
 }
 
+type TestBudget = { id: string; name: string; archived: boolean; linkedAccountIds?: string[] }
+
 const assignmentOptions = (
-  operatingBudgets: Array<{ budget: { id: string; name: string; archived: boolean } }>,
-  currentBudgetId?: string | null
-) => evaluateComponentFunction<Array<{ id: string; label: string; archived: boolean }>>(
+  operatingBudgets: Array<{ budget: TestBudget }>,
+  currentBudgetId?: string | null,
+  accountId?: string
+) => evaluateComponentFunction<(currentBudgetId?: string | null, accountId?: string) => Array<{ id: string; label: string; archived: boolean }>>(
   'budgetOptionsForExpense',
   {
     goalsStore: { operatingBudgets },
+    linkableBudgets: { value: operatingBudgets.map(({ budget }) => budget) },
     DEFAULT_MONTHLY_BUDGET_ID,
-    resolveBudgetId
+    resolveBudgetId,
+    canAssignBudget
   }
-)(currentBudgetId)
+)(currentBudgetId, accountId)
 
 test('renders reassignment only for existing expenses and income on desktop rows, mobile cards, and the edit modal', () => {
   const markers = [...template.matchAll(/data-testid="budget-assignment-(row|card|edit)"/g)]
@@ -106,6 +111,8 @@ test('uses the B3 budget-only action for expenses and income, suppressing transf
     budgetSettingsReady,
     resolveBudgetId,
     canCarryBudget,
+    canAssignBudget,
+    linkableBudgets: { value: [{ id: 'casa', name: 'Casa', archived: false, linkedAccountIds: ['cash-casa'] }] },
     alert: () => undefined
   })
 
@@ -118,9 +125,28 @@ test('uses the B3 budget-only action for expenses and income, suppressing transf
   assert.deepEqual(calls, [['expense-1', 'event-1'], ['income-1', 'event-1']])
   assert.equal(financialWrites, 0)
 
+  // A linked account's movement can only move to that account's budget.
+  assert.equal(await assignBudget({ id: 'linked-1', type: 'expense', accountId: 'cash-casa', budgetId: 'casa' } as never, DEFAULT_MONTHLY_BUDGET_ID), false)
+  assert.equal(await assignBudget({ id: 'linked-2', type: 'income', accountId: 'cash-casa' } as never, 'event-1'), false)
+  assert.equal(await assignBudget({ id: 'linked-3', type: 'expense', accountId: 'cash-casa' } as never, 'casa'), true)
+  assert.deepEqual(calls.at(-1), ['linked-3', 'casa'])
+
   budgetSettingsReady.value = false
   assert.equal(await assignBudget({ id: 'unready-expense', type: 'expense' }, 'event-1'), false)
-  assert.equal(calls.length, 2)
+  assert.equal(calls.length, 3)
+})
+
+test('a linked account\'s movements only offer that account\'s budget', () => {
+  const operatingBudgets = [
+    { budget: { id: 'casa', name: 'Casa', archived: false, linkedAccountIds: ['cash-casa'] } },
+    { budget: { id: 'viaje', name: 'Viaje', archived: false } }
+  ]
+  // A movement still in another budget can move to the linked budget only.
+  assert.deepEqual(assignmentOptions(operatingBudgets, null, 'cash-casa').map(option => option.id), ['default-monthly', 'casa'])
+  assert.deepEqual(assignmentOptions(operatingBudgets, 'casa', 'cash-casa').map(option => option.id), ['casa'])
+  assert.deepEqual(assignmentOptions(operatingBudgets, null, 'bank').map(option => option.id), ['default-monthly', 'casa', 'viaje'])
+  assert.match(template, /:disabled="isBudgetAssignmentPending\(tx\.id\) \|\| isBudgetLockedFor\(tx\)"/)
+  assert.match(template, /data-testid="budget-assignment-edit-locked"/)
 })
 
 test('loads budget settings when the Transactions view is entered', () => {
@@ -216,10 +242,11 @@ test('the new-movement form can create a missing category inline and selects it'
 
 test('the new-movement form offers a budget for expenses and income, inherited from the linked account', () => {
   assert.match(template, /v-if="showNewTxBudget"[\s\S]{0,200}data-testid="new-tx-budget"/)
-  assert.match(template, /id="new-tx-budget"[\s\S]{0,120}v-model="newTx\.budgetId"[\s\S]{0,80}@change="newTxBudgetTouched = true"/)
+  assert.match(template, /id="new-tx-budget"[\s\S]{0,120}v-model="newTx\.budgetId"[\s\S]{0,120}:disabled="!!newTxLinkedBudget"[\s\S]{0,80}@change="newTxBudgetTouched = true"/)
+  assert.match(template, /Esta cuenta está ligada a «\{\{ newTxLinkedBudget\.name \}\}»: todos sus movimientos van a ese presupuesto\./)
   assert.match(template, /Los movimientos entran a este presupuesto cuando se lo asignas o cuando salen de una cuenta ligada\./)
   assert.match(script, /canCarryBudget\(newTx\.value\.type\)/)
-  assert.match(script, /if \(newTxBudgetTouched\.value\) return\s+newTx\.value\.budgetId = budgetIdForAccount\(linkableBudgets\.value, newTx\.value\.accountId\)/)
-  assert.match(script, /budgetId: showNewTxBudget\.value \? newTx\.value\.budgetId : null/)
+  assert.match(script, /if \(newTxLinkedBudget\.value\) \{\s+newTx\.value\.budgetId = newTxLinkedBudget\.value\.id/)
+  assert.match(script, /budgetId: showNewTxBudget\.value \? \(newTxLinkedBudget\.value\?\.id \?\? newTx\.value\.budgetId\) : null/)
   assert.match(script, /newTxBudgetTouched\.value = false/)
 })

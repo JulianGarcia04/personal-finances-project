@@ -16,8 +16,8 @@ Branch: `feat/budget-assignment-ux` · Delivery: single-pr with size exception (
 ## Tasks
 - [x] T1 · S1, S2 · inline · rules: income `budgetId`, budget `linkedAccountIds` (list ≤ 20) + rules tests · Risk item 2 · commit c5aba63
 - [x] T2 · S1, S2, S4, S8 · inline · assigner allows income; selector at creation; link UI + inheritance; microcopy · commit 3eb09d2 (UI proof pending, L5)
-- [ ] T3 · S5, S6, S8 · inline · reporting funds/available, monthly income and self-funded spending exclusion (client + alert), card bars · Risk item 3 · done, uncommitted (L7)
-- [ ] T6 · S2, S8 · inline · lock linked-account movements to their budget (create, contribution, reassignment) · Risk: none · done, uncommitted (L7)
+- [x] T3 · S5, S6, S8 · inline · reporting funds/available, monthly income and self-funded spending exclusion (client + alert), card bars · Risk item 3 · commit 0e3e5eb
+- [x] T6 · S2, S8 · inline · lock linked-account movements to their budget (create, contribution, reassignment) · Risk: none · commit in L9
 - [ ] T4 · S7 · inline · funds alert in `budgetAlerts.ts` · Risk item 5
 - [ ] T5 · S3, S8 · inline · preview + bulk move
 
@@ -30,3 +30,4 @@ Branch: `feat/budget-assignment-ux` · Delivery: single-pr with size exception (
 - L6: T3 implemented, uncommitted: `reportBudgetScope` returns `funds`/`available` (RED→GREEN, 16/16); Goals and `monthlyIncomeTotal` exclude budget-assigned income (server test written after the change, no RED); budget cards show funds and cap bars. `pnpm test` 259/259, functions 172/172, `vue-tsc` clean. Open product decision: `monthlyExpenseTotal` and Goals `realMonthExpense` still count every budget's expenses against monthly income, so event spending paid from savings still triggers the workspace total alert. Running branch count ~420 lines > 400: chain strategy to ask before next commit.
 - L7 (2026-10-22): User approved excluding self-funded budget spending: "sí, aplícalo así". Objection logged verbatim in S2: linked-account movements must not go to another budget. `selfFundedBudgetIds` (client + server) RED→GREEN; `monthlyExpenseTotal` takes the funded set; Goals `realMonthTotals` skips funded spending. Lock: `linkedBudgetForAccount`/`canAssignBudget` RED→GREEN; selectors disabled with copy "Esta cuenta está ligada a «X»: todos sus movimientos van a ese presupuesto."; movements of a linked account still in another budget can only move to the linked one. Lock is client-side only (rules do not read budgets). `pnpm test` 262/262, functions 173/173, `vue-tsc` clean. Running branch ~950 lines (c5aba63+3eb09d2+uncommitted 546): chain strategy pending before next commit.
 - L8 (2026-10-22): "todo en un solo PR con size-exception". Delivery set to single-pr; T3 and T6 committed separately (T3 names Risk item 3).
+- L9: T3 committed as 0e3e5eb (260/260, functions 173/173, vue-tsc clean in the T3-only state). T6 committed next on top.

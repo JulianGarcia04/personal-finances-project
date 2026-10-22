@@ -782,13 +782,13 @@
           <!-- Budget the contribution counts against (inherited from a linked account) -->
           <div v-if="contributeAccountId" class="space-y-1.5 animate-fade-in" data-testid="contribute-budget">
             <label for="contribute-budget" class="block text-xs font-semibold text-text-secondary">Presupuesto</label>
-            <select id="contribute-budget" v-model="contributeBudgetId" class="field cursor-pointer" @change="contributeBudgetTouched = true">
+            <select id="contribute-budget" v-model="contributeBudgetId" class="field cursor-pointer disabled:opacity-70 disabled:cursor-not-allowed" :disabled="!!contributeLinkedBudget" @change="contributeBudgetTouched = true">
               <option :value="DEFAULT_MONTHLY_BUDGET_ID">Presupuesto mensual predeterminado</option>
               <option v-for="budget in activeOperatingBudgets" :key="budget.budget.id" :value="budget.budget.id">{{ budget.budget.name }}</option>
             </select>
-            <p v-if="contributeInheritedBudgetName" class="flex items-start gap-1 text-[11px] text-accent-emerald">
+            <p v-if="contributeLinkedBudget" class="flex items-start gap-1 text-[11px] text-accent-emerald">
               <LinkIcon class="w-3 h-3 mt-0.5 shrink-0" />
-              <span>Asignado automáticamente: esta cuenta está ligada a «{{ contributeInheritedBudgetName }}».</span>
+              <span>Esta cuenta está ligada a «{{ contributeLinkedBudget.name }}»: todos sus movimientos van a ese presupuesto.</span>
             </p>
           </div>
 
@@ -840,7 +840,7 @@ import BaseSheet from '@/components/ui/BaseSheet.vue'
 import CategoryPicker from '@/components/CategoryPicker.vue'
 import { suggestCategoriesBySpending, visibleBaselineCategories } from '@/lib/categoryPicker'
 import { getCategoryIconComponent } from '@/lib/categoryIcons'
-import { DEFAULT_MONTHLY_BUDGET_ID, budgetIdForAccount, linkedAccountConflicts, resolveBudgetId, selfFundedBudgetIds } from '@/lib/budgets'
+import { DEFAULT_MONTHLY_BUDGET_ID, budgetIdForAccount, linkedAccountConflicts, linkedBudgetForAccount, resolveBudgetId, selfFundedBudgetIds } from '@/lib/budgets'
 import { reportBudgetScope } from '@/lib/budgetReporting'
 import type { BudgetWorkspaceBudgetSnapshot } from '@/lib/budgetWorkspaceAdapter'
 import { createCardBillingLookup, expenseAmountForDate } from '@/lib/installments'
@@ -915,13 +915,13 @@ const contributeAccountId = ref('')
 const contributeAmount = ref<number | null>(null)
 const contributeBudgetId = ref(DEFAULT_MONTHLY_BUDGET_ID)
 const contributeBudgetTouched = ref(false)
-const contributeInheritedBudgetName = computed(() => {
-  const inheritedId = budgetIdForAccount(linkableOperatingBudgets.value, contributeAccountId.value)
-  if (inheritedId === DEFAULT_MONTHLY_BUDGET_ID || inheritedId !== contributeBudgetId.value) return ''
-  return linkableOperatingBudgets.value.find(budget => budget.id === inheritedId)?.name ?? ''
-})
-watch(contributeAccountId, accountId => {
-  if (contributeBudgetTouched.value) return
+// Every movement of a linked account belongs to its budget, so the selector is locked.
+const contributeLinkedBudget = computed(() =>
+  linkedBudgetForAccount(linkableOperatingBudgets.value, contributeAccountId.value))
+watch(contributeAccountId, (accountId, previousAccountId) => {
+  const leftLinkedAccount = linkedBudgetForAccount(linkableOperatingBudgets.value, previousAccountId ?? '')
+  if (contributeBudgetTouched.value && !contributeLinkedBudget.value && !leftLinkedAccount) return
+  contributeBudgetTouched.value = false
   contributeBudgetId.value = budgetIdForAccount(linkableOperatingBudgets.value, accountId)
 })
 
@@ -1496,7 +1496,7 @@ const handleContribute = async () => {
       categoryId: savingsCat?.id || '',
       date: new Date(),
       type: 'expense',
-      budgetId: contributeBudgetId.value
+      budgetId: contributeLinkedBudget.value?.id ?? contributeBudgetId.value
     })
 
     // 2. Sumar al saldo acumulado del objetivo de ahorro

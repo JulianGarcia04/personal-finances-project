@@ -6,8 +6,10 @@ import {
   eventBudgetCommittedAllocation,
   budgetIdForAccount,
   budgetIdToPersist,
+  canAssignBudget,
   canCarryBudget,
   linkedAccountConflicts,
+  linkedBudgetForAccount,
   monthlyBudgetAllocation,
   resolveBudgetId,
   selfFundedBudgetIds
@@ -250,4 +252,19 @@ test('a budget is self-funded once any income is assigned to it', () => {
     { type: 'expense', budgetId: 'hogar' }
   ])
   assert.deepEqual([...funded], ['ventas-casa'])
+})
+
+test('a movement of a linked account can only go to that account\'s budget', () => {
+  const budgets = [
+    { id: 'casa', name: 'Casa', archived: false, linkedAccountIds: ['cash-casa'] },
+    { id: 'viaje', name: 'Viaje', archived: true, linkedAccountIds: ['cash-viaje'] }
+  ]
+  assert.equal(linkedBudgetForAccount(budgets, 'cash-casa')?.id, 'casa')
+  // Archiving the budget frees its accounts.
+  assert.equal(linkedBudgetForAccount(budgets, 'cash-viaje'), null)
+  assert.equal(canAssignBudget(budgets, 'cash-casa', 'casa'), true)
+  assert.equal(canAssignBudget(budgets, 'cash-casa', DEFAULT_MONTHLY_BUDGET_ID), false)
+  assert.equal(canAssignBudget(budgets, 'cash-casa', 'other'), false)
+  assert.equal(canAssignBudget(budgets, 'bank', 'casa'), true)
+  assert.equal(canAssignBudget(budgets, '', DEFAULT_MONTHLY_BUDGET_ID), true)
 })

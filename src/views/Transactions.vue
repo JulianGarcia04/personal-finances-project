@@ -209,12 +209,13 @@
                     data-testid="budget-assignment-row"
                     :id="`budget-assignment-row-${tx.id}`"
                     :value="resolveBudgetId(tx.budgetId)"
-                    :disabled="isBudgetAssignmentPending(tx.id)"
+                    :disabled="isBudgetAssignmentPending(tx.id) || isBudgetLockedFor(tx)"
+                    :title="budgetLockTitle(tx)"
                     @change="handleBudgetAssignmentChange(tx, $event)"
                     class="w-full px-2 py-1.5 rounded-lg bg-slate-900/50 border border-border text-[10px] text-text-primary focus:outline-none focus:border-accent-emerald disabled:opacity-50"
                   >
                     <option
-                      v-for="option in budgetOptionsForExpense(tx.budgetId)"
+                      v-for="option in budgetOptionsForExpense(tx.budgetId, tx.accountId)"
                       :key="option.id"
                       :value="option.id"
                       :disabled="option.archived"
@@ -407,12 +408,13 @@
               data-testid="budget-assignment-card"
               :id="`budget-assignment-card-${tx.id}`"
               :value="resolveBudgetId(tx.budgetId)"
-              :disabled="isBudgetAssignmentPending(tx.id)"
+              :disabled="isBudgetAssignmentPending(tx.id) || isBudgetLockedFor(tx)"
+              :title="budgetLockTitle(tx)"
               @change="handleBudgetAssignmentChange(tx, $event)"
               class="field text-base sm:text-xs disabled:opacity-50"
             >
               <option
-                v-for="option in budgetOptionsForExpense(tx.budgetId)"
+                v-for="option in budgetOptionsForExpense(tx.budgetId, tx.accountId)"
                 :key="option.id"
                 :value="option.id"
                 :disabled="option.archived"
@@ -568,11 +570,12 @@
             <select
               id="new-tx-budget"
               v-model="newTx.budgetId"
-              class="field"
+              class="field disabled:opacity-70"
+              :disabled="!!newTxLinkedBudget"
               @change="newTxBudgetTouched = true"
             >
               <option
-                v-for="option in budgetOptionsForExpense()"
+                v-for="option in budgetOptionsForExpense(null, newTx.accountId)"
                 :key="option.id"
                 :value="option.id"
                 :disabled="option.archived"
@@ -580,9 +583,9 @@
                 {{ option.label }}
               </option>
             </select>
-            <p v-if="newTxInheritedBudgetName" class="flex items-start gap-1 text-[10px] text-accent-emerald">
+            <p v-if="newTxLinkedBudget" class="flex items-start gap-1 text-[10px] text-accent-emerald">
               <LinkIcon class="w-3 h-3 mt-px shrink-0" />
-              <span>Asignado automáticamente: esta cuenta está ligada a «{{ newTxInheritedBudgetName }}». Puedes cambiarlo.</span>
+              <span>Esta cuenta está ligada a «{{ newTxLinkedBudget.name }}»: todos sus movimientos van a ese presupuesto. Para usar otro, elige otra cuenta o desliga esta en Presupuestos.</span>
             </p>
             <p v-else-if="newTx.type === 'income' && newTx.budgetId !== DEFAULT_MONTHLY_BUDGET_ID" class="text-[10px] text-text-muted">
               Este ingreso financia solo este presupuesto y no se suma al ingreso del mes.
@@ -893,11 +896,11 @@
                 v-if="budgetSettingsReady"
                 data-testid="budget-assignment-edit"
                 v-model="editBudgetId"
-                :disabled="isBudgetAssignmentPending(editingTxId)"
-                class="mt-1 field"
+                :disabled="isBudgetAssignmentPending(editingTxId) || !!editingLinkedBudget"
+                class="mt-1 field disabled:opacity-70"
               >
                 <option
-                  v-for="option in budgetOptionsForExpense(editingOriginalBudgetId)"
+                  v-for="option in budgetOptionsForExpense(editingOriginalBudgetId, editingTransaction?.accountId)"
                   :key="option.id"
                   :value="option.id"
                   :disabled="option.archived"
@@ -906,6 +909,10 @@
                 </option>
               </select>
             </label>
+            <p v-if="editingLinkedBudget" class="flex items-start gap-1 text-[10px] text-accent-emerald" data-testid="budget-assignment-edit-locked">
+              <LinkIcon class="w-3 h-3 mt-px shrink-0" />
+              <span>Este movimiento sale de una cuenta ligada a «{{ editingLinkedBudget.name }}», así que pertenece a ese presupuesto.</span>
+            </p>
             <button
               type="button"
               data-testid="budget-assignment-apply"
@@ -1062,7 +1069,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useGoalsStore } from '@/stores/goalsStore'
-import { DEFAULT_MONTHLY_BUDGET_ID, budgetIdForAccount, canCarryBudget, resolveBudgetId } from '@/lib/budgets'
+import { DEFAULT_MONTHLY_BUDGET_ID, canAssignBudget, canCarryBudget, linkedBudgetForAccount, resolveBudgetId } from '@/lib/budgets'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useAuthStore } from '@/stores/authStore'
 import type { Category, Transaction, TransactionType } from '@/types'
@@ -1099,6 +1106,13 @@ const assigningBudgetIds = ref(new Set<string>())
 const editBudgetId = ref(DEFAULT_MONTHLY_BUDGET_ID)
 const editingOriginalBudgetId = ref(DEFAULT_MONTHLY_BUDGET_ID)
 const editingOriginalType = ref<TransactionType>('expense')
+const editingTransaction = computed(() => transactionsStore.transactions.find(tx => tx.id === editingTxId.value))
+const editingLinkedBudget = computed(() => {
+  const transaction = editingTransaction.value
+  if (!transaction) return null
+  const linked = linkedBudgetForAccount(linkableBudgets.value, transaction.accountId)
+  return linked && linked.id === resolveBudgetId(transaction.budgetId) ? linked : null
+})
 
 const syncBudgetSettingsAvailability = () => {
   if (goalsStore.budgetSettingsLoading) {
@@ -1281,8 +1295,11 @@ const isEditingOpeningAllocation = computed(() => {
   return !!transaction && accountsStore.accounts.some(account => account.openingAllocationId === transaction.id)
 })
 
-const budgetOptionsForExpense = (currentBudgetId?: string | null) => {
+// A linked account's movements only offer its budget (plus the current one, to move them there).
+const budgetOptionsForExpense = (currentBudgetId?: string | null, accountId = '') => {
   const resolvedBudgetId = resolveBudgetId(currentBudgetId)
+  const allowed = (budgetId: string) =>
+    budgetId === resolvedBudgetId || canAssignBudget(linkableBudgets.value, accountId, budgetId)
   const additionalOptions = goalsStore.operatingBudgets
     .filter(({ budget }) => budget.id !== DEFAULT_MONTHLY_BUDGET_ID
       && (!budget.archived || budget.id === resolvedBudgetId))
@@ -1295,7 +1312,17 @@ const budgetOptionsForExpense = (currentBudgetId?: string | null) => {
   return [
     { id: DEFAULT_MONTHLY_BUDGET_ID, label: 'Presupuesto mensual predeterminado', archived: false },
     ...additionalOptions
-  ]
+  ].filter(option => allowed(option.id))
+}
+
+/** Locked when the movement already sits in its linked account's budget. */
+const isBudgetLockedFor = (transaction: any) => {
+  const linked = linkedBudgetForAccount(linkableBudgets.value, transaction.accountId)
+  return !!linked && linked.id === resolveBudgetId(transaction.budgetId)
+}
+const budgetLockTitle = (transaction: any) => {
+  const linked = linkedBudgetForAccount(linkableBudgets.value, transaction.accountId)
+  return linked ? `La cuenta está ligada a «${linked.name}»` : undefined
 }
 
 const isBudgetAssignmentPending = (transactionId: string) =>
@@ -1304,6 +1331,7 @@ const isBudgetAssignmentPending = (transactionId: string) =>
 const assignBudgetToExpense = async (transaction: any, budgetId: string): Promise<boolean> => {
   if (!budgetSettingsReady.value || !canCarryBudget(transaction.type)) return false
   if (resolveBudgetId(transaction.budgetId) === budgetId) return false
+  if (!canAssignBudget(linkableBudgets.value, transaction.accountId, budgetId)) return false
   if (assigningBudgetIds.value.has(transaction.id)) return false
 
   assigningBudgetIds.value.add(transaction.id)
@@ -1426,14 +1454,18 @@ const showNewTxBudget = computed(() => {
   // Bridge-account expenses are replicated into the mirror workspace, which has its own budgets.
   return !(newTx.value.type === 'expense' && accountsStore.getAccountById(newTx.value.accountId)?.mirror)
 })
-const newTxInheritedBudgetName = computed(() => {
-  const inheritedId = budgetIdForAccount(linkableBudgets.value, newTx.value.accountId)
-  if (inheritedId === DEFAULT_MONTHLY_BUDGET_ID || inheritedId !== newTx.value.budgetId) return ''
-  return linkableBudgets.value.find(budget => budget.id === inheritedId)?.name ?? ''
-})
-watch([() => newTx.value.accountId, linkableBudgets], () => {
-  if (newTxBudgetTouched.value) return
-  newTx.value.budgetId = budgetIdForAccount(linkableBudgets.value, newTx.value.accountId)
+// Every movement of a linked account belongs to its budget, so the selector is locked.
+const newTxLinkedBudget = computed(() => linkedBudgetForAccount(linkableBudgets.value, newTx.value.accountId))
+watch([() => newTx.value.accountId, linkableBudgets], (_, [previousAccountId]) => {
+  if (newTxLinkedBudget.value) {
+    newTx.value.budgetId = newTxLinkedBudget.value.id
+    return
+  }
+  // Leaving a linked account drops its forced budget; otherwise keep the user's pick.
+  const leftLinkedAccount = linkedBudgetForAccount(linkableBudgets.value, previousAccountId ?? '')
+  if (newTxBudgetTouched.value && !leftLinkedAccount) return
+  newTxBudgetTouched.value = false
+  newTx.value.budgetId = DEFAULT_MONTHLY_BUDGET_ID
 })
 const handleNewTxCategoryCreated = (category: Category) => {
   newTx.value.categoryId = category.id
@@ -1564,7 +1596,7 @@ const saveTransaction = async () => {
       notes: newTx.value.notes || null,
       installments,
       userId: newTx.value.userId || undefined,
-      budgetId: showNewTxBudget.value ? newTx.value.budgetId : null
+      budgetId: showNewTxBudget.value ? (newTxLinkedBudget.value?.id ?? newTx.value.budgetId) : null
     })
     closeAddModal()
   } catch (err: any) {

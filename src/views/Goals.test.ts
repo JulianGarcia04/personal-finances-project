@@ -223,7 +223,8 @@ test('a goal contribution inherits the budget of its linked account and saves it
   const source = readFileSync(new URL('./Goals.vue', import.meta.url), 'utf8')
   assert.match(source, /data-testid="contribute-budget"/)
   assert.match(source, /contributeBudgetId\.value = budgetIdForAccount\(linkableOperatingBudgets\.value, accountId\)/)
-  assert.match(source, /type: 'expense',\s*budgetId: contributeBudgetId\.value/)
+  assert.match(source, /:disabled="!!contributeLinkedBudget"/)
+  assert.match(source, /type: 'expense',\s*budgetId: contributeLinkedBudget\.value\?\.id \?\? contributeBudgetId\.value/)
 })
 
 test('saving a budget that takes a linked account removes the link from its previous budget', async () => {

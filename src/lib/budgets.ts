@@ -18,11 +18,23 @@ export interface LinkableBudget {
   linkedAccountIds?: readonly string[]
 }
 
+/** Active budget an account is linked to: every movement of that account belongs to it. */
+export const linkedBudgetForAccount = <T extends LinkableBudget>(
+  budgets: readonly T[],
+  accountId: string
+): T | null => {
+  if (!accountId) return null
+  return budgets.find(budget => !budget.archived && budget.linkedAccountIds?.includes(accountId)) ?? null
+}
+
 /** Budget a new movement from this account inherits: its active linked budget, else the default. */
-export const budgetIdForAccount = (budgets: readonly LinkableBudget[], accountId: string): string => {
-  if (!accountId) return DEFAULT_MONTHLY_BUDGET_ID
-  const linked = budgets.find(budget => !budget.archived && budget.linkedAccountIds?.includes(accountId))
-  return linked?.id ?? DEFAULT_MONTHLY_BUDGET_ID
+export const budgetIdForAccount = (budgets: readonly LinkableBudget[], accountId: string): string =>
+  linkedBudgetForAccount(budgets, accountId)?.id ?? DEFAULT_MONTHLY_BUDGET_ID
+
+/** A movement of a linked account can only belong to that account's budget. */
+export const canAssignBudget = (budgets: readonly LinkableBudget[], accountId: string, budgetId: string): boolean => {
+  const linked = linkedBudgetForAccount(budgets, accountId)
+  return !linked || linked.id === budgetId
 }
 
 export interface LinkedAccountConflict {
