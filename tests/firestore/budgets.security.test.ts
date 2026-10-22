@@ -133,7 +133,9 @@ test('create and update enforce exact shape, required fields, immutability, and 
     ['archived-create', { archived: true }], ['wrong-archive-type', { archived: 'false' }],
     ['null-date', { startDate: null }], ['stale-created-at', { createdAt: Timestamp.fromMillis(1) }],
     ['bad-updated-at', { updatedAt: 'not-a-timestamp' }], ['extra-map', { metadata: { arbitrary: true } }],
-    ['monthly-date', { startDate: Timestamp.fromMillis(0) }], ['wrong-workspace', { workspaceId: ws.dualA }]
+    ['monthly-date', { startDate: Timestamp.fromMillis(0) }], ['wrong-workspace', { workspaceId: ws.dualA }],
+    ['linked-accounts-map', { linkedAccountIds: { a: true } }], ['linked-accounts-string', { linkedAccountIds: 'a' }],
+    ['linked-accounts-too-many', { linkedAccountIds: Array.from({ length: 21 }, (_, index) => `account-${index}`) }]
   ]) await denied(writeRaw(member, id(label), rawBudget(ws.member, extra)))
 
   for (const field of ['workspaceId', 'kind', 'name', 'capCurrency', 'archived', 'createdAt', 'updatedAt']) {
@@ -167,6 +169,17 @@ test('create and update enforce exact shape, required fields, immutability, and 
   await denied(updateDoc(eventRef, {
     endDate: Timestamp.fromDate(new Date('2025-04-09T00:00:00Z')), updatedAt: serverTimestamp()
   }))
+})
+
+test('budgets can link up to 20 accounts on create and change them on update', async () => {
+  const ref = doc(member, 'budgets', id('linked'))
+  await allowed(setDoc(ref, rawBudget(ws.member, { kind: 'event', linkedAccountIds: ['account-a'] })))
+  assert.deepEqual((await getDoc(ref)).data().linkedAccountIds, ['account-a'])
+  const twenty = Array.from({ length: 20 }, (_, index) => `account-${index}`)
+  await allowed(updateDoc(ref, { linkedAccountIds: twenty, updatedAt: serverTimestamp() }))
+  assert.deepEqual((await getDoc(ref)).data().linkedAccountIds, twenty)
+  await allowed(updateDoc(ref, { linkedAccountIds: [], updatedAt: serverTimestamp() }))
+  await denied(updateDoc(ref, { linkedAccountIds: 'account-a', updatedAt: serverTimestamp() }))
 })
 
 test('default identity is reserved and archived budgets are readable but terminal', async () => {

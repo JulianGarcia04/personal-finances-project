@@ -532,7 +532,7 @@ service cloud.firestore {
 
     function isValidTransactionBudget(data, allowArchived) {
       return !('budgetId' in data) || data.budgetId == null ||
-        (data.type == 'expense' && data.budgetId is string &&
+        (data.type in ['expense', 'income'] && data.budgetId is string &&
           data.budgetId.size() > 0 && data.budgetId.size() <= 1500 &&
           data.budgetId.matches('^[^/]+$') && !(data.budgetId in ['.', '..']) &&
           (data.budgetId == 'default-monthly' || isTransactionBudgetParentAfter(data, allowArchived)));
@@ -609,7 +609,7 @@ service cloud.firestore {
         'workspaceId', 'kind', 'name', 'capCurrency', 'archived', 'createdAt', 'updatedAt'
       ]) && data.keys().hasOnly([
         'workspaceId', 'kind', 'name', 'capCurrency', 'totalLimit', 'archived',
-        'createdAt', 'updatedAt', 'startDate', 'endDate'
+        'createdAt', 'updatedAt', 'startDate', 'endDate', 'linkedAccountIds'
       ]);
     }
 
@@ -633,6 +633,8 @@ service cloud.firestore {
         data.name is string && data.name.matches('.*\\S.*') && data.name.size() <= 100 &&
         data.capCurrency is string && data.capCurrency.matches('^[A-Z]{3}$') &&
         (!('totalLimit' in data) || isFiniteNonnegative(data.totalLimit)) &&
+        (!('linkedAccountIds' in data) ||
+          (data.linkedAccountIds is list && data.linkedAccountIds.size() <= 20)) &&
         data.archived is bool && data.createdAt is timestamp && data.updatedAt is timestamp &&
         hasValidBudgetPlanningDates(data);
     }
@@ -649,7 +651,7 @@ service cloud.firestore {
         data.updatedAt == request.time &&
         ((!resource.data.archived && !data.archived &&
           data.diff(resource.data).affectedKeys().hasOnly([
-            'name', 'totalLimit', 'startDate', 'endDate', 'updatedAt'
+            'name', 'totalLimit', 'startDate', 'endDate', 'linkedAccountIds', 'updatedAt'
           ])) ||
          (!resource.data.archived && data.archived &&
           data.diff(resource.data).affectedKeys().hasOnly(['archived', 'updatedAt'])));

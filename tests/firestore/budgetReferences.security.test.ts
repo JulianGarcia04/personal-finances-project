@@ -168,16 +168,26 @@ test('explicit references reject missing parents and malformed IDs on both creat
   }
 })
 
-test('only expenses can carry explicit additional or default-monthly references', async () => {
-  for (const type of ['income', 'transfer']) {
-    for (const budgetId of [activeBudget.id, 'default-monthly']) {
-      await deniedUnchanged(() => setDoc(transactionRef(id('non-expense')), rawTransaction({ type, budgetId })))
-      const ref = await createTransaction({ type })
-      await deniedUnchanged(() => updateDoc(ref, { budgetId }))
-    }
+test('expenses and income can carry explicit additional or default-monthly references', async () => {
+  for (const budgetId of [activeBudget.id, 'default-monthly']) {
+    const created = await createTransaction({ type: 'income', amount: 17, budgetId })
+    assert.equal((await dataOf(created)).budgetId, budgetId)
+    const ref = await createTransaction({ type: 'income', amount: 17 })
+    await updateDoc(ref, { budgetId })
+    assert.equal((await dataOf(ref)).budgetId, budgetId)
+  }
+  const foreign = await createTransaction({ type: 'income', amount: 17 })
+  await deniedUnchanged(() => updateDoc(foreign, { budgetId: foreignBudget.id }))
+})
+
+test('transfers cannot carry explicit additional or default-monthly references', async () => {
+  for (const budgetId of [activeBudget.id, 'default-monthly']) {
+    await deniedUnchanged(() => setDoc(transactionRef(id('transfer')), rawTransaction({ type: 'transfer', budgetId })))
+    const ref = await createTransaction({ type: 'transfer' })
+    await deniedUnchanged(() => updateDoc(ref, { budgetId }))
   }
   const assigned = await createTransaction({ budgetId: activeBudget.id })
-  await deniedUnchanged(() => updateDoc(assigned, { type: 'income' }))
+  await deniedUnchanged(() => updateDoc(assigned, { type: 'transfer' }))
 })
 
 test('transaction workspace identity cannot change or be removed even for dual members', async () => {
