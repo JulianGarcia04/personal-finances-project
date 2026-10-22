@@ -518,7 +518,7 @@
             </div>
 
             <!-- Category (Expense/Income only) -->
-            <div v-else-if="newTx.type === 'expense' || newTx.type === 'income'" class="space-y-1">
+            <div v-else-if="newTx.type === 'expense' || newTx.type === 'income'" :class="['space-y-1', creatingNewTxCategory && 'col-span-full']">
               <div class="flex items-center justify-between gap-2">
                 <label for="new-tx-category" class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Categoría</label>
                 <button
