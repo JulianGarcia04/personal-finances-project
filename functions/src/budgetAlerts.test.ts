@@ -9,6 +9,7 @@ import {
   countsTowardMonthlySpend,
   countsTowardScopeTotal,
   incomeReference,
+  incomeChangeAlertScope,
   monthlyExpenseTotal,
   monthlyIncomeTotal,
   scopeFundsTotal,
@@ -358,4 +359,23 @@ test("budget funds are its assigned income: all of it for an event, the month's 
   assert.equal(scopeFundsTotal(incomes, { id: "ventas-casa", kind: "monthly" }, OCTOBER, COP_OPTIONS), 3_000);
   assert.equal(scopeFundsTotal(incomes, { id: "sin-fondos", kind: "event" }, OCTOBER, COP_OPTIONS), 0);
   assert.equal(scopeFundsTotal([income(1, { budgetId: "ventas-casa", currency: "USD" })], { id: "ventas-casa", kind: "event" }, OCTOBER, COP_OPTIONS), null);
+});
+
+test("an income change re-checks the alerts it can push over a threshold", () => {
+  const options = { timeZone: BOGOTA };
+  // Monthly income drops: deleted, moved to a budget, lowered, or moved out of the month.
+  assert.deepEqual(incomeChangeAlertScope(income(1_000), undefined, OCTOBER, options), { monthlyIncome: true, fundsBudgetId: null });
+  assert.deepEqual(incomeChangeAlertScope(income(1_000), income(1_000, { budgetId: "casa" }), OCTOBER, options), { monthlyIncome: true, fundsBudgetId: null });
+  assert.deepEqual(incomeChangeAlertScope(income(1_000), income(400), OCTOBER, options), { monthlyIncome: true, fundsBudgetId: null });
+  assert.deepEqual(incomeChangeAlertScope(income(1_000), income(1_000, { date: new Date("2026-11-02T17:00:00.000Z") }), OCTOBER, options), { monthlyIncome: true, fundsBudgetId: null });
+  // A budget's funds drop: deleted, lowered, or moved to another budget.
+  assert.deepEqual(incomeChangeAlertScope(income(1_000, { budgetId: "casa" }), undefined, OCTOBER, options), { monthlyIncome: false, fundsBudgetId: "casa" });
+  assert.deepEqual(incomeChangeAlertScope(income(1_000, { budgetId: "casa" }), income(1_000), OCTOBER, options), { monthlyIncome: false, fundsBudgetId: "casa" });
+  assert.deepEqual(incomeChangeAlertScope(income(1_000, { budgetId: "casa" }), income(900, { budgetId: "casa" }), OCTOBER, options), { monthlyIncome: false, fundsBudgetId: "casa" });
+  // Raising income, a new income, an income of another month or an expense never re-checks.
+  assert.equal(incomeChangeAlertScope(undefined, income(1_000), OCTOBER, options), null);
+  assert.equal(incomeChangeAlertScope(income(1_000), income(2_000), OCTOBER, options), null);
+  assert.equal(incomeChangeAlertScope(income(1_000, { date: new Date("2026-09-02T17:00:00.000Z") }), undefined, OCTOBER, options), null);
+  assert.equal(incomeChangeAlertScope(income(1_000), income(1_000, { description: "renamed" }), OCTOBER, options), null);
+  assert.equal(incomeChangeAlertScope(expense(10), undefined, OCTOBER, options), null);
 });

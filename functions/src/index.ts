@@ -64,7 +64,8 @@ import {
   spendFieldsChanged,
   TOTAL_ALERT_SUBJECT,
   FUNDS_ALERT_SUBJECT,
-  scopeFundsTotal
+  scopeFundsTotal,
+  incomeChangeAlertScope
 } from "./budgetAlerts";
 import { cardBillingByAccount } from "./agentQueries";
 import { DEFAULT_MONTHLY_BUDGET_ID, parseLegacyCategoryBudgetCurrency } from "./legacyCategoryBudgets";
@@ -348,17 +349,21 @@ export const notifyBudgetThreshold = onDocumentWritten(
     }
     const before = event.data?.before?.exists ? event.data.before.data() : undefined;
     const after = event.data?.after?.exists ? event.data.after.data() : undefined;
-    // A delete can never newly cross a threshold; lowering edits fall through to the ledger check.
-    if (!after || after.type !== "expense" || typeof after.workspaceId !== "string" || !after.workspaceId) return;
+    // An expense write can raise spending. An income write (edit or delete) can lower the month's
+    // income or a budget's funds. Deleting an expense can never newly cross a threshold.
+    const expense = after?.type === "expense" ? after : undefined;
+    const incomeWrite = before?.type === "income";
+    const written = expense ?? (incomeWrite ? before : undefined);
+    if (!written || typeof written.workspaceId !== "string" || !written.workspaceId) return;
     if (!spendFieldsChanged(before, after)) return;
 
-    const workspaceId: string = after.workspaceId;
+    const workspaceId: string = written.workspaceId;
     const workspaceSnap = await db.collection("workspaces").doc(workspaceId).get();
     const workspace = workspaceSnap.data();
     if (!workspace || workspace.budgetAlertsEnabled === false) return;
     // Null for archived/foreign budgets: their category and overall caps never alert, but the
     // expense still counts toward the month's spending vs income.
-    const budgetScope = await loadBudgetScope(workspaceId, workspace, resolveAlertBudgetId(after.budgetId));
+    const budgetScope = expense ? await loadBudgetScope(workspaceId, workspace, resolveAlertBudgetId(expense.budgetId)) : null;
 
     const ownerSnap = typeof workspace.ownerId === "string" && workspace.ownerId
       ? await db.collection("users").doc(workspace.ownerId).get()
@@ -376,17 +381,24 @@ export const notifyBudgetThreshold = onDocumentWritten(
 
     // Which caps this write can move: its category cap, its additional budget's overall cap and
     // the workspace's month spending vs income (the default budget's overall cap).
-    const categoryId = typeof after.categoryId === "string" ? after.categoryId : "";
-    const categoryCap = budgetScope && categoryId &&
-      alertCategoryFor(after, budgetScope.scope, month, { timeZone, billingFor }) === categoryId
+    const categoryId = typeof expense?.categoryId === "string" ? expense.categoryId : "";
+    const categoryCap = expense && budgetScope && categoryId &&
+      alertCategoryFor(expense, budgetScope.scope, month, { timeZone, billingFor }) === categoryId
       ? await budgetScope.categoryCap(categoryId)
       : 0;
     const scopeTotalApplies = budgetScope !== null && budgetScope.totalLimit !== null &&
-      countsTowardScopeTotal(after, budgetScope.scope, month, { timeZone, billingFor });
-    const incomeApplies = countsTowardMonthlySpend(after, month, { timeZone, billingFor });
-    // An additional budget's spending vs the income assigned to it (its funds).
-    const fundsApplies = budgetScope !== null && budgetScope.scope.id !== DEFAULT_MONTHLY_BUDGET_ID &&
-      countsTowardScopeTotal(after, budgetScope.scope, month, { timeZone, billingFor });
+      countsTowardScopeTotal(expense, budgetScope.scope, month, { timeZone, billingFor });
+    const incomeChange = incomeChangeAlertScope(before, after, month, { timeZone });
+    const incomeApplies = countsTowardMonthlySpend(expense, month, { timeZone, billingFor }) || incomeChange?.monthlyIncome === true;
+    // An additional budget's spending vs the income assigned to it (its funds): the expense's
+    // budget, or the budget an income write took funds from.
+    const fundsScope = budgetScope !== null && budgetScope.scope.id !== DEFAULT_MONTHLY_BUDGET_ID &&
+      countsTowardScopeTotal(expense, budgetScope.scope, month, { timeZone, billingFor })
+      ? budgetScope
+      : incomeChange?.fundsBudgetId
+        ? await loadBudgetScope(workspaceId, workspace, incomeChange.fundsBudgetId)
+        : null;
+    const fundsApplies = fundsScope !== null && fundsScope.scope.id !== DEFAULT_MONTHLY_BUDGET_ID;
     if (categoryCap === 0 && !scopeTotalApplies && !incomeApplies && !fundsApplies) return;
 
     const smtp = smtpConfigFromEnvironment();
@@ -423,13 +435,13 @@ export const notifyBudgetThreshold = onDocumentWritten(
       }
     }
     const incomes = incomeSnap.docs.map((d) => d.data());
-    if (budgetScope && fundsApplies) {
-      const funds = scopeFundsTotal(incomes, budgetScope.scope, month, spendOptions);
-      const spent = scopeTotalSpend(transactions, budgetScope.scope, month, spendOptions);
+    if (fundsScope && fundsApplies) {
+      const funds = scopeFundsTotal(incomes, fundsScope.scope, month, spendOptions);
+      const spent = scopeTotalSpend(transactions, fundsScope.scope, month, spendOptions);
       if (funds === null || spent === null) {
         console.warn(`Funds alert for workspace ${workspaceId} skipped: manual rate missing.`);
       } else if (funds > 0) {
-        subjects.push({ kind: "funds", subjectId: FUNDS_ALERT_SUBJECT, spent, budget: funds, scope: budgetScope.scope, budgetName: budgetScope.budgetName });
+        subjects.push({ kind: "funds", subjectId: FUNDS_ALERT_SUBJECT, spent, budget: funds, scope: fundsScope.scope, budgetName: fundsScope.budgetName });
       }
     }
     if (incomeApplies) {

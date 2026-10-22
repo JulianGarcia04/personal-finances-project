@@ -313,6 +313,37 @@ function timeOf(value: any): number | null {
 }
 
 /** True when a write may change category spend (so edits to description/notes/receipt are skipped). */
+/**
+ * What an income write can push over a threshold: the month's income vs spending when it
+ * lowers the current month's unassigned income, and a budget's funds alert when it lowers the
+ * income assigned to that budget. Null when the write cannot newly cross any threshold.
+ */
+export function incomeChangeAlertScope(
+  before: Record<string, any> | undefined,
+  after: Record<string, any> | undefined,
+  month: YearMonth,
+  options: { timeZone: string }
+): { monthlyIncome: boolean; fundsBudgetId: string | null } | null {
+  if (before?.type !== "income") return null;
+  const amountOf = (tx: Record<string, any> | undefined) => tx?.type === "income" ? Math.abs(Number(tx.amount) || 0) : 0;
+  const inMonth = (tx: Record<string, any> | undefined) => {
+    if (!tx) return false;
+    const date = storedDateValue(tx.date, options.timeZone);
+    if (Number.isNaN(date.getTime())) return false;
+    const local = zonedYearMonth(date, options.timeZone);
+    return local.year === month.year && local.month === month.month;
+  };
+  const beforeBudgetId = resolveAlertBudgetId(before.budgetId);
+  const afterBudgetId = after?.type === "income" ? resolveAlertBudgetId(after.budgetId) : null;
+  const monthlyShare = (tx: Record<string, any> | undefined, budgetId: string | null) =>
+    budgetId === DEFAULT_MONTHLY_BUDGET_ID && inMonth(tx) ? amountOf(tx) : 0;
+  const monthlyIncome = monthlyShare(after, afterBudgetId) < monthlyShare(before, beforeBudgetId);
+  const fundsLost = beforeBudgetId !== DEFAULT_MONTHLY_BUDGET_ID &&
+    (afterBudgetId !== beforeBudgetId || amountOf(after) < amountOf(before));
+  if (!monthlyIncome && !fundsLost) return null;
+  return { monthlyIncome, fundsBudgetId: fundsLost ? beforeBudgetId : null };
+}
+
 export function spendFieldsChanged(before: Record<string, any> | undefined, after: Record<string, any> | undefined): boolean {
   if (!before || !after) return true;
   return before.type !== after.type ||
