@@ -1664,9 +1664,10 @@ const editReleasedBudgetName = computed(() => editReleasesBudget()
   ? linkableBudgets.value.find(budget => budget.id === editingOriginalBudgetId.value)?.name ?? 'su presupuesto'
   : '')
 // A budget-only write first, so the financial edit that follows carries no budget.
+// Checks the stored value: older writes may hold the literal default id, which the rules also reject.
 const releaseBudgetBeforeTypeChange = async () => {
   if (!canCarryBudget(editingOriginalType.value)
-    || editingOriginalBudgetId.value === DEFAULT_MONTHLY_BUDGET_ID
+    || editingTransaction.value?.budgetId == null
     || canCarryBudget(editTx.value.type)) return
   await transactionsStore.assignExpenseBudget(editingTxId.value, null)
 }

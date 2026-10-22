@@ -253,12 +253,12 @@ test('the new-movement form offers a budget for expenses and income, inherited f
 
 test('changing a budgeted movement into a transfer or loan first takes it out of its budget', async () => {
   const calls: Array<[string, string | null]> = []
-  const release = (originalType: string, originalBudgetId: string, draftType: string) =>
+  const release = (originalType: string, storedBudgetId: string | null, draftType: string) =>
     evaluateComponentFunction<() => Promise<void>>('releaseBudgetBeforeTypeChange', {
       transactionsStore: { assignExpenseBudget: async (id: string, budgetId: string | null) => { calls.push([id, budgetId]) } },
       editingTxId: { value: 'tx-1' },
       editingOriginalType: { value: originalType },
-      editingOriginalBudgetId: { value: originalBudgetId },
+      editingTransaction: { value: { budgetId: storedBudgetId } },
       editTx: { value: { type: draftType } },
       DEFAULT_MONTHLY_BUDGET_ID,
       canCarryBudget
@@ -267,9 +267,12 @@ test('changing a budgeted movement into a transfer or loan first takes it out of
   await release('income', 'casa', 'transfer')()
   await release('expense', 'casa', 'loan')()
   assert.deepEqual(calls, [['tx-1', null], ['tx-1', null]])
-  await release('income', 'casa', 'expense')()
+  // A stored literal default id is rejected on a transfer too, so it is released as well.
   await release('income', DEFAULT_MONTHLY_BUDGET_ID, 'transfer')()
-  assert.equal(calls.length, 2)
+  assert.equal(calls.length, 3)
+  await release('income', 'casa', 'expense')()
+  await release('income', null, 'transfer')()
+  assert.equal(calls.length, 3)
   assert.match(script, /await releaseBudgetBeforeTypeChange\(\)\s+await transactionsStore\.updateTransaction\(editingTxId\.value/)
   assert.match(template, /data-testid="edit-budget-released"/)
 })
