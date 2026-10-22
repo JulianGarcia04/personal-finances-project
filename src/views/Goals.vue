@@ -928,11 +928,16 @@ const baselineCategoryReport = (categoryId: string) =>
     : undefined
 const baselineCategoryAmount = (categoryId: string): number =>
   baselineCategoryReport(categoryId)?.monthlyAllocation.amount ?? 0
+// Spending this month, including amounts that cannot be converted yet for lack of a rate.
+const baselineHasSpending = (categoryId: string): boolean => {
+  const report = baselineCategoryReport(categoryId)
+  return report?.monthlyAllocation.complete === false || baselineCategoryAmount(categoryId) > 0
+}
 // Only categories in use: a limit, spending this month, or just added from the picker.
 const baselineCategories = computed(() => visibleBaselineCategories({
   categories: expenseCategories.value,
   limits: categoryBudgetInputs,
-  spentOf: baselineCategoryAmount,
+  hasSpending: baselineHasSpending,
   addedIds: baselineAddedCategoryIds.value
 }))
 const baselineCategoryIds = computed(() => baselineCategories.value.map(category => category.id))

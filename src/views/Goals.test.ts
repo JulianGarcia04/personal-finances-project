@@ -185,6 +185,7 @@ test('baseline monthly budget lists only used categories and adds or creates mor
   assertContains(/v-for="cat in baselineCategories"/, 'the baseline must render only categories with a limit or spending')
   assertNotContains(/v-for="cat in expenseCategories"/, 'the baseline must not render every expense category')
   assertContains(/visibleBaselineCategories\(/, 'baseline visibility must come from the shared helper')
+  assertContains(/const baselineHasSpending = [\s\S]*?monthlyAllocation\.complete === false/, 'spending that cannot be converted for lack of a rate must keep its row visible')
   assertContains(/<CategoryPicker[\s\S]*?:selected-ids="baselineCategoryIds"[\s\S]*?:suggestions="baselineSuggestedCategories"[\s\S]*?@select="addBaselineCategory"/, 'the baseline must add or create categories with the inline picker')
   assertContains(/:aria-label="`Quitar límite de \$\{cat\.name\}`"/, 'each baseline row needs a control to remove its limit')
   assertContains(/:id="`base-cap-\$\{cat\.id\}`"/, 'baseline inputs need ids so an added category can receive focus')

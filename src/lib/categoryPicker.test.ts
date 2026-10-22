@@ -85,7 +85,7 @@ test('baseline shows only categories with a limit, spending this month, or added
   const visible = visibleBaselineCategories({
     categories,
     limits: { capped: 500, zeroCap: 0 },
-    spentOf: categoryId => (categoryId === 'spent' ? 120 : 0),
+    hasSpending: categoryId => categoryId === 'spent',
     addedIds: ['added']
   })
   assert.deepEqual(visible.map(entry => entry.id), ['capped', 'spent', 'added'])
@@ -95,7 +95,7 @@ test('baseline hides every category when none has a limit, spending, or a pendin
   const visible = visibleBaselineCategories({
     categories: [category('unused', 'Educación')],
     limits: {},
-    spentOf: () => 0,
+    hasSpending: () => false,
     addedIds: []
   })
   assert.deepEqual(visible, [])

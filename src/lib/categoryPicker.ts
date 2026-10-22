@@ -57,15 +57,15 @@ export const suggestCategoriesBySpending = ({
 
 // Baseline rows: categories with a positive limit, spending this month, or added this session.
 export const visibleBaselineCategories = ({
-  categories, limits, spentOf, addedIds
+  categories, limits, hasSpending, addedIds
 }: {
   categories: Category[]
   limits: Record<string, number | null | undefined>
-  spentOf: (categoryId: string) => number
+  hasSpending: (categoryId: string) => boolean
   addedIds: string[]
 }): Category[] => {
   const added = new Set(addedIds)
   return categories.filter(category =>
-    (limits[category.id] ?? 0) > 0 || spentOf(category.id) > 0 || added.has(category.id)
+    (limits[category.id] ?? 0) > 0 || hasSpending(category.id) || added.has(category.id)
   )
 }
