@@ -144,7 +144,7 @@ export interface OperatingBudget {
   name: string;
   capCurrency: string; // Stable denomination shared by this budget's scalar caps.
   totalLimit?: number;
-  // Accounts whose new movements default to this budget (prefilled, user may change it).
+  // Accounts whose movements belong to this budget (the selector is locked to it).
   linkedAccountIds?: string[];
   archived: boolean;
   createdAt: Date;

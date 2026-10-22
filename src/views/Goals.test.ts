@@ -292,6 +292,8 @@ test('an event budget offers to move its existing movements, with a per-row prev
   assert.match(goalsView, /Elige qué movimientos pasan a <strong[^>]*>«\{\{ moveSheetBudget\?\.name \}\}»<\/strong>/)
   // Linked accounts are locked to their budget, so the form must not promise otherwise.
   assert.doesNotMatch(goalsView, /Siempre puedes cambiarlo al registrarlos/)
+  // S4 microcopy in the budget form, next to the linked accounts.
+  assert.match(goalsView, /data-testid="budget-linked-accounts"[\s\S]{0,900}Los movimientos entran a este presupuesto cuando se lo asignas o cuando salen de una cuenta ligada\./)
   assert.match(goalsView, /:checked="moveSelectedIds\.has\(tx\.id\)"[\s\S]{0,120}@change="toggleMoveCandidate\(tx\.id\)"/)
   assert.match(goalsView, /data-testid="budget-move-apply" :disabled="movingMovements \|\| moveSelectedIds\.size === 0"/)
   // Saving a budget offers the move right away.

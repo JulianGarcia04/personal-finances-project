@@ -610,7 +610,7 @@
                 <LinkIcon class="w-3.5 h-3.5 text-accent-emerald" />
                 Cuentas ligadas (opcional)
               </h4>
-              <p class="text-[10px] text-text-muted mt-1">Todos los movimientos de estas cuentas pertenecen a este presupuesto: al registrarlos se asignan aquí y no se pueden pasar a otro.</p>
+              <p class="text-[10px] text-text-muted mt-1">Los movimientos entran a este presupuesto cuando se lo asignas o cuando salen de una cuenta ligada. Todos los movimientos de estas cuentas pertenecen a este presupuesto y no se pueden pasar a otro.</p>
             </div>
             <p v-if="accountsStore.accounts.length === 0" class="text-[11px] text-text-muted">Todavía no tienes cuentas.</p>
             <div v-else class="flex flex-wrap gap-2">
