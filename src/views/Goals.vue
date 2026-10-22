@@ -288,7 +288,7 @@
                   Editar presupuesto
                 </button>
                 <button @click="handleArchiveBudget(entry.budget.id)" class="min-h-11 px-3 py-2 rounded-xl bg-accent-rose/10 border border-accent-rose/20 text-xs font-semibold text-accent-rose hover:bg-accent-rose/15 transition-colors cursor-pointer">
-                  Archivar presupuesto
+                  Eliminar presupuesto
                 </button>
               </div>
             </div>
@@ -309,15 +309,15 @@
 
       <div v-if="archivedOperatingBudgets.length" class="glass-panel rounded-2xl p-4 sm:p-5 border border-white/5 space-y-3">
         <div>
-          <h4 class="font-display font-semibold text-sm text-text-primary">Presupuestos archivados</h4>
+          <h4 class="font-display font-semibold text-sm text-text-primary">Presupuestos eliminados</h4>
           <p class="text-[10px] text-text-muted mt-0.5">
-            Archivar conserva asignaciones, historial y cuotas pendientes; no borra movimientos ni límites guardados.
+            Eliminar conserva asignaciones, historial y cuotas pendientes; no borra movimientos ni límites guardados.
           </p>
         </div>
         <div v-for="entry in archivedOperatingBudgets" :key="entry.budget.id" class="flex flex-wrap items-center justify-between gap-2 text-xs border-t border-white/5 pt-3">
           <div>
             <span class="font-semibold text-text-secondary">{{ entry.budget.name }}</span>
-            <span class="text-text-muted ml-2">Archivado · límites en {{ entry.budget.capCurrency }}</span>
+            <span class="text-text-muted ml-2">Eliminado · límites en {{ entry.budget.capCurrency }}</span>
           </div>
           <span class="text-text-muted tabular-nums">
             {{ entry.budget.totalLimit === undefined ? 'Sin límite total' : formatCurrency(entry.budget.totalLimit, entry.budget.capCurrency) }} · {{ budgetCategoryCapEntries(entry).length }} límites por categoría conservados
@@ -348,16 +348,13 @@
             </p>
             <div class="flex flex-col sm:flex-row sm:items-end gap-3">
               <label class="space-y-1.5 sm:w-56">
-                <span class="block text-[11px] font-semibold text-text-secondary">Moneda real de los límites heredados (código de 3 letras)</span>
-                <input
+                <span class="block text-[11px] font-semibold text-text-secondary">Moneda real de los límites heredados</span>
+                <select
                   v-model="legacyCategoryBudgetCurrencyInput"
-                  type="text"
-                  autocapitalize="characters"
-                  maxlength="3"
-                  placeholder="COP"
-                  class="field uppercase font-semibold"
-                  @input="normalizeLegacyCurrencyInput"
-                />
+                  class="field font-semibold cursor-pointer"
+                >
+                  <option v-for="option in SUPPORTED_CURRENCIES" :key="option.code" :value="option.code">{{ option.label }}</option>
+                </select>
               </label>
               <button
                 type="button"
@@ -492,8 +489,10 @@
 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <label class="space-y-1.5">
-              <span class="block text-xs font-semibold text-text-secondary">Moneda del límite (código de 3 letras)</span>
-              <input v-model="budgetCapCurrencyInput" type="text" maxlength="3" required :disabled="!!editingOperatingBudget" class="field uppercase disabled:opacity-60" placeholder="COP" @input="normalizeBudgetCurrencyInput" />
+              <span class="block text-xs font-semibold text-text-secondary">Moneda del límite</span>
+              <select v-model="budgetCapCurrencyInput" required :disabled="!!editingOperatingBudget" class="field font-semibold cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed">
+                <option v-for="option in currencyOptionsWith(editingOperatingBudget?.budget.capCurrency)" :key="option.code" :value="option.code">{{ option.label }}</option>
+              </select>
               <span v-if="editingOperatingBudget" class="block text-[10px] text-text-muted">La moneda guardada {{ editingOperatingBudget.budget.capCurrency }} es fija; no se relabelan límites existentes.</span>
             </label>
             <label class="space-y-1.5">
@@ -693,6 +692,7 @@ import { useGoalsStore } from '@/stores/goalsStore'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { SUPPORTED_CURRENCIES, currencyOptionsWith, defaultCurrencyCode } from '@/lib/currencies'
 import { Goal, OperatingBudgetDraft, OperatingBudgetPatch } from '@/types'
 import BaseSheet from '@/components/ui/BaseSheet.vue'
 import { DEFAULT_MONTHLY_BUDGET_ID } from '@/lib/budgets'
@@ -735,7 +735,7 @@ const budgetEndDateInput = ref('')
 const budgetCategoryCapInputs = reactive<Record<string, number | undefined>>({})
 const budgetManagementError = ref('')
 const savingOperatingBudget = ref(false)
-const legacyCategoryBudgetCurrencyInput = ref('')
+const legacyCategoryBudgetCurrencyInput = ref(defaultCurrencyCode(settingsStore.currency))
 const confirmingLegacyCurrency = ref(false)
 const legacyCurrencyError = ref('')
 
@@ -891,23 +891,13 @@ const budgetCategoryCapEntries = (entry: BudgetWorkspaceBudgetSnapshot): Array<{
     .sort((left, right) => left.categoryId.localeCompare(right.categoryId))
 const isValidCurrencyCode = (value: string): boolean => /^[A-Z]{3}$/.test(value.trim())
 
-const normalizeLegacyCurrencyInput = (event: Event) => {
-  const input = event.target as HTMLInputElement
-  legacyCategoryBudgetCurrencyInput.value = input.value.replace(/[^a-z]/gi, '').toUpperCase().slice(0, 3)
-}
-
-const normalizeBudgetCurrencyInput = (event: Event) => {
-  const input = event.target as HTMLInputElement
-  budgetCapCurrencyInput.value = input.value.replace(/[^a-z]/gi, '').toUpperCase().slice(0, 3)
-}
-
 const dateInputValue = (value?: Date): string => value ? toLocalDateKey(toDateValue(value)) : ''
 
 const openBudgetModal = (entry?: BudgetWorkspaceBudgetSnapshot) => {
   editingOperatingBudget.value = entry ?? null
   budgetNameInput.value = entry?.budget.name ?? ''
   budgetKindInput.value = entry?.budget.kind ?? 'monthly'
-  budgetCapCurrencyInput.value = entry?.budget.capCurrency ?? ''
+  budgetCapCurrencyInput.value = entry?.budget.capCurrency ?? defaultCurrencyCode(settingsStore.currency)
   budgetTotalLimitInput.value = entry?.budget.totalLimit === undefined ? '' : String(entry.budget.totalLimit)
   budgetStartDateInput.value = dateInputValue(entry?.budget.startDate)
   budgetEndDateInput.value = dateInputValue(entry?.budget.endDate)
@@ -1009,11 +999,11 @@ const handleSaveOperatingBudget = async () => {
 }
 
 const handleArchiveBudget = async (budgetId: string) => {
-  if (!confirm('¿Archivar este presupuesto? Se conservarán sus asignaciones, historial y cuotas pendientes.')) return
+  if (!confirm('¿Eliminar este presupuesto? Se conservarán sus asignaciones, historial y cuotas pendientes.')) return
   try {
     await goalsStore.archiveOperatingBudget(budgetId)
   } catch (error) {
-    goalsStore.budgetSettingsError = error instanceof Error ? error.message : 'No se pudo archivar el presupuesto.'
+    goalsStore.budgetSettingsError = error instanceof Error ? error.message : 'No se pudo eliminar el presupuesto.'
   }
 }
 
@@ -1027,7 +1017,6 @@ const confirmLegacyCategoryBudgetCurrency = async () => {
   confirmingLegacyCurrency.value = true
   try {
     await goalsStore.confirmLegacyCategoryBudgetCurrency(code)
-    legacyCategoryBudgetCurrencyInput.value = ''
   } catch (error) {
     legacyCurrencyError.value = error instanceof Error ? error.message : 'No se pudo confirmar la moneda.'
   } finally {

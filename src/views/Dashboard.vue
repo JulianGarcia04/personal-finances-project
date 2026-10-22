@@ -322,7 +322,7 @@
             <div class="min-w-0 flex-1">
               <h4 class="font-display font-bold text-base text-text-primary">Asignaciones mensuales estimadas</h4>
               <p class="text-text-muted text-xs mt-1 max-w-xl">
-                Cuotas del mes de gastos de todos los presupuestos, incluidos los archivados y sin asignar; el principal de eventos no se suma aparte.
+                Cuotas del mes de gastos de todos los presupuestos, incluidos los eliminados y sin asignar; el principal de eventos no se suma aparte.
               </p>
             </div>
             <span class="shrink-0 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] font-semibold text-text-secondary">

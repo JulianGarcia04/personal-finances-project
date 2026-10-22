@@ -9,6 +9,7 @@ import { createCardBillingLookup, expenseAmountForDate } from '../lib/installmen
 const goalsPath = fileURLToPath(new URL('./Goals.vue', import.meta.url))
 const goalsView = readFileSync(goalsPath, 'utf8')
 const assertContains = (pattern: RegExp, message: string) => assert.ok(pattern.test(goalsView), message)
+const assertNotContains = (pattern: RegExp, message: string) => assert.ok(!pattern.test(goalsView), message)
 
 test('S5-S6: the protected monthly baseline remains backed by legacy category limits and catches unassigned expenses', () => {
   assertContains(/Presupuesto base mensual protegido/, 'the legacy baseline must be visibly protected')
@@ -20,7 +21,8 @@ test('S7: additional budgets expose create, edit, and archive controls while ret
   assertContains(/Presupuestos adicionales/, 'the additional-budget section must be visible')
   assertContains(/Nuevo presupuesto/, 'additional budgets need a create control')
   assertContains(/Editar presupuesto/, 'active additional budgets need an edit control')
-  assertContains(/Archivar presupuesto/, 'active additional budgets need an archive control')
+  assertContains(/Eliminar presupuesto/, 'active additional budgets need a delete control')
+  assertNotContains(/Archivar presupuesto|Presupuestos archivados/, 'archive wording must be renamed to delete')
   assertContains(/conserva asignaciones, historial y cuotas pendientes/, 'archive copy must explain retained obligations')
 })
 
@@ -161,4 +163,12 @@ test('the planner counts card statements due this month instead of this month\'s
   ) as { value: { income: number; expense: number } }
 
   assert.deepEqual(realMonthTotals.value, { income: 400, expense: 60 })
+})
+
+test('currency fields are selectors prefilled from the configured currency', () => {
+  assertContains(/<select\s+v-model="legacyCategoryBudgetCurrencyInput"/, 'legacy cap currency must be chosen from a selector')
+  assertContains(/<select\s+v-model="budgetCapCurrencyInput"/, 'budget cap currency must be chosen from a selector')
+  assertNotContains(/v-model="(legacyCategoryBudgetCurrencyInput|budgetCapCurrencyInput)"\s+type="text"/, 'currency fields must not be free-text inputs')
+  assertContains(/legacyCategoryBudgetCurrencyInput = ref\(defaultCurrencyCode\(settingsStore\.currency\)\)/, 'legacy cap currency must be prefilled')
+  assertContains(/budgetCapCurrencyInput\.value = entry\?\.budget\.capCurrency \?\? defaultCurrencyCode\(settingsStore\.currency\)/, 'new budgets must be prefilled')
 })

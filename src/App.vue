@@ -29,6 +29,8 @@
           </transition>
         </router-view>
       </main>
+
+      <OnboardingWizard v-if="authStore.isAuthenticated" />
     </div>
   </div>
 </template>
@@ -36,6 +38,7 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import Sidebar from '@/components/Sidebar.vue'
+import OnboardingWizard from '@/components/OnboardingWizard.vue'
 import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { onForegroundMessage } from '@/lib/push'
