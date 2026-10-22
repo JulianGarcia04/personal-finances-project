@@ -11,13 +11,39 @@
         class="relative flex flex-col w-full sm:max-w-md glass-panel border border-white/10 shadow-2xl rounded-t-3xl sm:rounded-2xl max-h-[92dvh] overflow-y-auto px-5 pt-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] sm:p-6 space-y-5"
       >
         <header class="space-y-1">
-          <p class="text-[11px] font-semibold uppercase tracking-widest text-accent-emerald">Configuración inicial · Paso {{ step }} de 2</p>
-          <h2 id="onboarding-title" class="font-display font-bold text-lg text-text-primary">
-            {{ step === 1 ? 'Moneda de tus límites de presupuesto' : 'Alertas en este dispositivo' }}
-          </h2>
+          <p class="text-[11px] font-semibold uppercase tracking-widest text-accent-emerald">Configuración inicial · Paso {{ step }} de 3</p>
+          <h2 id="onboarding-title" class="font-display font-bold text-lg text-text-primary">{{ stepTitle }}</h2>
         </header>
 
         <section v-if="step === 1" class="space-y-4">
+          <p class="text-sm text-text-secondary">
+            Tu país y tu moneda principal definen cómo ves tu patrimonio y tus KPIs, y le dan contexto tributario al Asesor IA.
+            Puedes cambiarlos después en Configuración.
+          </p>
+          <label class="block space-y-1.5">
+            <span class="block text-xs font-semibold text-text-secondary">País de residencia</span>
+            <select v-model="countryCode" class="field font-semibold cursor-pointer" :disabled="saving" @change="handleCountryChange">
+              <option v-for="option in SUPPORTED_COUNTRIES" :key="option.code" :value="option.code">{{ option.label }}</option>
+            </select>
+          </label>
+          <label class="block space-y-1.5">
+            <span class="block text-xs font-semibold text-text-secondary">Moneda principal</span>
+            <select v-model="mainCurrencyCode" class="field font-semibold cursor-pointer" :disabled="saving">
+              <option v-for="option in SUPPORTED_CURRENCIES" :key="option.code" :value="option.code">{{ option.label }}</option>
+            </select>
+          </label>
+          <p v-if="error" role="alert" class="text-xs text-accent-rose">{{ error }}</p>
+          <button
+            type="button"
+            class="w-full min-h-11 px-4 py-2.5 rounded-xl bg-accent-emerald text-background font-display font-bold text-sm hover:bg-accent-emerald-hover disabled:opacity-50 cursor-pointer"
+            :disabled="saving || settingsStore.loading"
+            @click="confirmRegion"
+          >
+            {{ saving ? 'Guardando…' : 'Continuar' }}
+          </button>
+        </section>
+
+        <section v-else-if="step === 2" class="space-y-4">
           <p class="text-sm text-text-secondary">
             Elige la moneda en la que defines los límites de tu presupuesto mensual. Se guarda una sola vez para este espacio
             y no cambia aunque después cambies la moneda de visualización.
@@ -75,7 +101,7 @@ import { computed, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/authStore'
 import { useGoalsStore } from '@/stores/goalsStore'
 import { useSettingsStore } from '@/stores/settingsStore'
-import { SUPPORTED_CURRENCIES, defaultCurrencyCode } from '@/lib/currencies'
+import { SUPPORTED_COUNTRIES, SUPPORTED_CURRENCIES, currencyForCountry, defaultCurrencyCode } from '@/lib/currencies'
 import { enablePush, getPushStatus, type PushStatus } from '@/lib/push'
 import { useBodyScrollLock } from '@/components/ui/useBodyScrollLock'
 
@@ -84,7 +110,14 @@ const goalsStore = useGoalsStore()
 const settingsStore = useSettingsStore()
 
 const open = ref(false)
-const step = ref<1 | 2>(1)
+const step = ref<1 | 2 | 3>(1)
+// Without a saved country the profile currency is just a signup default, so propose the country's own.
+const proposedMainCurrency = () => settingsStore.countryConfigured
+  ? defaultCurrencyCode(settingsStore.currency)
+  : currencyForCountry(settingsStore.country)
+
+const countryCode = ref(settingsStore.country)
+const mainCurrencyCode = ref(proposedMainCurrency())
 const currencyCode = ref(defaultCurrencyCode(settingsStore.currency))
 const saving = ref(false)
 const error = ref('')
@@ -118,21 +151,54 @@ watch(needsCurrency, (needed) => {
   if (!needed || open.value) return
   step.value = 1
   error.value = ''
-  currencyCode.value = defaultCurrencyCode(settingsStore.currency)
+  countryCode.value = settingsStore.country
+  mainCurrencyCode.value = proposedMainCurrency()
   open.value = true
 }, { immediate: true })
 
-// User settings load in parallel with budget settings; keep the prefill in sync until confirmed.
-watch(() => settingsStore.currency, (code) => {
-  if (step.value === 1 && !saving.value) currencyCode.value = defaultCurrencyCode(code)
+// User settings load in parallel with budget settings; keep the region prefill in sync until saved.
+watch(() => [settingsStore.country, settingsStore.currency, settingsStore.countryConfigured], () => {
+  if (step.value !== 1 || saving.value) return
+  countryCode.value = settingsStore.country
+  mainCurrencyCode.value = proposedMainCurrency()
 })
+
+const stepTitle = computed(() => ({
+  1: 'Tu país y moneda principal',
+  2: 'Moneda de tus límites de presupuesto',
+  3: 'Alertas en este dispositivo'
+})[step.value])
+
+const handleCountryChange = () => {
+  mainCurrencyCode.value = currencyForCountry(countryCode.value)
+}
+
+const confirmRegion = async () => {
+  saving.value = true
+  error.value = ''
+  try {
+    await settingsStore.saveSettings({
+      aiEnabled: settingsStore.aiEnabled,
+      useCustomKey: settingsStore.useCustomKey,
+      country: countryCode.value,
+      currency: mainCurrencyCode.value
+    })
+    currencyCode.value = defaultCurrencyCode(mainCurrencyCode.value)
+    step.value = 2
+  } catch (err) {
+    console.error('Error guardando país y moneda:', err)
+    error.value = 'No se pudo guardar tu país y moneda. Intenta de nuevo.'
+  } finally {
+    saving.value = false
+  }
+}
 
 const confirmCurrency = async () => {
   saving.value = true
   error.value = ''
   try {
     await goalsStore.confirmLegacyCategoryBudgetCurrency(currencyCode.value)
-    step.value = 2
+    step.value = 3
     await refreshPushStatus()
   } catch (err) {
     console.error('Error confirmando la moneda de los límites:', err)

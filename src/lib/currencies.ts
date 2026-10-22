@@ -29,3 +29,24 @@ export const defaultCurrencyCode = (preferred?: string | null): string => {
   const code = preferred?.trim().toUpperCase()
   return SUPPORTED_CURRENCIES.find(option => option.code === code)?.code ?? SUPPORTED_CURRENCIES[0].code
 }
+
+export interface CountryOption {
+  readonly code: string
+  readonly label: string
+  readonly currency: string
+}
+
+/** Countries offered for regional settings, each with its local currency. */
+export const SUPPORTED_COUNTRIES: readonly CountryOption[] = [
+  { code: 'CO', label: 'Colombia', currency: 'COP' },
+  { code: 'MX', label: 'México', currency: 'MXN' },
+  { code: 'ES', label: 'España', currency: 'EUR' },
+  { code: 'US', label: 'Estados Unidos', currency: 'USD' },
+  { code: 'CL', label: 'Chile', currency: 'CLP' },
+  { code: 'AR', label: 'Argentina', currency: 'ARS' },
+  { code: 'PE', label: 'Perú', currency: 'PEN' }
+]
+
+/** Local currency of a country, or the first supported currency when the country is unknown. */
+export const currencyForCountry = (countryCode: string): string =>
+  SUPPORTED_COUNTRIES.find(country => country.code === countryCode)?.currency ?? SUPPORTED_CURRENCIES[0].code

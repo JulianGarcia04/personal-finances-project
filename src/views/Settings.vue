@@ -210,13 +210,7 @@
                   @change="handleCountryChange"
                   class="field font-semibold cursor-pointer"
                 >
-                  <option value="CO">Colombia</option>
-                  <option value="MX">México</option>
-                  <option value="ES">España</option>
-                  <option value="US">Estados Unidos</option>
-                  <option value="CL">Chile</option>
-                  <option value="AR">Argentina</option>
-                  <option value="PE">Perú</option>
+                  <option v-for="option in SUPPORTED_COUNTRIES" :key="option.code" :value="option.code">{{ option.label }}</option>
                 </select>
               </div>
 
@@ -228,13 +222,7 @@
                   @change="handleGeneralSettingsChange"
                   class="field font-semibold cursor-pointer"
                 >
-                  <option value="COP">COP ($)</option>
-                  <option value="MXN">MXN ($)</option>
-                  <option value="EUR">EUR (€)</option>
-                  <option value="USD">USD ($)</option>
-                  <option value="CLP">CLP ($)</option>
-                  <option value="ARS">ARS ($)</option>
-                  <option value="PEN">PEN (S/.)</option>
+                  <option v-for="option in SUPPORTED_CURRENCIES" :key="option.code" :value="option.code">{{ option.label }}</option>
                 </select>
               </div>
             </div>
@@ -539,6 +527,7 @@ import { useGoalsStore } from '@/stores/goalsStore'
 import { ApiKeySchema, CategorySchema } from '@/schemas'
 import { getPushStatus, enablePush, disablePush, onForegroundMessage, type PushStatus } from '@/lib/push'
 import { CATEGORY_COLORS, CATEGORY_ICONS, getCategoryIconComponent } from '@/lib/categoryIcons'
+import { SUPPORTED_COUNTRIES, SUPPORTED_CURRENCIES } from '@/lib/currencies'
 import {
   Trash2 as TrashIcon, Plus as PlusIcon, Mail as MailIcon, Check as CheckIcon,
   KeyRound as KeyRoundIcon, Sparkles, Users, Globe, Tags
@@ -601,15 +590,6 @@ const currency = ref('COP')
 const successMsg = ref('')
 const errorMsg = ref('')
 
-const countryToCurrencyMap: Record<string, string> = {
-  CO: 'COP',
-  MX: 'MXN',
-  ES: 'EUR',
-  US: 'USD',
-  CL: 'CLP',
-  AR: 'ARS',
-  PE: 'PEN'
-}
 
 // Category Creation State
 const newCatName = ref('')
@@ -854,7 +834,7 @@ const handleGeneralSettingsChange = async () => {
 }
 
 const handleCountryChange = async () => {
-  const mappedCurrency = countryToCurrencyMap[country.value]
+  const mappedCurrency = SUPPORTED_COUNTRIES.find(option => option.code === country.value)?.currency
   if (mappedCurrency) {
     currency.value = mappedCurrency
   }

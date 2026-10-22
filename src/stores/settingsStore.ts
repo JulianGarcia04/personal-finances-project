@@ -16,6 +16,8 @@ interface SettingsState {
   useCustomKey: boolean;
   hasCustomKey: boolean;
   country: string;
+  // False until the profile stores a country; the default 'CO' is then only a placeholder.
+  countryConfigured: boolean;
   currency: string;
   loading: boolean;
 }
@@ -26,6 +28,7 @@ export const useSettingsStore = defineStore('settings', {
     useCustomKey: false,
     hasCustomKey: false,
     country: 'CO',
+    countryConfigured: false,
     currency: 'COP',
     loading: false,
   }),
@@ -44,6 +47,7 @@ export const useSettingsStore = defineStore('settings', {
           this.aiEnabled = data.aiEnabled !== undefined ? data.aiEnabled : true
           this.useCustomKey = data.useCustomKey !== undefined ? data.useCustomKey : false
           this.country = data.country || 'CO'
+          this.countryConfigured = !!data.country
           this.currency = data.currency || 'COP'
         }
 
@@ -78,6 +82,7 @@ export const useSettingsStore = defineStore('settings', {
         this.aiEnabled = aiEnabled
         this.useCustomKey = useCustomKey
         this.country = country
+        this.countryConfigured = true
         this.currency = currency
       } catch (error) {
         console.error('Error al guardar configuraciones:', error)
