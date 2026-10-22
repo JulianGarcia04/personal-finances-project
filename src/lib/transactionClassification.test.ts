@@ -63,11 +63,19 @@ test('classifying a mirrored expense neither traverses nor changes its transfer 
   assert.deepEqual(h.rows(), [{ ...before[0], budgetId: 'event' }, before[1]])
 })
 
-test('non-expense legs reject before any write or state mutation', async () => {
-  for (const type of ['income', 'transfer', 'loan', 'loan_payment'] as const) {
+test('income is classified like an expense, writing only the budget reference', async () => {
+  const h = harness([expense({ type: 'income', amount: 900 })])
+  const before = structuredClone(h.rows())
+  await h.assign('expense', 'event')
+  assert.deepEqual(h.writes, [{ id: 'expense', patch: { budgetId: 'event' } }])
+  assert.deepEqual(h.rows(), [{ ...before[0], budgetId: 'event' }])
+})
+
+test('transfer and loan legs reject before any write or state mutation', async () => {
+  for (const type of ['transfer', 'loan', 'loan_payment'] as const) {
     const h = harness([expense({ type })])
     const before = structuredClone(h.rows())
-    await assert.rejects(h.assign('expense', 'event'), { message: 'Only expenses can be assigned to operating budgets' })
+    await assert.rejects(h.assign('expense', 'event'), { message: 'Only expenses and income can be assigned to operating budgets' })
     assert.deepEqual(h.writes, [])
     assert.deepEqual(h.rows(), before)
   }

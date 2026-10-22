@@ -15,7 +15,7 @@ Branch: `feat/budget-assignment-ux` · Delivery: ask-on-risk (forecast ~900–1,
 
 ## Tasks
 - [x] T1 · S1, S2 · inline · rules: income `budgetId`, budget `linkedAccountIds` (list ≤ 20) + rules tests · Risk item 2 · commit: see L4
-- [ ] T2 · S1, S2, S4, S8 · inline · assigner allows income; selector at creation; link UI + inheritance; microcopy
+- [x] T2 · S1, S2, S4, S8 · inline · assigner allows income; selector at creation; link UI + inheritance; microcopy · commit: see L5 (UI proof pending, L5)
 - [ ] T3 · S5, S6, S8 · inline · reporting funds/available, monthly income exclusion (client + alert), card bars · Risk item 3
 - [ ] T4 · S7 · inline · funds alert in `budgetAlerts.ts` · Risk item 5
 - [ ] T5 · S3, S8 · inline · preview + bulk move
@@ -25,3 +25,4 @@ Branch: `feat/budget-assignment-ux` · Delivery: ask-on-risk (forecast ~900–1,
 - L2: Read-only prod dump of workspace mUicNHxsNURMjC24tyWg: all 17 expenses have `budgetId: null`, spent from cash accounts named like event budgets; October default-monthly total 8,104,890 vs 10,120,000 triggered a false 80 % alert. Root cause: creation form has no budget selector.
 - L3: User approved plan "sí, planifícalo con 1, 2 y 3", objections (income budgets, inheritance), link stored on budget ("dejemoslo así"), model B, and "sí, arranca la implementación".
 - L4: Tasks reordered so the rules change (risk item 2) lands alone first. `pnpm test:budgets:security` 78/78 pass. RED not observed first (rules edited before tests).
+- L5: T1 independent verifier PASS (no blockers); advisories applied: decoder drops malformed `linkedAccountIds`, rules regression tests for loans/archived income/archived links (`pnpm test:budgets:security` 79/79). T2: RED observed for helpers and assigner, then GREEN; `pnpm test` 253/253, `vue-tsc` clean. Moving an account link updates the previous budget after saving the new one. Mounted UI proof pending (end of feature).

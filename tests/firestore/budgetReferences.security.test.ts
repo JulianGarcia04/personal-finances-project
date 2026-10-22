@@ -188,6 +188,14 @@ test('transfers cannot carry explicit additional or default-monthly references',
   }
   const assigned = await createTransaction({ budgetId: activeBudget.id })
   await deniedUnchanged(() => updateDoc(assigned, { type: 'transfer' }))
+  for (const type of ['loan', 'loan_payment']) {
+    for (const budgetId of [activeBudget.id, 'default-monthly']) {
+      await deniedUnchanged(() => setDoc(transactionRef(id(type)), rawTransaction({ type, budgetId })))
+    }
+  }
+  const income = await createTransaction({ type: 'income', amount: 17, budgetId: activeBudget.id })
+  await deniedUnchanged(() => updateDoc(income, { type: 'loan_payment' }))
+  await deniedUnchanged(() => updateDoc(income, { budgetId: 'default-monthly', amount: 18 }))
 })
 
 test('transaction workspace identity cannot change or be removed even for dual members', async () => {
@@ -244,6 +252,9 @@ test('archived parents retain existing references and queries but reject new ass
   await deniedUnchanged(() => setDoc(transactionRef(id('archived-create')), rawTransaction({ budgetId: parent.id })))
   const unassigned = await createTransaction()
   await deniedUnchanged(() => updateDoc(unassigned, { budgetId: parent.id }))
+  await deniedUnchanged(() => setDoc(transactionRef(id('archived-income')), rawTransaction({ type: 'income', amount: 17, budgetId: parent.id })))
+  const income = await createTransaction({ type: 'income', amount: 17 })
+  await deniedUnchanged(() => updateDoc(income, { budgetId: parent.id }))
   await updateDoc(existing, { budgetId: null })
   assert.deepEqual(await dataOf(existing), { ...before, budgetId: null })
 })

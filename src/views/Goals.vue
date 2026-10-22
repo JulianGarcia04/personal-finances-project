@@ -301,6 +301,11 @@
               {{ categoryName(cap.categoryId) }} · {{ formatCurrency(cap.amount, entry.budget.capCurrency) }}
             </span>
           </div>
+          <p v-if="entry.budget.linkedAccountIds?.length" class="flex items-start gap-1 text-[10px] text-text-secondary">
+            <LinkIcon class="w-3 h-3 mt-px shrink-0 text-accent-emerald" />
+            <span>Cuentas ligadas: {{ entry.budget.linkedAccountIds.map(accountName).join(', ') }}</span>
+          </p>
+          <p class="text-[10px] text-text-muted">Los movimientos entran a este presupuesto cuando se lo asignas o cuando salen de una cuenta ligada.</p>
           <p v-if="entry.budget.kind === 'event' && (entry.budget.startDate || entry.budget.endDate)" class="text-[10px] text-text-muted">
             Periodo de referencia: {{ entry.budget.startDate ? formatDate(entry.budget.startDate) : 'Sin inicio' }} – {{ entry.budget.endDate ? formatDate(entry.budget.endDate) : 'Sin fin' }}
           </p>
@@ -530,6 +535,33 @@
             </label>
           </div>
 
+          <div class="space-y-2 rounded-xl bg-slate-950/40 border border-white/5 p-3" data-testid="budget-linked-accounts">
+            <div>
+              <h4 class="flex items-center gap-1.5 text-xs font-semibold text-text-primary">
+                <LinkIcon class="w-3.5 h-3.5 text-accent-emerald" />
+                Cuentas ligadas (opcional)
+              </h4>
+              <p class="text-[10px] text-text-muted mt-1">Los movimientos nuevos de estas cuentas se asignan a este presupuesto automáticamente. Siempre puedes cambiarlo al registrarlos.</p>
+            </div>
+            <p v-if="accountsStore.accounts.length === 0" class="text-[11px] text-text-muted">Todavía no tienes cuentas.</p>
+            <div v-else class="flex flex-wrap gap-2">
+              <button
+                v-for="acc in accountsStore.accounts"
+                :key="acc.id"
+                type="button"
+                :aria-pressed="budgetLinkedAccountIds.includes(acc.id)"
+                :class="['tap inline-flex items-center gap-1.5 px-3 rounded-full border text-xs font-medium transition-all cursor-pointer max-w-full', budgetLinkedAccountIds.includes(acc.id) ? 'border-accent-emerald/40 bg-accent-emerald/10 text-accent-emerald' : 'border-border text-text-secondary hover:text-text-primary hover:bg-white/5']"
+                @click="toggleBudgetLinkedAccount(acc.id)"
+              >
+                <CheckIcon v-if="budgetLinkedAccountIds.includes(acc.id)" class="w-3.5 h-3.5 shrink-0" />
+                <span class="truncate">{{ getAccountDisplayLabel(acc, accountsStore.accounts) }}</span>
+              </button>
+            </div>
+            <p v-for="conflict in budgetLinkConflicts" :key="conflict.accountId" role="status" class="text-[10px] text-accent-amber">
+              «{{ accountName(conflict.accountId) }}» está ligada a «{{ conflict.budgetName }}». Al guardar pasará a este presupuesto.
+            </p>
+          </div>
+
           <div class="space-y-2 rounded-xl bg-slate-950/40 border border-white/5 p-3">
             <div>
               <h4 class="text-xs font-semibold text-text-primary">Límites por categoría · {{ budgetCapCurrencyInput || 'moneda seleccionada' }}</h4>
@@ -688,6 +720,19 @@
             </select>
           </div>
 
+          <!-- Budget the contribution counts against (inherited from a linked account) -->
+          <div v-if="contributeAccountId" class="space-y-1.5 animate-fade-in" data-testid="contribute-budget">
+            <label for="contribute-budget" class="block text-xs font-semibold text-text-secondary">Presupuesto</label>
+            <select id="contribute-budget" v-model="contributeBudgetId" class="field cursor-pointer" @change="contributeBudgetTouched = true">
+              <option :value="DEFAULT_MONTHLY_BUDGET_ID">Presupuesto mensual predeterminado</option>
+              <option v-for="budget in activeOperatingBudgets" :key="budget.budget.id" :value="budget.budget.id">{{ budget.budget.name }}</option>
+            </select>
+            <p v-if="contributeInheritedBudgetName" class="flex items-start gap-1 text-[11px] text-accent-emerald">
+              <LinkIcon class="w-3 h-3 mt-0.5 shrink-0" />
+              <span>Asignado automáticamente: esta cuenta está ligada a «{{ contributeInheritedBudgetName }}».</span>
+            </p>
+          </div>
+
           <!-- Contribute Amount -->
           <div class="space-y-1.5">
             <label for="contribute-amount" class="block text-xs font-semibold text-text-secondary">Monto a Aportar</label>
@@ -736,7 +781,7 @@ import BaseSheet from '@/components/ui/BaseSheet.vue'
 import CategoryPicker from '@/components/CategoryPicker.vue'
 import { suggestCategoriesBySpending, visibleBaselineCategories } from '@/lib/categoryPicker'
 import { getCategoryIconComponent } from '@/lib/categoryIcons'
-import { DEFAULT_MONTHLY_BUDGET_ID } from '@/lib/budgets'
+import { DEFAULT_MONTHLY_BUDGET_ID, budgetIdForAccount, linkedAccountConflicts } from '@/lib/budgets'
 import { reportBudgetScope } from '@/lib/budgetReporting'
 import type { BudgetWorkspaceBudgetSnapshot } from '@/lib/budgetWorkspaceAdapter'
 import { createCardBillingLookup, expenseAmountForDate } from '@/lib/installments'
@@ -748,7 +793,9 @@ import {
   Trash2 as TrashIcon,
   Plus as PlusIcon,
   Wallet as WalletIcon,
-  X as XIcon
+  X as XIcon,
+  Link2 as LinkIcon,
+  Check as CheckIcon
 } from 'lucide-vue-next'
 import { Chart, registerables } from 'chart.js'
 
@@ -777,6 +824,22 @@ const budgetSelectedCategoryIds = ref<string[]>([])
 const baselineAddedCategoryIds = ref<string[]>([])
 const budgetManagementError = ref('')
 const savingOperatingBudget = ref(false)
+const budgetLinkedAccountIds = ref<string[]>([])
+const linkableOperatingBudgets = computed(() => goalsStore.operatingBudgets.map(({ budget }) => budget))
+const budgetLinkConflicts = computed(() => linkedAccountConflicts(
+  linkableOperatingBudgets.value,
+  budgetLinkedAccountIds.value,
+  editingOperatingBudget.value?.budget.id
+))
+const accountName = (accountId: string): string => {
+  const account = accountsStore.getAccountById(accountId)
+  return account ? getAccountDisplayLabel(account, accountsStore.accounts) : 'Cuenta eliminada'
+}
+const toggleBudgetLinkedAccount = (accountId: string) => {
+  budgetLinkedAccountIds.value = budgetLinkedAccountIds.value.includes(accountId)
+    ? budgetLinkedAccountIds.value.filter(id => id !== accountId)
+    : [...budgetLinkedAccountIds.value, accountId]
+}
 const legacyCategoryBudgetCurrencyInput = ref(defaultCurrencyCode(settingsStore.currency))
 const confirmingLegacyCurrency = ref(false)
 const legacyCurrencyError = ref('')
@@ -791,6 +854,17 @@ const newGoalTargetDate = ref('')
 // Contribute inputs
 const contributeAccountId = ref('')
 const contributeAmount = ref<number | null>(null)
+const contributeBudgetId = ref(DEFAULT_MONTHLY_BUDGET_ID)
+const contributeBudgetTouched = ref(false)
+const contributeInheritedBudgetName = computed(() => {
+  const inheritedId = budgetIdForAccount(linkableOperatingBudgets.value, contributeAccountId.value)
+  if (inheritedId === DEFAULT_MONTHLY_BUDGET_ID || inheritedId !== contributeBudgetId.value) return ''
+  return linkableOperatingBudgets.value.find(budget => budget.id === inheritedId)?.name ?? ''
+})
+watch(contributeAccountId, accountId => {
+  if (contributeBudgetTouched.value) return
+  contributeBudgetId.value = budgetIdForAccount(linkableOperatingBudgets.value, accountId)
+})
 
 // Budget Planner inputs
 const incomeInput = ref(0)
@@ -970,6 +1044,7 @@ const openBudgetModal = (entry?: BudgetWorkspaceBudgetSnapshot) => {
   budgetStartDateInput.value = dateInputValue(entry?.budget.startDate)
   budgetEndDateInput.value = dateInputValue(entry?.budget.endDate)
   budgetManagementError.value = ''
+  budgetLinkedAccountIds.value = [...(entry?.budget.linkedAccountIds ?? [])]
   for (const key of Object.keys(budgetCategoryCapInputs)) delete budgetCategoryCapInputs[key]
   if (entry) Object.assign(budgetCategoryCapInputs, entry.categoryCaps)
   budgetSelectedCategoryIds.value = Object.keys(entry?.categoryCaps ?? {})
@@ -1055,6 +1130,9 @@ const handleSaveOperatingBudget = async () => {
 
   const toDate = (value: string): Date | undefined => value ? new Date(`${value}T00:00:00`) : undefined
   const caps = categoryCapDraft()
+  // Accounts that move here leave their previous budget once this one is saved.
+  const movedLinks = budgetLinkConflicts.value
+  const linkedAccountIds = [...budgetLinkedAccountIds.value]
   savingOperatingBudget.value = true
   try {
     let budgetId: string
@@ -1062,7 +1140,8 @@ const handleSaveOperatingBudget = async () => {
       const existing = editingOperatingBudget.value.budget
       const patch: OperatingBudgetPatch = {
         name,
-        totalLimit: totalLimit ?? null
+        totalLimit: totalLimit ?? null,
+        linkedAccountIds
       }
       if (existing.kind === 'event') {
         patch.startDate = toDate(budgetStartDateInput.value) ?? null
@@ -1075,7 +1154,8 @@ const handleSaveOperatingBudget = async () => {
         kind: budgetKindInput.value,
         name,
         capCurrency,
-        ...(totalLimit === undefined ? {} : { totalLimit })
+        ...(totalLimit === undefined ? {} : { totalLimit }),
+        ...(linkedAccountIds.length ? { linkedAccountIds } : {})
       }
       if (draft.kind === 'event') {
         const startDate = toDate(budgetStartDateInput.value)
@@ -1089,6 +1169,14 @@ const handleSaveOperatingBudget = async () => {
         ?? { budget: created, categoryCaps: {} }
     }
     await goalsStore.saveOperatingBudgetCategoryCaps(budgetId, caps)
+    for (const ownerId of new Set(movedLinks.map(conflict => conflict.budgetId))) {
+      const owner = linkableOperatingBudgets.value.find(budget => budget.id === ownerId)
+      if (!owner) continue
+      const moved = new Set(movedLinks.filter(conflict => conflict.budgetId === ownerId).map(conflict => conflict.accountId))
+      await goalsStore.updateOperatingBudget(ownerId, {
+        linkedAccountIds: (owner.linkedAccountIds ?? []).filter(accountId => !moved.has(accountId))
+      })
+    }
     showBudgetModal.value = false
   } catch (error) {
     budgetManagementError.value = error instanceof Error ? error.message : 'No se pudo guardar el presupuesto.'
@@ -1267,6 +1355,8 @@ const openContributeModal = (goal: Goal) => {
   selectedGoal.value = goal
   contributeAccountId.value = ''
   contributeAmount.value = null
+  contributeBudgetId.value = DEFAULT_MONTHLY_BUDGET_ID
+  contributeBudgetTouched.value = false
   showContributeModal.value = true
 }
 
@@ -1303,7 +1393,8 @@ const handleContribute = async () => {
       description: `Aporte a meta: ${goal.name}`,
       categoryId: savingsCat?.id || '',
       date: new Date(),
-      type: 'expense'
+      type: 'expense',
+      budgetId: contributeBudgetId.value
     })
 
     // 2. Sumar al saldo acumulado del objetivo de ahorro

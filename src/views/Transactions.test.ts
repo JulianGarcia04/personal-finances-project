@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import ts from 'typescript'
-import { DEFAULT_MONTHLY_BUDGET_ID, resolveBudgetId } from '../lib/budgets.ts'
+import { DEFAULT_MONTHLY_BUDGET_ID, canCarryBudget, resolveBudgetId } from '../lib/budgets.ts'
 import { toDateValue, toLocalDateKey } from '../lib/dates.ts'
 
 const componentSource = readFileSync(new URL('./Transactions.vue', import.meta.url), 'utf8')
@@ -47,14 +47,14 @@ const assignmentOptions = (
   }
 )(currentBudgetId)
 
-test('renders reassignment only for existing expenses on desktop rows, mobile cards, and the edit modal', () => {
+test('renders reassignment only for existing expenses and income on desktop rows, mobile cards, and the edit modal', () => {
   const markers = [...template.matchAll(/data-testid="budget-assignment-(row|card|edit)"/g)]
     .map(match => match[1])
     .sort()
   assert.deepEqual(markers, ['card', 'edit', 'row'])
-  assert.match(template, /v-if="tx\.type === 'expense'"[\s\S]{0,500}data-testid="budget-assignment-row"/)
-  assert.match(template, /v-if="tx\.type === 'expense'"[\s\S]{0,500}data-testid="budget-assignment-card"/)
-  assert.equal(/v-if="editingOriginalType === 'expense' && editTx\.type === 'expense'"[\s\S]{0,500}data-testid="budget-assignment-edit"/.test(template), true, 'edit budget selector must require a persisted expense as well as expense draft type')
+  assert.match(template, /v-if="canCarryBudget\(tx\.type\)"[\s\S]{0,500}data-testid="budget-assignment-row"/)
+  assert.match(template, /v-if="canCarryBudget\(tx\.type\)"[\s\S]{0,500}data-testid="budget-assignment-card"/)
+  assert.equal(/v-if="canCarryBudget\(editingOriginalType\) && editTx\.type === editingOriginalType"[\s\S]{0,500}data-testid="budget-assignment-edit"/.test(template), true, 'edit budget selector must require a persisted expense or income with an unchanged draft type')
   assert.equal(/editingOriginalType\.value = tx\.type/.test(script), true, 'openEditModal must record the persisted transaction type')
   assert.match(template, /data-testid="budget-assignment-row"[\s\S]{0,500}@change="handleBudgetAssignmentChange\(tx, \$event\)"/)
   assert.match(template, /data-testid="budget-assignment-card"[\s\S]{0,500}@change="handleBudgetAssignmentChange\(tx, \$event\)"/)
@@ -89,7 +89,7 @@ test('offers the default and active budgets, retaining only an already assigned 
   ])
 })
 
-test('uses the B3 budget-only action, suppressing non-expenses, no-ops, and duplicate in-flight writes', async () => {
+test('uses the B3 budget-only action for expenses and income, suppressing transfers, no-ops, and duplicate in-flight writes', async () => {
   const calls: Array<[string, string]> = []
   let financialWrites = 0
   const pendingIds = new Set<string>(['pending-expense'])
@@ -105,21 +105,22 @@ test('uses the B3 budget-only action, suppressing non-expenses, no-ops, and dupl
     assigningBudgetIds: { value: pendingIds },
     budgetSettingsReady,
     resolveBudgetId,
+    canCarryBudget,
     alert: () => undefined
   })
 
   assert.equal(await assignBudget({ id: 'expense-1', type: 'expense', budgetId: null }, 'event-1'), true)
-  assert.deepEqual(calls, [['expense-1', 'event-1']])
-  assert.equal(await assignBudget({ id: 'income-1', type: 'income' }, 'event-1'), false)
+  assert.equal(await assignBudget({ id: 'income-1', type: 'income' }, 'event-1'), true)
+  assert.deepEqual(calls, [['expense-1', 'event-1'], ['income-1', 'event-1']])
   assert.equal(await assignBudget({ id: 'transfer-1', type: 'transfer' }, 'event-1'), false)
   assert.equal(await assignBudget({ id: 'default-1', type: 'expense' }, DEFAULT_MONTHLY_BUDGET_ID), false)
   assert.equal(await assignBudget({ id: 'pending-expense', type: 'expense' }, 'event-1'), false)
-  assert.deepEqual(calls, [['expense-1', 'event-1']])
+  assert.deepEqual(calls, [['expense-1', 'event-1'], ['income-1', 'event-1']])
   assert.equal(financialWrites, 0)
 
   budgetSettingsReady.value = false
   assert.equal(await assignBudget({ id: 'unready-expense', type: 'expense' }, 'event-1'), false)
-  assert.deepEqual(calls, [['expense-1', 'event-1']])
+  assert.equal(calls.length, 2)
 })
 
 test('loads budget settings when the Transactions view is entered', () => {
@@ -211,4 +212,14 @@ test('date input defaults never use the UTC day', () => {
 test('the new-movement form can create a missing category inline and selects it', () => {
   assert.match(template, /<CategoryQuickCreate[\s\S]*?:type="newTx\.type"[\s\S]*?@created="handleNewTxCategoryCreated"/)
   assert.match(script!, /newTx\.value\.categoryId = category\.id/)
+})
+
+test('the new-movement form offers a budget for expenses and income, inherited from the linked account', () => {
+  assert.match(template, /v-if="showNewTxBudget"[\s\S]{0,200}data-testid="new-tx-budget"/)
+  assert.match(template, /id="new-tx-budget"[\s\S]{0,120}v-model="newTx\.budgetId"[\s\S]{0,80}@change="newTxBudgetTouched = true"/)
+  assert.match(template, /Los movimientos entran a este presupuesto cuando se lo asignas o cuando salen de una cuenta ligada\./)
+  assert.match(script, /canCarryBudget\(newTx\.value\.type\)/)
+  assert.match(script, /if \(newTxBudgetTouched\.value\) return\s+newTx\.value\.budgetId = budgetIdForAccount\(linkableBudgets\.value, newTx\.value\.accountId\)/)
+  assert.match(script, /budgetId: showNewTxBudget\.value \? newTx\.value\.budgetId : null/)
+  assert.match(script, /newTxBudgetTouched\.value = false/)
 })

@@ -144,6 +144,8 @@ export interface OperatingBudget {
   name: string;
   capCurrency: string; // Stable denomination shared by this budget's scalar caps.
   totalLimit?: number;
+  // Accounts whose new movements default to this budget (prefilled, user may change it).
+  linkedAccountIds?: string[];
   archived: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -154,7 +156,7 @@ export interface OperatingBudget {
 
 // Form input contains no record identity, lifecycle, audit, or ledger fields.
 export type OperatingBudgetDraft = Pick<OperatingBudget,
-  'kind' | 'name' | 'capCurrency' | 'totalLimit' | 'startDate' | 'endDate'
+  'kind' | 'name' | 'capCurrency' | 'totalLimit' | 'startDate' | 'endDate' | 'linkedAccountIds'
 >;
 
 // Omitted keys mean no change; null clears the optional limit or event date.
@@ -163,6 +165,7 @@ export interface OperatingBudgetPatch {
   totalLimit?: number | null;
   startDate?: Date | null;
   endDate?: Date | null;
+  linkedAccountIds?: string[];
 }
 
 export interface ChatMessage {

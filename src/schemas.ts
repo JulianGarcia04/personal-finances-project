@@ -137,6 +137,10 @@ const additionalOperatingBudgetIdSchema = operatingBudgetIdSchema.refine(
 
 export const OperatingBudgetKindSchema = z.enum(['monthly', 'event'])
 
+// Accounts whose new movements default to this budget; at most 20, no duplicates (rules cap the list size).
+const operatingBudgetLinkedAccountsSchema = z.array(operatingBudgetIdSchema).max(20)
+  .refine(ids => new Set(ids).size === ids.length, 'Linked accounts must be unique')
+
 const operatingBudgetPlanningFields = {
   startDate: operatingBudgetDateSchema.optional(),
   endDate: operatingBudgetDateSchema.optional()
@@ -159,6 +163,7 @@ export const OperatingBudgetDraftSchema = z.object({
   name: operatingBudgetNameSchema,
   capCurrency: operatingBudgetCurrencySchema,
   totalLimit: operatingBudgetLimitSchema.optional(),
+  linkedAccountIds: operatingBudgetLinkedAccountsSchema.optional(),
   ...operatingBudgetPlanningFields
 }).strict().superRefine(validateOperatingBudgetPlanning)
 
@@ -173,6 +178,7 @@ export const OperatingBudgetRecordSchema = z.object({
   archived: z.boolean(),
   createdAt: operatingBudgetDateSchema,
   updatedAt: operatingBudgetDateSchema,
+  linkedAccountIds: operatingBudgetLinkedAccountsSchema.optional(),
   ...operatingBudgetPlanningFields
 }).strict().superRefine(validateOperatingBudgetPlanning)
 
@@ -181,7 +187,8 @@ export const OperatingBudgetPatchSchema = z.object({
   name: operatingBudgetNameSchema.optional(),
   totalLimit: operatingBudgetLimitSchema.nullable().optional(),
   startDate: operatingBudgetDateSchema.nullable().optional(),
-  endDate: operatingBudgetDateSchema.nullable().optional()
+  endDate: operatingBudgetDateSchema.nullable().optional(),
+  linkedAccountIds: operatingBudgetLinkedAccountsSchema.optional()
 }).strict().superRefine((patch, ctx) => {
   if (!Object.values(patch).some(value => value !== undefined)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Patch must change at least one field' })

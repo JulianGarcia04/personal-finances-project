@@ -55,6 +55,12 @@ export const decodeOperatingBudgetRecord = (
   for (const field of ['startDate', 'endDate'] as const) {
     if (Object.hasOwn(data, field)) decoded[field] = decodedTimestamp(data[field], field)
   }
+  // Rules only bound the list size, so keep the valid, unique account IDs instead of rejecting the budget.
+  if (Object.hasOwn(data, 'linkedAccountIds')) {
+    const ids = Array.isArray(data.linkedAccountIds) ? data.linkedAccountIds : []
+    decoded.linkedAccountIds = [...new Set(ids.filter((id): id is string =>
+      typeof id === 'string' && id.trim().length > 0 && !id.includes('/') && id !== '.' && id !== '..'))]
+  }
   return OperatingBudgetRecordSchema.parse(decoded)
 }
 
@@ -87,6 +93,7 @@ export const createBudgetPersistence = (db: Firestore, workspaceId: string) => {
       if (draft.totalLimit !== undefined) wire.totalLimit = draft.totalLimit
       if (draft.startDate !== undefined) wire.startDate = planningTimestamp(draft.startDate)
       if (draft.endDate !== undefined) wire.endDate = planningTimestamp(draft.endDate)
+      if (draft.linkedAccountIds !== undefined) wire.linkedAccountIds = draft.linkedAccountIds
       await setDoc(ref, wire)
       return read(ref.id)
     },

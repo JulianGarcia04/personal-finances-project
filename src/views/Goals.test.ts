@@ -78,6 +78,9 @@ test('S7: handleSaveOperatingBudget accepts numeric v-model values from number i
     budgetManagementError: { value: '' },
     savingOperatingBudget: { value: false },
     showBudgetModal: { value: true },
+    budgetLinkConflicts: { value: [] as unknown[] },
+    budgetLinkedAccountIds: { value: [] as string[] },
+    linkableOperatingBudgets: { value: [] as unknown[] },
     goalsStore: {
       operatingBudgets: [] as unknown[],
       async createOperatingBudget(draft: Record<string, unknown>) {
@@ -98,7 +101,8 @@ test('S7: handleSaveOperatingBudget accepts numeric v-model values from number i
     `const {
       editingOperatingBudget, budgetNameInput, budgetKindInput, budgetCapCurrencyInput,
       budgetTotalLimitInput, budgetStartDateInput, budgetEndDateInput, budgetCategoryCapInputs,
-      budgetManagementError, savingOperatingBudget, showBudgetModal, goalsStore
+      budgetManagementError, savingOperatingBudget, showBudgetModal, goalsStore,
+      budgetLinkConflicts, budgetLinkedAccountIds, linkableOperatingBudgets
     } = ctx;
     ${transpiled}
     return handleSaveOperatingBudget();`
@@ -189,4 +193,63 @@ test('baseline monthly budget lists only used categories and adds or creates mor
   assertContains(/<CategoryPicker[\s\S]*?:selected-ids="baselineCategoryIds"[\s\S]*?:suggestions="baselineSuggestedCategories"[\s\S]*?@select="addBaselineCategory"/, 'the baseline must add or create categories with the inline picker')
   assertContains(/:aria-label="`Quitar límite de \$\{cat\.name\}`"/, 'each baseline row needs a control to remove its limit')
   assertContains(/:id="`base-cap-\$\{cat\.id\}`"/, 'baseline inputs need ids so an added category can receive focus')
+})
+
+test('the budget form links accounts, warns about links moving from another budget, and persists them', () => {
+  const source = readFileSync(new URL('./Goals.vue', import.meta.url), 'utf8')
+  assert.match(source, /data-testid="budget-linked-accounts"/)
+  assert.match(source, /:aria-pressed="budgetLinkedAccountIds\.includes\(acc\.id\)"/)
+  assert.match(source, /Al guardar pasará a este presupuesto\./)
+  assert.match(source, /linkedAccountConflicts\(\s*linkableOperatingBudgets\.value,\s*budgetLinkedAccountIds\.value,\s*editingOperatingBudget\.value\?\.budget\.id\s*\)/)
+  assert.match(source, /totalLimit: totalLimit \?\? null,\s*linkedAccountIds\s*\}/)
+  assert.match(source, /\.\.\.\(linkedAccountIds\.length \? \{ linkedAccountIds \} : \{\}\)/)
+  assert.match(source, /linkedAccountIds: \(owner\.linkedAccountIds \?\? \[\]\)\.filter\(accountId => !moved\.has\(accountId\)\)/)
+  assert.match(source, /Los movimientos entran a este presupuesto cuando se lo asignas o cuando salen de una cuenta ligada\./)
+})
+
+test('a goal contribution inherits the budget of its linked account and saves it', () => {
+  const source = readFileSync(new URL('./Goals.vue', import.meta.url), 'utf8')
+  assert.match(source, /data-testid="contribute-budget"/)
+  assert.match(source, /contributeBudgetId\.value = budgetIdForAccount\(linkableOperatingBudgets\.value, accountId\)/)
+  assert.match(source, /type: 'expense',\s*budgetId: contributeBudgetId\.value/)
+})
+
+test('saving a budget that takes a linked account removes the link from its previous budget', async () => {
+  const blockMatch = goalsView.match(/const isValidCurrencyCode[\s\S]*?const handleArchiveBudget/)
+  assert.ok(blockMatch)
+  const transpiled = ts.transpileModule(blockMatch[0].replace(/\nconst handleArchiveBudget$/, ''), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext }
+  }).outputText
+  const updates: Array<[string, unknown]> = []
+  const created: unknown[] = []
+  const ctx = {
+    editingOperatingBudget: { value: null as unknown },
+    budgetNameInput: { value: 'Casa Toro' }, budgetKindInput: { value: 'event' },
+    budgetCapCurrencyInput: { value: 'COP' }, budgetTotalLimitInput: { value: '' },
+    budgetStartDateInput: { value: '' }, budgetEndDateInput: { value: '' },
+    budgetCategoryCapInputs: {}, budgetManagementError: { value: '' },
+    savingOperatingBudget: { value: false }, showBudgetModal: { value: true },
+    budgetLinkedAccountIds: { value: ['cash-casa', 'cash-new'] },
+    budgetLinkConflicts: { value: [{ accountId: 'cash-casa', budgetId: 'ventas', budgetName: 'Ventas Casa' }] },
+    linkableOperatingBudgets: { value: [{ id: 'ventas', name: 'Ventas Casa', archived: false, linkedAccountIds: ['cash-casa', 'cash-ventas'] }] },
+    goalsStore: {
+      operatingBudgets: [] as unknown[],
+      async createOperatingBudget(draft: Record<string, unknown>) { created.push(draft); return { id: 'toro', ...draft, archived: false } },
+      async updateOperatingBudget(id: string, patch: unknown) { updates.push([id, patch]); return { id } },
+      async saveOperatingBudgetCategoryCaps() {}
+    }
+  }
+  const run = new Function('ctx', `const {
+    editingOperatingBudget, budgetNameInput, budgetKindInput, budgetCapCurrencyInput,
+    budgetTotalLimitInput, budgetStartDateInput, budgetEndDateInput, budgetCategoryCapInputs,
+    budgetManagementError, savingOperatingBudget, showBudgetModal, goalsStore,
+    budgetLinkConflicts, budgetLinkedAccountIds, linkableOperatingBudgets
+  } = ctx;
+  ${transpiled}
+  return handleSaveOperatingBudget();`)
+  await run(ctx)
+  assert.equal(ctx.budgetManagementError.value, '')
+  assert.deepEqual(created, [{ kind: 'event', name: 'Casa Toro', capCurrency: 'COP', linkedAccountIds: ['cash-casa', 'cash-new'] }])
+  assert.deepEqual(updates, [['ventas', { linkedAccountIds: ['cash-ventas'] }]])
+  assert.equal(ctx.showBudgetModal.value, false)
 })

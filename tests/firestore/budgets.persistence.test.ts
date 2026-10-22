@@ -127,6 +127,25 @@ test('decoder rejects malformed, spoofed, foreign, and non-chronological records
   assert.throws(() => decodeOperatingBudgetRecord(id('decode'), { ...base, unknown: true }, ws.member))
 })
 
+test('linked accounts round-trip on create and patch, and malformed stored entries are dropped on read', async () => {
+  const service = createBudgetPersistence(member, ws.member)
+  const created = await service.create({ kind: 'event', name: 'Linked', capCurrency: 'USD', linkedAccountIds: ['cash-a'] })
+  assert.deepEqual(created.linkedAccountIds, ['cash-a'])
+  assert.deepEqual((await service.patch(created.id, { linkedAccountIds: ['cash-a', 'cash-b'] })).linkedAccountIds, ['cash-a', 'cash-b'])
+  assert.deepEqual((await service.patch(created.id, { linkedAccountIds: [] })).linkedAccountIds, [])
+  await assert.rejects(service.create({ kind: 'event', name: 'Duplicated', capCurrency: 'USD', linkedAccountIds: ['a', 'a'] }))
+
+  const base = {
+    workspaceId: ws.member, kind: 'event', name: 'Fixture', capCurrency: 'USD', archived: false,
+    createdAt: Timestamp.fromMillis(1), updatedAt: Timestamp.fromMillis(2)
+  }
+  const decoded = decodeOperatingBudgetRecord(id('decode-links'), {
+    ...base, linkedAccountIds: ['cash-a', 42, null, { m: 1 }, '', 'a/b', 'cash-a', 'cash-b']
+  }, ws.member)
+  assert.deepEqual(decoded.linkedAccountIds, ['cash-a', 'cash-b'])
+  assert.deepEqual(decodeOperatingBudgetRecord(id('decode-links'), { ...base, linkedAccountIds: 'cash-a' }, ws.member).linkedAccountIds, [])
+})
+
 test('budget operations leave synthetic settings and ledger records unchanged', async () => {
   assert.deepEqual((await getDoc(doc(member, 'workspaces', ws.member))).data(), workspaceBaseline)
   assert.deepEqual((await getDoc(doc(member, 'transactions', ledgerId))).data(), ledgerBaseline)

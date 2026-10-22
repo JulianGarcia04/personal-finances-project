@@ -4,6 +4,10 @@ import {
   DEFAULT_MONTHLY_BUDGET_ID,
   allBudgetsEstimatedMonthlyTotal,
   eventBudgetCommittedAllocation,
+  budgetIdForAccount,
+  budgetIdToPersist,
+  canCarryBudget,
+  linkedAccountConflicts,
   monthlyBudgetAllocation,
   resolveBudgetId
 } from './budgets.ts'
@@ -201,4 +205,38 @@ test('passes positive amounts to the explicit converter and leaves input transac
   assert.equal(allBudgetsEstimatedMonthlyTotal(transactions, 2026, 0, convert), 47.5)
   assert.deepEqual(converted, [[12.5, 'EUR'], [12.5, 'EUR'], [7.5, 'USD']])
   assert.deepEqual(transactions, before)
+})
+
+test('only expenses and income can carry a budget', () => {
+  assert.deepEqual(
+    (['expense', 'income', 'transfer', 'loan', 'loan_payment'] as const).map(canCarryBudget),
+    [true, true, false, false, false]
+  )
+})
+
+const linkedBudgets = [
+  { id: 'casa', name: 'Casa', archived: false, linkedAccountIds: ['cash-casa'] },
+  { id: 'old', name: 'Viejo', archived: true, linkedAccountIds: ['cash-old'] },
+  { id: 'plain', name: 'Sin cuentas', archived: false }
+]
+
+test('a movement inherits the active budget its account is linked to, else the default', () => {
+  assert.equal(budgetIdForAccount(linkedBudgets, 'cash-casa'), 'casa')
+  assert.equal(budgetIdForAccount(linkedBudgets, 'cash-old'), DEFAULT_MONTHLY_BUDGET_ID)
+  assert.equal(budgetIdForAccount(linkedBudgets, 'unlinked'), DEFAULT_MONTHLY_BUDGET_ID)
+  assert.equal(budgetIdForAccount(linkedBudgets, ''), DEFAULT_MONTHLY_BUDGET_ID)
+})
+
+test('reports accounts already linked to another active budget', () => {
+  assert.deepEqual(linkedAccountConflicts(linkedBudgets, ['cash-casa', 'cash-old', 'free']), [
+    { accountId: 'cash-casa', budgetId: 'casa', budgetName: 'Casa' }
+  ])
+  assert.deepEqual(linkedAccountConflicts(linkedBudgets, ['cash-casa'], 'casa'), [])
+})
+
+test('a movement saved under the default budget stores no explicit reference', () => {
+  assert.equal(budgetIdToPersist('expense', DEFAULT_MONTHLY_BUDGET_ID), null)
+  assert.equal(budgetIdToPersist('income', 'casa'), 'casa')
+  assert.equal(budgetIdToPersist('transfer', 'casa'), null)
+  assert.equal(budgetIdToPersist('expense', ''), null)
 })

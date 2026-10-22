@@ -15,6 +15,7 @@ import {
 import { createCardBillingLookup, expenseAmountForDate, getInstallmentCount } from '@/lib/installments'
 import { parseDateOnly, toDateValue } from '@/lib/dates'
 import { createExpenseBudgetAssigner, selectBudgetExpenses } from '@/lib/transactionClassification'
+import { budgetIdToPersist } from '@/lib/budgets'
 import { 
   collection, 
   query, 
@@ -67,6 +68,7 @@ interface PocketMovementTransaction {
   createdAt: Date
   mirrorOf?: string | null
   pocketAllocation?: boolean
+  budgetId?: string
 }
 
 function isUsablePocketMovementAccount(account: any): boolean {
@@ -469,7 +471,7 @@ export const useTransactionsStore = defineStore('transactions', {
     },
 
     // 3. Crear una nueva Transacción
-    async addTransaction({ accountId, amount, description, categoryId, date, type, toAccountId = null, receiptUrl = null, notes = null, installments = 1, userId }: {
+    async addTransaction({ accountId, amount, description, categoryId, date, type, toAccountId = null, receiptUrl = null, notes = null, installments = 1, userId, budgetId = null }: {
       accountId: string;
       amount: number;
       description: string;
@@ -481,6 +483,7 @@ export const useTransactionsStore = defineStore('transactions', {
       notes?: string | null;
       installments?: number | null;
       userId?: string;
+      budgetId?: string | null;
     }): Promise<Transaction> {
       const user = auth.currentUser
       const authStore = useAuthStore()
@@ -504,6 +507,10 @@ export const useTransactionsStore = defineStore('transactions', {
         }
       }
 
+      // The default budget is the absence of a reference; only explicit budgets are stored.
+      const persistedBudgetId = budgetIdToPersist(type, budgetId)
+      const budgetField = persistedBudgetId ? { budgetId: persistedBudgetId } : {}
+
       const candidate = { accountId, toAccountId, type, amount: normalizedAmount }
       if (transactionTouchesPocket(accountsStore, candidate)) {
         this.loading = true
@@ -523,7 +530,8 @@ export const useTransactionsStore = defineStore('transactions', {
             notes,
             installments: 1,
             currency: account.currency || 'USD',
-            createdAt: new Date()
+            createdAt: new Date(),
+            ...budgetField
           }
           const result = await commitPocketMovement({ kind: 'created', workspaceId, userId: user.uid, next })
           const txWithId: Transaction = { id: result.id, ...next, date: transactionDate }
@@ -567,7 +575,8 @@ export const useTransactionsStore = defineStore('transactions', {
           notes,
           installments: installmentCount,
           currency: account.currency || 'USD',
-          createdAt: new Date()
+          createdAt: new Date(),
+          ...budgetField
         }
 
         // 1. Guardar la transacción en Firestore

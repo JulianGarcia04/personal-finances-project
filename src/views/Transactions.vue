@@ -202,7 +202,7 @@
                   <span>{{ getCategory(tx.categoryId)?.name }}</span>
                 </span>
                 <span v-else class="text-text-muted text-xs">-</span>
-                <div v-if="tx.type === 'expense'" class="mt-2 max-w-48">
+                <div v-if="canCarryBudget(tx.type)" class="mt-2 max-w-48">
                   <label class="sr-only" :for="`budget-assignment-row-${tx.id}`">Presupuesto asignado</label>
                   <select
                     v-if="budgetSettingsReady"
@@ -400,7 +400,7 @@
               <TrashIcon class="w-4 h-4" />
             </button>
           </div>
-          <div v-if="tx.type === 'expense'" class="w-full pt-1.5">
+          <div v-if="canCarryBudget(tx.type)" class="w-full pt-1.5">
             <label class="sr-only" :for="`budget-assignment-card-${tx.id}`">Presupuesto asignado</label>
             <select
               v-if="budgetSettingsReady"
@@ -560,6 +560,36 @@
                   : 'Registra en la descripción quién te pagó (ej. "Juan me pagó"). Entra a la cuenta pero no cuenta como ingreso.' }}
               </p>
             </div>
+          </div>
+
+          <!-- Budget (Expense/Income only) -->
+          <div v-if="showNewTxBudget" class="space-y-1 animate-fade-in" data-testid="new-tx-budget">
+            <label for="new-tx-budget" class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Presupuesto</label>
+            <select
+              id="new-tx-budget"
+              v-model="newTx.budgetId"
+              class="field"
+              @change="newTxBudgetTouched = true"
+            >
+              <option
+                v-for="option in budgetOptionsForExpense()"
+                :key="option.id"
+                :value="option.id"
+                :disabled="option.archived"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+            <p v-if="newTxInheritedBudgetName" class="flex items-start gap-1 text-[10px] text-accent-emerald">
+              <LinkIcon class="w-3 h-3 mt-px shrink-0" />
+              <span>Asignado automáticamente: esta cuenta está ligada a «{{ newTxInheritedBudgetName }}». Puedes cambiarlo.</span>
+            </p>
+            <p v-else-if="newTx.type === 'income' && newTx.budgetId !== DEFAULT_MONTHLY_BUDGET_ID" class="text-[10px] text-text-muted">
+              Este ingreso financia solo este presupuesto y no se suma al ingreso del mes.
+            </p>
+            <p v-else class="text-[10px] text-text-muted">
+              Los movimientos entran a este presupuesto cuando se lo asignas o cuando salen de una cuenta ligada.
+            </p>
           </div>
 
           <!-- Description and amount -->
@@ -856,7 +886,7 @@
             </div>
           </div>
 
-          <div v-if="editingOriginalType === 'expense' && editTx.type === 'expense'" class="rounded-xl border border-border/60 bg-slate-900/30 p-3 space-y-2">
+          <div v-if="canCarryBudget(editingOriginalType) && editTx.type === editingOriginalType" class="rounded-xl border border-border/60 bg-slate-900/30 p-3 space-y-2">
             <label class="block text-[10px] font-semibold text-text-secondary uppercase tracking-wider">
               Presupuesto asignado
               <select
@@ -1032,7 +1062,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useGoalsStore } from '@/stores/goalsStore'
-import { DEFAULT_MONTHLY_BUDGET_ID, resolveBudgetId } from '@/lib/budgets'
+import { DEFAULT_MONTHLY_BUDGET_ID, budgetIdForAccount, canCarryBudget, resolveBudgetId } from '@/lib/budgets'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useAuthStore } from '@/stores/authStore'
 import type { Category, Transaction, TransactionType } from '@/types'
@@ -1052,7 +1082,8 @@ import {
   Activity, Scissors, BookOpen, Wrench, Shield,
   HandCoins as HandCoinsIcon,
   RotateCcw as RotateCcwIcon,
-  SlidersHorizontal as SlidersHorizontalIcon
+  SlidersHorizontal as SlidersHorizontalIcon,
+  Link2 as LinkIcon
 } from 'lucide-vue-next'
 import BaseSheet from '@/components/ui/BaseSheet.vue'
 import CategoryQuickCreate from '@/components/CategoryQuickCreate.vue'
@@ -1188,6 +1219,7 @@ const newTx = ref<{
   description: string;
   notes: string;
   userId?: string;
+  budgetId: string;
 }>({
   type: 'expense',
   accountId: '',
@@ -1198,6 +1230,7 @@ const newTx = ref<{
   date: toLocalDateKey(),
   description: '',
   notes: '',
+  budgetId: DEFAULT_MONTHLY_BUDGET_ID,
   userId: ''
 })
 
@@ -1269,7 +1302,7 @@ const isBudgetAssignmentPending = (transactionId: string) =>
   assigningBudgetIds.value.has(transactionId)
 
 const assignBudgetToExpense = async (transaction: any, budgetId: string): Promise<boolean> => {
-  if (!budgetSettingsReady.value || transaction.type !== 'expense') return false
+  if (!budgetSettingsReady.value || !canCarryBudget(transaction.type)) return false
   if (resolveBudgetId(transaction.budgetId) === budgetId) return false
   if (assigningBudgetIds.value.has(transaction.id)) return false
 
@@ -1278,8 +1311,8 @@ const assignBudgetToExpense = async (transaction: any, budgetId: string): Promis
     await transactionsStore.assignExpenseBudget(transaction.id, budgetId)
     return true
   } catch (error: unknown) {
-    console.error('Error actualizando presupuesto del gasto:', error)
-    alert(error instanceof Error ? error.message : 'No se pudo actualizar el presupuesto del gasto')
+    console.error('Error actualizando presupuesto del movimiento:', error)
+    alert(error instanceof Error ? error.message : 'No se pudo actualizar el presupuesto del movimiento')
     return false
   } finally {
     assigningBudgetIds.value.delete(transaction.id)
@@ -1299,7 +1332,7 @@ const applyEditBudgetAssignment = async () => {
   if (!budgetSettingsReady.value) return
 
   const transaction = transactionsStore.transactions.find(tx => tx.id === editingTxId.value)
-  if (!transaction || transaction.type !== 'expense') return
+  if (!transaction || !canCarryBudget(transaction.type)) return
 
   const selectedOption = budgetOptionsForExpense(editingOriginalBudgetId.value)
     .find(option => option.id === editBudgetId.value)
@@ -1384,6 +1417,24 @@ const availableNewSourceAccounts = computed(() => {
 
 // Filtrar categorías según tipo seleccionado (ingreso o gasto)
 const creatingNewTxCategory = ref(false)
+
+// Budget of a new movement: inherited from the account's linked budget until the user picks one.
+const newTxBudgetTouched = ref(false)
+const linkableBudgets = computed(() => goalsStore.operatingBudgets.map(({ budget }) => budget))
+const showNewTxBudget = computed(() => {
+  if (!budgetSettingsReady.value || !canCarryBudget(newTx.value.type)) return false
+  // Bridge-account expenses are replicated into the mirror workspace, which has its own budgets.
+  return !(newTx.value.type === 'expense' && accountsStore.getAccountById(newTx.value.accountId)?.mirror)
+})
+const newTxInheritedBudgetName = computed(() => {
+  const inheritedId = budgetIdForAccount(linkableBudgets.value, newTx.value.accountId)
+  if (inheritedId === DEFAULT_MONTHLY_BUDGET_ID || inheritedId !== newTx.value.budgetId) return ''
+  return linkableBudgets.value.find(budget => budget.id === inheritedId)?.name ?? ''
+})
+watch([() => newTx.value.accountId, linkableBudgets], () => {
+  if (newTxBudgetTouched.value) return
+  newTx.value.budgetId = budgetIdForAccount(linkableBudgets.value, newTx.value.accountId)
+})
 const handleNewTxCategoryCreated = (category: Category) => {
   newTx.value.categoryId = category.id
   creatingNewTxCategory.value = false
@@ -1414,8 +1465,10 @@ const closeAddModal = () => {
     date: toLocalDateKey(),
     description: '',
     notes: '',
-    userId: ''
+    userId: '',
+    budgetId: DEFAULT_MONTHLY_BUDGET_ID
   }
+  newTxBudgetTouched.value = false
   clearReceipt()
   clearPocketTransferQuery()
 }
@@ -1510,7 +1563,8 @@ const saveTransaction = async () => {
       receiptUrl: uploadedReceiptUrl.value || null,
       notes: newTx.value.notes || null,
       installments,
-      userId: newTx.value.userId || undefined
+      userId: newTx.value.userId || undefined,
+      budgetId: showNewTxBudget.value ? newTx.value.budgetId : null
     })
     closeAddModal()
   } catch (err: any) {

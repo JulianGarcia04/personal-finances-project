@@ -195,5 +195,10 @@ test('default identity is reserved and archived budgets are readable but termina
   await denied(updateDoc(ref, { archived: false, updatedAt: serverTimestamp() }))
   await denied(updateDoc(ref, { name: 'Archived edit', updatedAt: serverTimestamp() }))
   await denied(updateDoc(ref, { archived: true, name: 'Mixed archive edit', updatedAt: serverTimestamp() }))
+  await denied(updateDoc(ref, { linkedAccountIds: ['account-a'], updatedAt: serverTimestamp() }))
   await denied(deleteDoc(ref))
+
+  const archiving = doc(member, 'budgets', id('archive-with-links'))
+  await allowed(setDoc(archiving, rawBudget(ws.member)))
+  await denied(updateDoc(archiving, { archived: true, linkedAccountIds: ['account-a'], updatedAt: serverTimestamp() }))
 })
