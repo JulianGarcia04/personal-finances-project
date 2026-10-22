@@ -765,6 +765,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
 
       QUÉ HERRAMIENTA USAR:
       - Totales, resúmenes, "¿cuánto gasté/gané…?", gastos por categoría/cuenta/mes/día, comparaciones y promedios → getFinancialSummary. NUNCA sumes tú mismo los resultados de listTransactions para dar totales: listTransactions es solo para mostrar movimientos concretos.
+      - getFinancialSummary trae dos vistas: totals (todo el dinero que entró y salió, sin importar el presupuesto) y byBudget (ingreso del mes sin los fondos asignados a presupuestos, gasto sin el de presupuestos que se pagan con sus propios fondos, y por cada presupuesto sus fondos, gastado y disponible). Para "¿cuánto me entró/gasté en total?" responde con totals; para preguntas de presupuestos (por ejemplo "¿cuánto me queda en Ventas Casa?" o "¿cuánto gasté sin contar el presupuesto X?") usa byBudget. Si la pregunta es ambigua, da ambas cifras y explica la diferencia.
       - Buscar movimientos por concepto o descripción ("Netflix", "ropa", "el arriendo") → semanticSearchTransactions (para el total de un concepto, suma solo las coincidencias relevantes e indica que es aproximado).
       - Presupuestos, límite de gasto, tasas de cambio, ingreso declarado, "¿cómo voy este mes?" → getWorkspaceSettings.
       - Saldos, cupos de tarjetas y patrimonio neto → listAccounts: usa totals.netWorth (ya convertido a ${primaryCurrency}, igual que el panel de control) y balanceInPrimary por cuenta; nunca conviertas monedas a mano.

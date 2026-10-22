@@ -1,5 +1,15 @@
 import { AgentToolError, buildDateContext, NameMaps } from "./agentTools";
-import { CardBilling, cardBillingOf, paymentMonthIndex, zonedDateKey, zonedWallClockToInstant, zonedYearMonth } from "./http";
+import { CardBilling, cardBillingOf, paymentMonthIndex, YearMonth, zonedDateKey, zonedWallClockToInstant, zonedYearMonth } from "./http";
+import {
+  AlertScope,
+  LinkedBudgetLookup,
+  monthlyExpenseTotal,
+  monthlyIncomeTotal,
+  scopeFundsTotal,
+  scopeTotalSpend,
+  selfFundedBudgetIds,
+  SpendOptions
+} from "./budgetAlerts";
 
 // Pure period aggregation for the chat agent (getFinancialSummary /
 // getWorkspaceSettings). No firebase-admin here: callers pass plain rows.
@@ -318,6 +328,39 @@ export interface FinancialSummary {
     deltas: Record<"income" | "expenses" | "net", { diff: number; percent: number }>;
   };
   notes: string[];
+  /** Per-budget view (S9); only with `budgetBreakdown`, whole calendar months and no account/category filter. */
+  byBudget?: BudgetBreakdown;
+}
+
+/** Raw budget document fields the breakdown reads (budgets/{id}). */
+export interface SummaryBudget {
+  id: string;
+  name?: unknown;
+  kind?: unknown;
+  archived?: unknown;
+  linkedAccountIds?: unknown;
+}
+
+export interface BudgetBreakdownRow {
+  id: string;
+  name: string;
+  kind: AlertScope["kind"];
+  /** Assigned income plus transfers into its linked accounts minus out; null when a manual rate is missing. */
+  funds: number | null;
+  spent: number | null;
+  available: number | null;
+}
+
+export interface BudgetBreakdown {
+  /** Income of the period's months not assigned to an additional budget. */
+  monthlyIncome: number | null;
+  /** Spending of the period's months without budgets paid by their own funds. */
+  monthlyExpense: number | null;
+  /** Active additional budgets with funds or spending (event budgets: all time; monthly: the period). */
+  budgets: BudgetBreakdownRow[];
+  /** Some figure is null because a manual exchange rate is missing. */
+  incomplete: boolean;
+  notes: string[];
 }
 
 export interface SummaryOptions {
@@ -335,6 +378,12 @@ export interface SummaryOptions {
   topN?: number;
   /** Billing days by account id; expenses on these cards count in their payment months. */
   cardBilling?: ReadonlyMap<string, CardBilling>;
+  /**
+   * Adds `byBudget`: the workspace's budgets (archived included, for self-funding kinds) and
+   * extra rows outside the period that event budgets need (their all-time income, expenses and
+   * transfers). Extra rows never feed the existing totals.
+   */
+  budgetBreakdown?: { budgets: SummaryBudget[]; extraRows?: SummaryTransaction[] };
 }
 
 const categoryName = (id: string | null | undefined, names: NameMaps) =>
@@ -498,7 +547,114 @@ export function summarize(rows: SummaryTransaction[], options: SummaryOptions): 
   missing.forEach(code => {
     notes.push(`Tasa de cambio faltante para ${code}: se usó 1:1. Configúrala en Objetivos & Presupuesto para totales exactos.`);
   });
+  const byBudget = options.budgetBreakdown && !options.accountId && !options.categoryId
+    ? budgetBreakdown(rows, options, options.budgetBreakdown)
+    : null;
+  if (byBudget) summary.byBudget = byBudget;
   return summary;
+}
+
+/** Calendar months a period covers exactly (first to last day), or null for partial months. */
+function wholeMonths(period: ResolvedPeriod): YearMonth[] | null {
+  const start = keyParts(period.start);
+  const end = keyParts(period.end);
+  if (start.day !== 1 || end.day !== daysInMonth(end.year, end.month)) return null;
+  const months: YearMonth[] = [];
+  for (let index = start.year * 12 + start.month; index <= end.year * 12 + end.month; index++) {
+    months.push({ year: Math.floor(index / 12), month: index % 12 });
+  }
+  return months;
+}
+
+/** Sum of per-month figures; null as soon as one is unknown (missing manual rate). */
+function sumKnown(values: (number | null)[]): number | null {
+  let total = 0;
+  for (const value of values) {
+    if (value === null) return null;
+    total += value;
+  }
+  return round2(total);
+}
+
+/**
+ * Per-budget view with the server budget semantics (budgetAlerts.ts, same as the app's Budgets
+ * screen): month income without income assigned to other budgets, month spending without budgets
+ * self-funded in that month, and each active additional budget's funds, spending and available.
+ * Conversion uses manual rates only, so a missing rate makes a figure null (never 1:1).
+ */
+function budgetBreakdown(
+  rows: SummaryTransaction[],
+  options: SummaryOptions,
+  input: NonNullable<SummaryOptions["budgetBreakdown"]>
+): BudgetBreakdown | null {
+  const months = wholeMonths(options.period);
+  if (!months) return null;
+  const { primaryCurrency, timeZone } = options;
+  // Blank currency means the primary one, like convertToPrimary.
+  const all = new Map<string, Record<string, any>>();
+  for (const row of [...rows, ...(input.extraRows ?? [])]) {
+    all.set(row.id, { ...row, currency: row.currency || primaryCurrency });
+  }
+  const movements = [...all.values()];
+  const funding = movements.filter(tx => tx.type === "income" || tx.type === "transfer");
+  const spendOptions: SpendOptions = {
+    timeZone,
+    reportingCurrency: primaryCurrency,
+    exchangeRates: options.exchangeRates,
+    billingFor: accountId => (accountId ? options.cardBilling?.get(accountId) ?? null : null)
+  };
+
+  const kindOf = (budgetId: string) => {
+    const kind = input.budgets.find(budget => budget.id === budgetId)?.kind;
+    return kind === "monthly" || kind === "event" ? kind : undefined;
+  };
+  const active = input.budgets.filter((budget): budget is SummaryBudget & { kind: AlertScope["kind"] } =>
+    budget.archived === false && (budget.kind === "monthly" || budget.kind === "event"));
+  const links = new Map<string, string>();
+  for (const budget of active) {
+    if (!Array.isArray(budget.linkedAccountIds)) continue;
+    for (const accountId of budget.linkedAccountIds) {
+      if (typeof accountId === "string" && !links.has(accountId)) links.set(accountId, budget.id);
+    }
+  }
+  const linkedBudgetOf: LinkedBudgetLookup = accountId => links.get(accountId) ?? null;
+
+  const monthlyIncome = sumKnown(months.map(month => monthlyIncomeTotal(movements, month, spendOptions)));
+  const monthlyExpense = sumKnown(months.map(month => monthlyExpenseTotal(movements, month, spendOptions,
+    selfFundedBudgetIds(funding, month, { timeZone }, kindOf, linkedBudgetOf))));
+
+  const budgets: BudgetBreakdownRow[] = [];
+  for (const budget of active) {
+    const scope: AlertScope = { id: budget.id, kind: budget.kind };
+    // Event figures ignore the month, so one evaluation is the all-time figure.
+    const evaluated = scope.kind === "event" ? months.slice(0, 1) : months;
+    const funds = sumKnown(evaluated.map(month => scopeFundsTotal(funding, scope, month, spendOptions, linkedBudgetOf)));
+    const spent = sumKnown(evaluated.map(month => scopeTotalSpend(movements, scope, month, spendOptions)));
+    if (funds === 0 && spent === 0) continue;
+    budgets.push({
+      id: budget.id,
+      name: typeof budget.name === "string" && budget.name.trim() ? budget.name.trim() : budget.id,
+      kind: scope.kind,
+      funds,
+      spent,
+      available: funds === null || spent === null ? null : round2(funds - spent)
+    });
+  }
+
+  const incomplete = monthlyIncome === null || monthlyExpense === null ||
+    budgets.some(budget => budget.funds === null || budget.spent === null);
+  const notes = [
+    "byBudget: ingresos del periodo sin los asignados a un presupuesto (son fondos de ese presupuesto) y gastos sin los de presupuestos que se financian con sus propios fondos; los presupuestos de evento suman todo su histórico y los mensuales solo el periodo."
+  ];
+  if (incomplete) {
+    const missing = new Set<string>();
+    for (const tx of movements) {
+      const rate = Number(options.exchangeRates[tx.currency]);
+      if (tx.currency !== primaryCurrency && !(Number.isFinite(rate) && rate > 0)) missing.add(String(tx.currency));
+    }
+    notes.push(`Desglose por presupuesto incompleto: falta la tasa de cambio manual de ${[...missing].join(", ") || "alguna moneda"}; las cifras en null no se pueden calcular sin ella.`);
+  }
+  return { monthlyIncome, monthlyExpense, budgets, incomplete, notes };
 }
 
 /** Category averages over the last `months` complete months (M4: the partial current month is excluded). */

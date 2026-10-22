@@ -324,3 +324,91 @@ test("billingLookbackStart reaches the local start of the month two months befor
   assert.equal(billingLookbackStart(new Date("2026-10-01T05:00:00Z"), TZ).toISOString(), "2026-08-01T05:00:00.000Z");
   assert.equal(billingLookbackStart(new Date("2027-01-05T05:00:00Z"), TZ).toISOString(), "2026-11-01T05:00:00.000Z");
 });
+
+// --- Per-budget breakdown (S9) ---------------------------------------------------
+
+const VENTAS = { id: "ventas", name: "Ventas Casa", kind: "event", archived: false, linkedAccountIds: ["ventasAcct"] };
+const BUDGET_ROWS: SummaryTransaction[] = [
+  tx("salary", "income", 5_000_000, "2026-10-01T17:00:00Z", { categoryId: "salary" }),
+  tx("sale", "income", 1_000_000, "2026-10-02T17:00:00Z", { budgetId: "ventas" }),
+  tx("paint", "expense", -300_000, "2026-10-03T17:00:00Z", { categoryId: "fun", budgetId: "ventas" }),
+  tx("market2", "expense", -120_000, "2026-10-04T17:00:00Z", { categoryId: "food" })
+];
+
+const runBudgets = (rows: SummaryTransaction[], input: Parameters<typeof resolvePeriod>[0], extra: Partial<Parameters<typeof summarize>[1]> = {}) =>
+  summarize(rows, {
+    period: resolvePeriod(input, NOW, TZ),
+    now: NOW,
+    timeZone: TZ,
+    primaryCurrency: "COP",
+    exchangeRates: RATES,
+    names: NAMES,
+    ...extra
+  });
+
+test("byBudget separates income assigned to a budget and spending of a self-funded budget, totals unchanged", () => {
+  const s = runBudgets(BUDGET_ROWS, { preset: "this_month" }, { budgetBreakdown: { budgets: [VENTAS] } });
+  assert.equal(s.totals.income, 6_000_000);
+  assert.equal(s.totals.expenses, 420_000);
+  assert.ok(s.byBudget);
+  assert.equal(s.byBudget.monthlyIncome, 5_000_000);
+  assert.equal(s.byBudget.monthlyExpense, 120_000);
+  assert.equal(s.byBudget.incomplete, false);
+  assert.deepEqual(s.byBudget.budgets, [
+    { id: "ventas", name: "Ventas Casa", kind: "event", funds: 1_000_000, spent: 300_000, available: 700_000 }
+  ]);
+});
+
+test("byBudget counts a transfer from an unlinked account into a linked account as funds", () => {
+  const rows = [...BUDGET_ROWS, tx("topUp", "transfer", 200_000, "2026-10-05T17:00:00Z", { accountId: "bank", toAccountId: "ventasAcct" })];
+  const s = runBudgets(rows, { preset: "this_month" }, { budgetBreakdown: { budgets: [VENTAS] } });
+  assert.deepEqual(s.byBudget?.budgets, [
+    { id: "ventas", name: "Ventas Casa", kind: "event", funds: 1_200_000, spent: 300_000, available: 900_000 }
+  ]);
+  assert.equal(s.totals.income, 6_000_000);
+});
+
+test("byBudget uses all-time rows of event budgets and lists only active budgets with movements", () => {
+  // Income assigned last month still funds the event budget and makes it self-funded this month.
+  const older = [tx("saleSep", "income", 1_000_000, "2026-09-02T17:00:00Z", { budgetId: "ventas" })];
+  const rows = BUDGET_ROWS.filter(row => row.id !== "sale");
+  const budgets = [
+    VENTAS,
+    { id: "trip", name: "Viaje", kind: "event", archived: false },
+    { id: "old", name: "Viejo", kind: "monthly", archived: true }
+  ];
+  const s = runBudgets(rows, { preset: "this_month" }, { budgetBreakdown: { budgets, extraRows: older } });
+  assert.equal(s.totals.income, 5_000_000);
+  assert.equal(s.byBudget?.monthlyExpense, 120_000);
+  assert.deepEqual(s.byBudget?.budgets.map(b => [b.id, b.funds, b.spent, b.available]), [["ventas", 1_000_000, 300_000, 700_000]]);
+});
+
+test("byBudget leaves existing summary fields identical for a workspace without budgets", () => {
+  for (const input of [{ preset: "this_month" as const }, { lastCompleteMonths: 3 }, { preset: "this_year" as const }]) {
+    const before = run(input, { compareWithPrevious: true, groupBy: "category" });
+    const after = run(input, { compareWithPrevious: true, groupBy: "category", budgetBreakdown: { budgets: [] } });
+    const { byBudget, ...existing } = after;
+    assert.deepEqual(existing, before);
+    assert.ok(byBudget);
+    assert.deepEqual(byBudget.budgets, []);
+  }
+  assert.equal(run({ preset: "this_month" }).byBudget, undefined);
+});
+
+test("byBudget is incomplete (null figures) when a manual rate is missing, instead of using 1:1", () => {
+  const s = run({ preset: "this_month" }, { budgetBreakdown: { budgets: [] } });
+  // ROWS has a EUR expense without a rate.
+  assert.equal(s.byBudget?.incomplete, true);
+  assert.equal(s.byBudget?.monthlyIncome, 5_000_000);
+  assert.equal(s.byBudget?.monthlyExpense, null);
+  assert.ok(s.byBudget?.notes.some(note => note.includes("EUR")));
+});
+
+test("byBudget is only computed for whole calendar months and unfiltered summaries", () => {
+  const week = runBudgets(BUDGET_ROWS, { preset: "this_week" }, { budgetBreakdown: { budgets: [VENTAS] } });
+  assert.equal(week.byBudget, undefined);
+  const filtered = runBudgets(BUDGET_ROWS, { preset: "this_month" }, { accountId: "bank", budgetBreakdown: { budgets: [VENTAS] } });
+  assert.equal(filtered.byBudget, undefined);
+  const range = runBudgets(BUDGET_ROWS, { startDate: "2026-10-01", endDate: "2026-10-31" }, { budgetBreakdown: { budgets: [VENTAS] } });
+  assert.equal(range.byBudget?.monthlyIncome, 5_000_000);
+});
