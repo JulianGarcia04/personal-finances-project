@@ -69,9 +69,9 @@ function fakeMessaging(outcomeFor: (token: string) => Outcome = () => "ok", opti
 
 test("80% push says the cap is near, with spend, budget and percent", () => {
   const push = buildBudgetAlertPush({ ...baseInput, threshold: 80 });
-  assert.match(push.notification!.title!, /cerca del tope de Mercado \(85 %\)/);
+  assert.match(push.notification!.title!, /cerca del tope de Mercado \(Presupuesto mensual\) \(85 %\)/);
   assert.match(push.notification!.body!, /Llevas .*850\.000.* de .*1\.000\.000/);
-  assert.match(push.notification!.body!, /Casa · octubre de 2026/);
+  assert.match(push.notification!.body!, /Casa · Presupuesto mensual · octubre de 2026/);
   assert.deepEqual(push.data, { link: "/goals", workspaceId: "ws1", categoryId: "food", threshold: "80" });
   const named = buildBudgetAlertPush({ ...baseInput, threshold: 80, budgetId: "house", budgetName: "Hogar" });
   assert.equal(named.data!.budgetId, "house");

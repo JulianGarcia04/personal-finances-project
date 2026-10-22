@@ -63,10 +63,15 @@ export interface BudgetAlertCopy {
   money: (value: number) => string;
 }
 
+/** Name shown for the protected default monthly budget. */
+export const DEFAULT_BUDGET_LABEL = "Presupuesto mensual";
+
 export function budgetAlertCopy(input: BudgetAlertEmailInput): BudgetAlertCopy {
   const category = oneLine(input.categoryName) || "Sin categoría";
   const workspace = oneLine(input.workspaceName);
-  const budgetName = oneLine(input.budgetName ?? "");
+  // Every cap alert names the budget reaching it; the default budget has no stored name.
+  // The month's spending vs income alert covers the whole workspace, so it names none.
+  const budgetName = oneLine(input.budgetName ?? "") || (input.incomeBudget ? "" : DEFAULT_BUDGET_LABEL);
   const wholeBudget = budgetName ? `del presupuesto «${budgetName}»` : "de tu presupuesto mensual";
   const label = budgetName ? `${category} (${budgetName})` : category;
   const target = budgetName ? `${category} del presupuesto «${budgetName}»` : `tu presupuesto de ${category}`;
