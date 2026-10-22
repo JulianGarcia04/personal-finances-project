@@ -137,6 +137,10 @@ const additionalOperatingBudgetIdSchema = operatingBudgetIdSchema.refine(
 
 export const OperatingBudgetKindSchema = z.enum(['monthly', 'event'])
 
+// Accounts whose new movements default to this budget; at most 20, no duplicates (rules cap the list size).
+const operatingBudgetLinkedAccountsSchema = z.array(operatingBudgetIdSchema).max(20)
+  .refine(ids => new Set(ids).size === ids.length, 'Linked accounts must be unique')
+
 const operatingBudgetPlanningFields = {
   startDate: operatingBudgetDateSchema.optional(),
   endDate: operatingBudgetDateSchema.optional()
@@ -154,16 +158,24 @@ const validateOperatingBudgetPlanning = (
   }
 }
 
+// Alerts and lists call the default budget "Presupuesto mensual", so a new budget cannot take that
+// name (compared trimmed, case- and accent-insensitive). Stored budgets with it still load.
+const RESERVED_BUDGET_NAME = 'presupuesto mensual'
+export const RESERVED_BUDGET_NAME_ERROR = 'Ese nombre está reservado para el presupuesto mensual predeterminado.'
+export const isReservedBudgetName = (name: string): boolean =>
+  name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/\s+/g, ' ').toLowerCase() === RESERVED_BUDGET_NAME
+
 export const OperatingBudgetDraftSchema = z.object({
   kind: OperatingBudgetKindSchema,
-  name: operatingBudgetNameSchema,
+  name: operatingBudgetNameSchema.refine(name => !isReservedBudgetName(name), RESERVED_BUDGET_NAME_ERROR),
   capCurrency: operatingBudgetCurrencySchema,
   totalLimit: operatingBudgetLimitSchema.optional(),
+  linkedAccountIds: operatingBudgetLinkedAccountsSchema.optional(),
   ...operatingBudgetPlanningFields
 }).strict().superRefine(validateOperatingBudgetPlanning)
 
 // id is injected from the root document ID by the reader; createdAt/updatedAt must already be decoded Dates.
-export const OperatingBudgetRecordSchema = z.object({
+const operatingBudgetRecordFields = {
   id: additionalOperatingBudgetIdSchema,
   workspaceId: operatingBudgetIdSchema,
   kind: OperatingBudgetKindSchema,
@@ -173,15 +185,22 @@ export const OperatingBudgetRecordSchema = z.object({
   archived: z.boolean(),
   createdAt: operatingBudgetDateSchema,
   updatedAt: operatingBudgetDateSchema,
+  linkedAccountIds: operatingBudgetLinkedAccountsSchema.optional(),
   ...operatingBudgetPlanningFields
-}).strict().superRefine(validateOperatingBudgetPlanning)
+}
+export const OperatingBudgetRecordSchema = z.object(operatingBudgetRecordFields)
+  .strict().superRefine(validateOperatingBudgetPlanning)
+// Stored documents may carry fields a newer client added; drop them instead of failing every load.
+export const StoredOperatingBudgetRecordSchema = z.object(operatingBudgetRecordFields)
+  .strip().superRefine(validateOperatingBudgetPlanning)
 
 // B2P must merge a patch with the stored record and validate the full post-state (kind/date chronology included).
 export const OperatingBudgetPatchSchema = z.object({
   name: operatingBudgetNameSchema.optional(),
   totalLimit: operatingBudgetLimitSchema.nullable().optional(),
   startDate: operatingBudgetDateSchema.nullable().optional(),
-  endDate: operatingBudgetDateSchema.nullable().optional()
+  endDate: operatingBudgetDateSchema.nullable().optional(),
+  linkedAccountIds: operatingBudgetLinkedAccountsSchema.optional()
 }).strict().superRefine((patch, ctx) => {
   if (!Object.values(patch).some(value => value !== undefined)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Patch must change at least one field' })

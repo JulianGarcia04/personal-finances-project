@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test, { after, before } from 'node:test'
-import { collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, updateDoc, where, writeBatch } from 'firebase/firestore'
+import { collection, deleteDoc, doc, getDoc, getDocs, query, serverTimestamp, setDoc, updateDoc, where, writeBatch } from 'firebase/firestore'
 import { createPocketFixture, functionsRequire } from './pockets.fixtures.mjs'
 
 let fixture
@@ -1121,3 +1121,60 @@ for (const attack of ['created', 'updated', 'relinked', 'deleted']) {
     if (created) await transactionsStore.deleteTransaction(created.id)
   })
 }
+
+// A root account linked to an active budget, plus a parent with one pocket.
+const linkedPocketSetup = async label => {
+  const { accountsStore, db, workspaceId } = fixture
+  const linked = await accountsStore.addAccount({ name: `${label} linked cash`, type: 'checking', balance: 500, currency: 'COP' })
+  const parent = await accountsStore.addAccount({ name: `${label} parent`, type: 'checking', balance: 400, currency: 'COP' })
+  const pocket = await accountsStore.addAccount({ name: `${label} pocket`, type: 'savings', balance: 100, currency: 'COP', parentAccountId: parent.id })
+  const budget = doc(collection(db, 'budgets'))
+  // The budget and its account link are written together, as the client does.
+  const link = writeBatch(db)
+  link.set(budget, {
+    workspaceId, kind: 'event', name: `${label} event`, capCurrency: 'COP', archived: false,
+    linkedAccountIds: [linked.id], createdAt: serverTimestamp(), updatedAt: serverTimestamp()
+  })
+  link.update(doc(db, 'accounts', linked.id), { linkedBudgetId: budget.id })
+  await link.commit()
+  return { linked, parent, pocket, budgetId: budget.id }
+}
+
+test('a linked expense edited into pocket income leaves its budget in the same pocket write', async () => {
+  const { transactionsStore, adminDb } = fixture
+  const { linked, pocket, budgetId } = await linkedPocketSetup('Leave')
+  const date = new Date()
+  const expense = await transactionsStore.addTransaction({
+    accountId: linked.id, amount: 40, description: 'Linked expense', categoryId: 'food', date, type: 'expense', budgetId
+  })
+  const stored = async () => (await adminDb.collection('transactions').doc(expense.id).get()).data()
+  const balance = async accountId => (await adminDb.collection('accounts').doc(accountId).get()).data().balance
+  assert.equal((await stored()).budgetId, budgetId)
+
+  // The edit form passes the link of the edited account (the pocket has none).
+  await transactionsStore.updateTransaction(expense.id, {
+    accountId: pocket.id, amount: 30, description: 'Now pocket income', categoryId: 'food', date, type: 'income', linkedBudgetId: null
+  })
+  assert.equal((await stored()).type, 'income')
+  assert.equal('budgetId' in (await stored()), false)
+  assert.deepEqual([await balance(linked.id), await balance(pocket.id)], [500, 130])
+  assert.equal('budgetId' in transactionsStore.transactions.find(transaction => transaction.id === expense.id), false)
+})
+
+test('a pocket transfer edited into an expense of a linked account takes its budget in the same pocket write', async () => {
+  const { transactionsStore, adminDb } = fixture
+  const { linked, parent, pocket, budgetId } = await linkedPocketSetup('Join')
+  const date = new Date()
+  const transfer = await transactionsStore.addTransaction({
+    accountId: parent.id, toAccountId: pocket.id, amount: 40, description: 'Fill the pocket', categoryId: '', date, type: 'transfer'
+  })
+  const stored = async () => (await adminDb.collection('transactions').doc(transfer.id).get()).data()
+  const balance = async accountId => (await adminDb.collection('accounts').doc(accountId).get()).data().balance
+
+  await transactionsStore.updateTransaction(transfer.id, {
+    accountId: linked.id, amount: 30, description: 'Linked expense', categoryId: 'food', date, type: 'expense', linkedBudgetId: budgetId
+  })
+  assert.deepEqual([(await stored()).type, (await stored()).budgetId], ['expense', budgetId])
+  assert.deepEqual([await balance(parent.id), await balance(pocket.id), await balance(linked.id)], [300, 100, 470])
+  assert.equal(transactionsStore.transactions.find(transaction => transaction.id === transfer.id)?.budgetId, budgetId)
+})

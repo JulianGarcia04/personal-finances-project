@@ -133,7 +133,9 @@ test('create and update enforce exact shape, required fields, immutability, and 
     ['archived-create', { archived: true }], ['wrong-archive-type', { archived: 'false' }],
     ['null-date', { startDate: null }], ['stale-created-at', { createdAt: Timestamp.fromMillis(1) }],
     ['bad-updated-at', { updatedAt: 'not-a-timestamp' }], ['extra-map', { metadata: { arbitrary: true } }],
-    ['monthly-date', { startDate: Timestamp.fromMillis(0) }], ['wrong-workspace', { workspaceId: ws.dualA }]
+    ['monthly-date', { startDate: Timestamp.fromMillis(0) }], ['wrong-workspace', { workspaceId: ws.dualA }],
+    ['linked-accounts-map', { linkedAccountIds: { a: true } }], ['linked-accounts-string', { linkedAccountIds: 'a' }],
+    ['linked-accounts-too-many', { linkedAccountIds: Array.from({ length: 21 }, (_, index) => `account-${index}`) }]
   ]) await denied(writeRaw(member, id(label), rawBudget(ws.member, extra)))
 
   for (const field of ['workspaceId', 'kind', 'name', 'capCurrency', 'archived', 'createdAt', 'updatedAt']) {
@@ -169,6 +171,17 @@ test('create and update enforce exact shape, required fields, immutability, and 
   }))
 })
 
+test('budgets can link up to 20 accounts on create and change them on update', async () => {
+  const ref = doc(member, 'budgets', id('linked'))
+  await allowed(setDoc(ref, rawBudget(ws.member, { kind: 'event', linkedAccountIds: ['account-a'] })))
+  assert.deepEqual((await getDoc(ref)).data().linkedAccountIds, ['account-a'])
+  const twenty = Array.from({ length: 20 }, (_, index) => `account-${index}`)
+  await allowed(updateDoc(ref, { linkedAccountIds: twenty, updatedAt: serverTimestamp() }))
+  assert.deepEqual((await getDoc(ref)).data().linkedAccountIds, twenty)
+  await allowed(updateDoc(ref, { linkedAccountIds: [], updatedAt: serverTimestamp() }))
+  await denied(updateDoc(ref, { linkedAccountIds: 'account-a', updatedAt: serverTimestamp() }))
+})
+
 test('default identity is reserved and archived budgets are readable but terminal', async () => {
   await denied(writeRaw(member, 'default-monthly', rawBudget(ws.member)))
   await denied(writeRaw(member, id('spoof'), rawBudget(ws.member, {
@@ -182,5 +195,10 @@ test('default identity is reserved and archived budgets are readable but termina
   await denied(updateDoc(ref, { archived: false, updatedAt: serverTimestamp() }))
   await denied(updateDoc(ref, { name: 'Archived edit', updatedAt: serverTimestamp() }))
   await denied(updateDoc(ref, { archived: true, name: 'Mixed archive edit', updatedAt: serverTimestamp() }))
+  await denied(updateDoc(ref, { linkedAccountIds: ['account-a'], updatedAt: serverTimestamp() }))
   await denied(deleteDoc(ref))
+
+  const archiving = doc(member, 'budgets', id('archive-with-links'))
+  await allowed(setDoc(archiving, rawBudget(ws.member)))
+  await denied(updateDoc(archiving, { archived: true, linkedAccountIds: ['account-a'], updatedAt: serverTimestamp() }))
 })

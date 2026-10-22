@@ -47,8 +47,10 @@ test('classification writes exactly one scalar field and preserves all financial
     const h = harness()
     const before = structuredClone(h.rows())
     await h.assign('expense', budgetId)
-    assert.deepEqual(h.writes, [{ id: 'expense', patch: { budgetId } }])
-    assert.deepEqual(h.rows(), [{ ...before[0], budgetId }])
+    // The default budget is stored as the absence of a reference.
+    const stored = budgetId === DEFAULT_MONTHLY_BUDGET_ID ? null : budgetId
+    assert.deepEqual(h.writes, [{ id: 'expense', patch: { budgetId: stored } }])
+    assert.deepEqual(h.rows(), [{ ...before[0], budgetId: stored }])
   }
 })
 
@@ -63,11 +65,19 @@ test('classifying a mirrored expense neither traverses nor changes its transfer 
   assert.deepEqual(h.rows(), [{ ...before[0], budgetId: 'event' }, before[1]])
 })
 
-test('non-expense legs reject before any write or state mutation', async () => {
-  for (const type of ['income', 'transfer', 'loan', 'loan_payment'] as const) {
+test('income is classified like an expense, writing only the budget reference', async () => {
+  const h = harness([expense({ type: 'income', amount: 900 })])
+  const before = structuredClone(h.rows())
+  await h.assign('expense', 'event')
+  assert.deepEqual(h.writes, [{ id: 'expense', patch: { budgetId: 'event' } }])
+  assert.deepEqual(h.rows(), [{ ...before[0], budgetId: 'event' }])
+})
+
+test('transfer and loan legs reject before any write or state mutation', async () => {
+  for (const type of ['transfer', 'loan', 'loan_payment'] as const) {
     const h = harness([expense({ type })])
     const before = structuredClone(h.rows())
-    await assert.rejects(h.assign('expense', 'event'), { message: 'Only expenses can be assigned to operating budgets' })
+    await assert.rejects(h.assign('expense', 'event'), { message: 'Only expenses and income can be assigned to operating budgets' })
     assert.deepEqual(h.writes, [])
     assert.deepEqual(h.rows(), before)
   }
@@ -201,4 +211,11 @@ test('a 900-unit three-installment event assignment restates attribution, not gl
   assert.deepEqual([0, 1, 2].map(month => allBudgetsEstimatedMonthlyTotal(h.rows(), 2026, month)), globalBefore)
   assert.equal(h.rows()[0].amount, -900)
   assert.deepEqual(h.writes, [{ id: 'expense', patch: { budgetId: 'event' } }])
+})
+
+test('moving a movement back to the default budget stores no budget reference', async () => {
+  const h = harness([expense({ budgetId: 'event-1' })])
+  await h.assign('expense', 'default-monthly')
+  assert.deepEqual(h.writes, [{ id: 'expense', patch: { budgetId: null } }])
+  assert.equal(h.rows()[0].budgetId, null)
 })

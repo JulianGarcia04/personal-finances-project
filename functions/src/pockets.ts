@@ -97,6 +97,10 @@ export async function createWorkspaceAccount(
     }
 
     const parent = parentSnap.data()
+    // Pocket movements cannot carry a budget, so an account linked to one cannot get pockets.
+    if (typeof parent?.linkedBudgetId === 'string' && parent.linkedBudgetId) {
+      throw new Error('Esta cuenta está ligada a un presupuesto: quítala del presupuesto antes de crearle bolsillos.')
+    }
     const registeredIds: unknown = parent?.childAccountIds === undefined ? [] : parent.childAccountIds
     if (!Array.isArray(registeredIds) || registeredIds.some(id => typeof id !== 'string') ||
         new Set(registeredIds).size !== registeredIds.length) {
@@ -252,6 +256,10 @@ function addDeltas(target: Record<string, number>, source: Record<string, number
   for (const [accountId, amount] of Object.entries(source)) {
     target[accountId] = (target[accountId] ?? 0) + amount
   }
+}
+
+function carriesBudget(type: unknown): boolean {
+  return type === 'expense' || type === 'income'
 }
 
 function movementData(data: WorkspaceTransactionMovement | admin.firestore.DocumentData) {
@@ -437,6 +445,20 @@ export async function mutateWorkspaceTransaction(
       }
     }
 
+    // An expense or income of an account linked to an active budget belongs to that budget (S2);
+    // the rules enforce it for clients, and this Admin SDK path applies it itself.
+    let linkedBudgetId: string | null = null
+    if (input.movement && carriesBudget(input.movement.type)) {
+      const linked = accountData.get(input.movement.accountId)?.linkedBudgetId
+      if (typeof linked === 'string' && linked && !linked.includes('/')) {
+        const budgetSnap = await transaction.get(db.collection('budgets').doc(linked))
+        const budget = budgetSnap.data()
+        if (budgetSnap.exists && budget?.workspaceId === input.workspaceId && budget.archived === false) {
+          linkedBudgetId = linked
+        }
+      }
+    }
+
     let next: admin.firestore.DocumentData | null = null
     if (input.movement) {
       const movement = { ...input.movement, amount: roundMoney(Number(input.movement.amount)) }
@@ -471,6 +493,12 @@ export async function mutateWorkspaceTransaction(
         installments: movement.type === 'expense' && source.type === 'credit' ? movement.installments || 1 : 1,
         currency: source.currency || 'USD',
         createdAt: input.kind === 'updated' && before ? before.createdAt : FieldValue.serverTimestamp()
+      }
+      if (linkedBudgetId) next.budgetId = linkedBudgetId
+      else if (!carriesBudget(movement.type) && 'budgetId' in next) {
+        // Transfers and loans never carry a budget; an edit removes the stored one.
+        if (input.kind === 'updated') next.budgetId = FieldValue.delete()
+        else delete next.budgetId
       }
     }
 

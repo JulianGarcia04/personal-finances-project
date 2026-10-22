@@ -292,15 +292,92 @@
                 </button>
               </div>
             </div>
-            <p class="text-sm font-semibold text-text-primary tabular-nums">
-              Límite total: {{ entry.budget.totalLimit === undefined ? 'Sin límite total' : formatCurrency(entry.budget.totalLimit, entry.budget.capCurrency) }}
-            </p>
+            <div v-for="card in [budgetCards.get(entry.budget.id)]" :key="entry.budget.id" class="space-y-3" data-testid="budget-card-progress">
+              <p v-if="!card || card.spent === null" role="status" class="text-[11px] text-accent-amber">
+                Falta una tasa de cambio manual para calcular el gasto de este presupuesto.
+              </p>
+              <template v-else>
+                <div v-if="card.funds !== null" class="space-y-1.5" data-testid="budget-card-funds">
+                  <div class="flex items-baseline justify-between gap-2">
+                    <span class="text-xs text-text-secondary">Disponible</span>
+                    <span
+                      v-if="card.available !== null"
+                      class="font-display font-bold text-lg tabular-nums truncate"
+                      :class="card.available < 0 ? 'text-accent-rose' : 'text-accent-emerald'"
+                      :title="formatCurrency(card.available, card.currency)"
+                    >
+                      {{ formatCurrency(card.available, card.currency) }}
+                    </span>
+                    <span v-else class="text-[11px] text-accent-amber">Falta una tasa de cambio</span>
+                  </div>
+                  <div
+                    v-if="card.fundsPercent !== null"
+                    class="h-2 rounded-full bg-slate-900 overflow-hidden"
+                    role="progressbar"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    :aria-valuenow="Math.min(card.fundsPercent, 100)"
+                    :aria-label="`Gastado el ${card.fundsPercent} % de los fondos`"
+                  >
+                    <div class="h-full rounded-full transition-all" :class="progressTone(card.fundsPercent)" :style="{ width: `${Math.min(card.fundsPercent, 100)}%` }"></div>
+                  </div>
+                  <p v-if="card.fundsAmount !== null" class="text-[10px] text-text-secondary tabular-nums">
+                    Gastado {{ formatCurrency(card.spent, card.currency) }} de {{ formatCurrency(card.fundsAmount, card.currency) }} en fondos{{ card.fundsPercent !== null ? ` · ${card.fundsPercent} %` : '' }}
+                  </p>
+                  <p v-if="card.overdrawn" class="text-[10px] text-accent-amber">
+                    Salió más plata de la que entró a este presupuesto.
+                  </p>
+                </div>
+
+                <div v-if="card.limitAmount !== null" class="space-y-1.5" data-testid="budget-card-limit">
+                  <div class="flex items-baseline justify-between gap-2 text-xs">
+                    <span class="text-text-secondary">Límite total</span>
+                    <span class="font-semibold text-text-primary tabular-nums">{{ formatCurrency(card.spent, card.currency) }} / {{ formatCurrency(card.limitAmount, card.currency) }}</span>
+                  </div>
+                  <div
+                    class="h-1.5 rounded-full bg-slate-900 overflow-hidden"
+                    role="progressbar"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    :aria-valuenow="Math.min(card.limitPercent, 100)"
+                    :aria-label="`Gastado el ${card.limitPercent} % del límite total`"
+                  >
+                    <div class="h-full rounded-full transition-all" :class="progressTone(card.limitPercent)" :style="{ width: `${Math.min(card.limitPercent, 100)}%` }"></div>
+                  </div>
+                </div>
+                <p v-else-if="entry.budget.totalLimit !== undefined" class="text-[11px] text-text-secondary tabular-nums">
+                  Límite total: {{ formatCurrency(entry.budget.totalLimit, entry.budget.capCurrency) }} · falta una tasa de cambio para compararlo
+                </p>
+
+                <p v-if="card.funds === null" class="text-sm font-semibold text-text-primary tabular-nums">
+                  Gastado: {{ formatCurrency(card.spent, card.currency) }}{{ entry.budget.totalLimit === undefined ? ' · Sin límite total' : '' }}
+                </p>
+                <p v-if="card.funds === null" class="text-[10px] text-text-secondary">
+                  ¿Esta plata tiene su propio origen? Registra el ingreso con este presupuesto, o transfiérela a una de sus cuentas ligadas, y verás cuánto te queda disponible.
+                </p>
+              </template>
+            </div>
           </div>
           <div v-if="budgetCategoryCapEntries(entry).length" class="flex flex-wrap gap-2">
             <span v-for="cap in budgetCategoryCapEntries(entry)" :key="cap.categoryId" class="px-2.5 py-1 rounded-lg bg-slate-950/60 border border-white/5 text-[10px] text-text-secondary tabular-nums">
               {{ categoryName(cap.categoryId) }} · {{ formatCurrency(cap.amount, entry.budget.capCurrency) }}
             </span>
           </div>
+          <p v-if="entry.budget.linkedAccountIds?.length" class="flex items-start gap-1 text-[10px] text-text-secondary">
+            <LinkIcon class="w-3 h-3 mt-px shrink-0 text-accent-emerald" />
+            <span>Cuentas ligadas: {{ entry.budget.linkedAccountIds.map(accountName).join(', ') }}</span>
+          </p>
+          <p class="text-[10px] text-text-secondary">Los movimientos entran a este presupuesto cuando se lo asignas o cuando salen de una cuenta ligada.</p>
+          <button
+            v-if="budgetMoveCandidatesById.get(entry.budget.id)?.length"
+            type="button"
+            data-testid="budget-move-open"
+            class="tap w-full sm:w-auto inline-flex items-center justify-center gap-2 px-3 rounded-xl border border-accent-emerald/30 bg-accent-emerald/10 text-xs font-semibold text-accent-emerald hover:bg-accent-emerald/15 transition-colors cursor-pointer"
+            @click="openMoveSheet(entry.budget.id)"
+          >
+            <MoveIcon class="w-3.5 h-3.5 shrink-0" />
+            Mover {{ movementCountLabel(budgetMoveCandidatesById.get(entry.budget.id)!.length) }} existentes
+          </button>
           <p v-if="entry.budget.kind === 'event' && (entry.budget.startDate || entry.budget.endDate)" class="text-[10px] text-text-muted">
             Periodo de referencia: {{ entry.budget.startDate ? formatDate(entry.budget.startDate) : 'Sin inicio' }} – {{ entry.budget.endDate ? formatDate(entry.budget.endDate) : 'Sin fin' }}
           </p>
@@ -530,6 +607,33 @@
             </label>
           </div>
 
+          <div class="space-y-2 rounded-xl bg-slate-950/40 border border-white/5 p-3" data-testid="budget-linked-accounts">
+            <div>
+              <h4 class="flex items-center gap-1.5 text-xs font-semibold text-text-primary">
+                <LinkIcon class="w-3.5 h-3.5 text-accent-emerald" />
+                Cuentas ligadas (opcional)
+              </h4>
+              <p class="text-[10px] text-text-secondary mt-1">Los movimientos entran a este presupuesto cuando se lo asignas o cuando salen de una cuenta ligada. Todos los movimientos de estas cuentas pertenecen a este presupuesto y no se pueden pasar a otro.</p>
+            </div>
+            <p v-if="linkableAccounts.length === 0" class="text-[11px] text-text-secondary">No tienes cuentas que se puedan ligar. Las cuentas con bolsillos y las cuentas puente no se ligan a un presupuesto.</p>
+            <div v-else class="flex flex-wrap gap-2">
+              <button
+                v-for="acc in linkableAccounts"
+                :key="acc.id"
+                type="button"
+                :aria-pressed="budgetLinkedAccountIds.includes(acc.id)"
+                :class="['tap inline-flex items-center gap-1.5 px-3 rounded-full border text-xs font-medium transition-all cursor-pointer max-w-full', budgetLinkedAccountIds.includes(acc.id) ? 'border-accent-emerald/40 bg-accent-emerald/10 text-accent-emerald' : 'border-border text-text-secondary hover:text-text-primary hover:bg-white/5']"
+                @click="toggleBudgetLinkedAccount(acc.id)"
+              >
+                <CheckIcon v-if="budgetLinkedAccountIds.includes(acc.id)" class="w-3.5 h-3.5 shrink-0" />
+                <span class="truncate">{{ getAccountDisplayLabel(acc, accountsStore.accounts) }}</span>
+              </button>
+            </div>
+            <p v-for="conflict in budgetLinkConflicts" :key="conflict.accountId" role="status" class="text-[10px] text-accent-amber">
+              «{{ accountName(conflict.accountId) }}» está ligada a «{{ conflict.budgetName }}». Al guardar pasará a este presupuesto.
+            </p>
+          </div>
+
           <div class="space-y-2 rounded-xl bg-slate-950/40 border border-white/5 p-3">
             <div>
               <h4 class="text-xs font-semibold text-text-primary">Límites por categoría · {{ budgetCapCurrencyInput || 'moneda seleccionada' }}</h4>
@@ -688,6 +792,19 @@
             </select>
           </div>
 
+          <!-- Budget the contribution counts against (inherited from a linked account) -->
+          <div v-if="showContributeBudget" class="space-y-1.5 animate-fade-in" data-testid="contribute-budget">
+            <label for="contribute-budget" class="block text-xs font-semibold text-text-secondary">Presupuesto</label>
+            <select id="contribute-budget" v-model="contributeBudgetId" class="field cursor-pointer disabled:opacity-70 disabled:cursor-not-allowed" :disabled="!!contributeLinkedBudget" :aria-describedby="contributeLinkedBudget ? 'contribute-budget-lock' : undefined" @change="contributeBudgetTouched = true">
+              <option :value="DEFAULT_MONTHLY_BUDGET_ID">Presupuesto mensual predeterminado</option>
+              <option v-for="budget in activeOperatingBudgets" :key="budget.budget.id" :value="budget.budget.id">{{ budget.budget.name }}</option>
+            </select>
+            <p v-if="contributeLinkedBudget" id="contribute-budget-lock" class="flex items-start gap-1 text-[11px] text-accent-emerald">
+              <LinkIcon class="w-3 h-3 mt-0.5 shrink-0" />
+              <span>Esta cuenta está ligada a «{{ contributeLinkedBudget.name }}»: todos sus movimientos van a ese presupuesto.</span>
+            </p>
+          </div>
+
           <!-- Contribute Amount -->
           <div class="space-y-1.5">
             <label for="contribute-amount" class="block text-xs font-semibold text-text-secondary">Monto a Aportar</label>
@@ -721,6 +838,54 @@
           </div>
         </template>
     </BaseSheet>
+
+    <!-- Move existing default-budget movements into an event budget -->
+    <BaseSheet :open="!!moveSheetBudget" :title="'Mover movimientos'" :close-on-backdrop="!movingMovements" @close="closeMoveSheet">
+      <div class="space-y-3" data-testid="budget-move-sheet">
+        <p class="text-[11px] text-text-secondary">
+          Elige qué movimientos pasan a <strong class="text-text-primary">«{{ moveSheetBudget?.name }}»</strong>. Están en el presupuesto mensual predeterminado y salen de una cuenta ligada o son de una categoría con tope<span v-if="moveSheetBudget?.startDate || moveSheetBudget?.endDate">, dentro del periodo del presupuesto</span>. Desmarca los que no quieras mover.
+        </p>
+        <div class="flex items-center justify-between text-[11px]">
+          <span class="text-text-secondary tabular-nums">{{ moveSelectedIds.size }} de {{ moveSheetCandidates.length }} seleccionados</span>
+          <button type="button" class="tap px-2 text-accent-emerald font-semibold cursor-pointer" :disabled="movingMovements" @click="toggleAllMoveCandidates">
+            {{ moveSelectedIds.size === moveSheetCandidates.length ? 'Desmarcar todos' : 'Marcar todos' }}
+          </button>
+        </div>
+        <ul class="divide-y divide-white/5 rounded-xl border border-border/60 bg-slate-950/40">
+          <li v-for="tx in moveSheetCandidates" :key="tx.id">
+            <label class="flex items-center gap-3 px-3 py-2.5 min-h-11 cursor-pointer">
+              <input
+                type="checkbox"
+                class="w-4 h-4 shrink-0 accent-emerald-500"
+                :checked="moveSelectedIds.has(tx.id)"
+                :disabled="movingMovements"
+                @change="toggleMoveCandidate(tx.id)"
+              />
+              <span class="min-w-0 flex-1">
+                <span class="block truncate text-sm text-text-primary">{{ tx.description || 'Sin descripción' }}</span>
+                <span class="block truncate text-[10px] text-text-secondary">{{ formatDate(tx.date) }} · {{ accountName(tx.accountId) }}</span>
+              </span>
+              <span class="shrink-0 text-sm font-semibold tabular-nums" :class="tx.type === 'income' ? 'text-accent-emerald' : 'text-text-primary'">
+                {{ tx.type === 'income' ? '+' : '−' }}{{ formatCurrency(Math.abs(tx.amount), tx.currency) }}
+              </span>
+            </label>
+          </li>
+        </ul>
+        <p v-if="movingMovements" role="status" class="text-[11px] text-text-secondary tabular-nums">Moviendo {{ moveProgress }} de {{ moveTotal }}…</p>
+        <p v-if="moveError" role="alert" class="text-[11px] text-accent-rose">{{ moveError }}</p>
+      </div>
+
+      <template #footer>
+        <div class="flex gap-3">
+          <button type="button" :disabled="movingMovements" @click="closeMoveSheet" class="flex-1 min-h-11 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all cursor-pointer disabled:opacity-50">
+            Ahora no
+          </button>
+          <button type="button" data-testid="budget-move-apply" :disabled="movingMovements || moveSelectedIds.size === 0" @click="applyMoveSelection" class="flex-1 min-h-11 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
+            Mover {{ movementCountLabel(moveSelectedIds.size) }}
+          </button>
+        </div>
+      </template>
+    </BaseSheet>
   </div>
 </template>
 
@@ -736,7 +901,9 @@ import BaseSheet from '@/components/ui/BaseSheet.vue'
 import CategoryPicker from '@/components/CategoryPicker.vue'
 import { suggestCategoriesBySpending, visibleBaselineCategories } from '@/lib/categoryPicker'
 import { getCategoryIconComponent } from '@/lib/categoryIcons'
-import { DEFAULT_MONTHLY_BUDGET_ID } from '@/lib/budgets'
+import { DEFAULT_MONTHLY_BUDGET_ID, budgetIdForAccount, budgetMoveCandidates, budgetScopedMonthFilter, canAssignBudget, linkedAccountConflicts, linkedBudgetForAccount } from '@/lib/budgets'
+import { budgetCardFigures } from '@/lib/dashboardMetrics'
+import { isReservedBudgetName } from '@/schemas'
 import { reportBudgetScope } from '@/lib/budgetReporting'
 import type { BudgetWorkspaceBudgetSnapshot } from '@/lib/budgetWorkspaceAdapter'
 import { createCardBillingLookup, expenseAmountForDate } from '@/lib/installments'
@@ -748,7 +915,10 @@ import {
   Trash2 as TrashIcon,
   Plus as PlusIcon,
   Wallet as WalletIcon,
-  X as XIcon
+  X as XIcon,
+  Link2 as LinkIcon,
+  Check as CheckIcon,
+  ArrowRightLeft as MoveIcon
 } from 'lucide-vue-next'
 import { Chart, registerables } from 'chart.js'
 
@@ -777,6 +947,26 @@ const budgetSelectedCategoryIds = ref<string[]>([])
 const baselineAddedCategoryIds = ref<string[]>([])
 const budgetManagementError = ref('')
 const savingOperatingBudget = ref(false)
+const budgetLinkedAccountIds = ref<string[]>([])
+// Bridge accounts replicate expenses into another workspace and pocket movements go through their
+// own flow, so neither can enforce a linked budget.
+const linkableAccounts = computed(() =>
+  accountsStore.accounts.filter(account => !account.mirror && !isPocketRelatedAccount(account)))
+const linkableOperatingBudgets = computed(() => goalsStore.operatingBudgets.map(({ budget }) => budget))
+const budgetLinkConflicts = computed(() => linkedAccountConflicts(
+  linkableOperatingBudgets.value,
+  budgetLinkedAccountIds.value,
+  editingOperatingBudget.value?.budget.id
+))
+const accountName = (accountId: string): string => {
+  const account = accountsStore.getAccountById(accountId)
+  return account ? getAccountDisplayLabel(account, accountsStore.accounts) : 'Cuenta eliminada'
+}
+const toggleBudgetLinkedAccount = (accountId: string) => {
+  budgetLinkedAccountIds.value = budgetLinkedAccountIds.value.includes(accountId)
+    ? budgetLinkedAccountIds.value.filter(id => id !== accountId)
+    : [...budgetLinkedAccountIds.value, accountId]
+}
 const legacyCategoryBudgetCurrencyInput = ref(defaultCurrencyCode(settingsStore.currency))
 const confirmingLegacyCurrency = ref(false)
 const legacyCurrencyError = ref('')
@@ -791,6 +981,20 @@ const newGoalTargetDate = ref('')
 // Contribute inputs
 const contributeAccountId = ref('')
 const contributeAmount = ref<number | null>(null)
+const contributeBudgetId = ref(DEFAULT_MONTHLY_BUDGET_ID)
+const contributeBudgetTouched = ref(false)
+// Bridge-account expenses are replicated into the mirror workspace, which has its own budgets.
+const showContributeBudget = computed(() =>
+  !!contributeAccountId.value && !accountsStore.getAccountById(contributeAccountId.value)?.mirror)
+// Every movement of a linked account belongs to its budget, so the selector is locked.
+const contributeLinkedBudget = computed(() =>
+  linkedBudgetForAccount(linkableOperatingBudgets.value, contributeAccountId.value))
+watch(contributeAccountId, (accountId, previousAccountId) => {
+  const leftLinkedAccount = linkedBudgetForAccount(linkableOperatingBudgets.value, previousAccountId ?? '')
+  if (contributeBudgetTouched.value && !contributeLinkedBudget.value && !leftLinkedAccount) return
+  contributeBudgetTouched.value = false
+  contributeBudgetId.value = budgetIdForAccount(linkableOperatingBudgets.value, accountId)
+})
 
 // Budget Planner inputs
 const incomeInput = ref(0)
@@ -816,6 +1020,35 @@ const expenseCategories = computed(() =>
 const activeOperatingBudgets = computed(() =>
   goalsStore.operatingBudgets.filter(entry => !entry.budget.archived)
 )
+// Budget each account is linked to: transfers into or out of linked accounts move funds.
+const linkedBudgetOfAccount = (accountId: string) =>
+  linkedBudgetForAccount(linkableOperatingBudgets.value, accountId)?.id ?? null
+
+// Card view of each active budget: spending vs its funds (assigned income and transfers into its
+// linked accounts) and vs its total cap.
+const budgetCards = computed(() => {
+  const now = new Date()
+  return new Map(activeOperatingBudgets.value.map(entry => {
+    const figures = budgetCardFigures(entry, {
+      linkedBudgetOf: linkedBudgetOfAccount,
+      transactions: transactionsStore.transactions,
+      period: { year: now.getFullYear(), month: now.getMonth() },
+      reportingCurrency: userCurrency.value,
+      exchangeRates: goalsStore.exchangeRates,
+      cardBilling: cardBillingFor.value
+    })
+    const { spent, fundsAmount, limitAmount } = figures
+    return [entry.budget.id, {
+      ...figures,
+      fundsPercent: spent !== null && fundsAmount !== null ? percentOf(spent, fundsAmount) : null,
+      limitPercent: spent !== null && limitAmount !== null ? percentOf(spent, limitAmount) : 0
+    }] as const
+  }))
+})
+const percentOf = (part: number, whole: number): number =>
+  whole > 0 ? Math.round((part / whole) * 100) : part > 0 ? 100 : 0
+const progressTone = (percent: number): string =>
+  percent >= 100 ? 'bg-accent-rose' : percent >= 80 ? 'bg-accent-amber' : 'bg-accent-emerald'
 const archivedOperatingBudgets = computed(() =>
   goalsStore.operatingBudgets.filter(entry => entry.budget.archived)
 )
@@ -852,11 +1085,20 @@ const baselineBudgetReport = computed(() => {
 const realMonthTotals = computed(() => {
   const now = new Date()
   let income = 0, expense = 0
+  const kinds = new Map(goalsStore.operatingBudgets.map(({ budget }) => [budget.id, budget.kind]))
+  // Income assigned to another budget funds only that budget, and spending of a budget with its
+  // own income is paid by that income, so neither counts against the month.
+  const scoped = budgetScopedMonthFilter(transactionsStore.transactions, {
+    year: now.getFullYear(), month: now.getMonth(), kindOf: budgetId => kinds.get(budgetId),
+    linkedBudgetOf: linkedBudgetOfAccount
+  })
   transactionsStore.transactions.forEach(t => {
     if (t.type === 'income') {
+      if (!scoped.countsIncome(t)) return
       if (t.date.getMonth() !== now.getMonth() || t.date.getFullYear() !== now.getFullYear()) return
       income += goalsStore.convertToPrimary(Math.abs(t.amount), t.currency, userCurrency.value)
     } else if (t.type === 'expense') {
+      if (!scoped.countsExpense(t)) return
       const amount = expenseAmountForDate(t, now, cardBillingFor.value(t.accountId))
       expense += goalsStore.convertToPrimary(amount, t.currency, userCurrency.value)
     }
@@ -957,6 +1199,99 @@ const budgetCategoryCapEntries = (entry: BudgetWorkspaceBudgetSnapshot): Array<{
   Object.entries(entry.categoryCaps)
     .map(([categoryId, amount]) => ({ categoryId, amount }))
     .sort((left, right) => left.categoryId.localeCompare(right.categoryId))
+// Default-budget movements an active event budget can take over (S3).
+const budgetMoveCandidatesById = computed(() => {
+  const candidates = new Map<string, Array<(typeof transactionsStore.transactions)[number]>>()
+  for (const entry of goalsStore.operatingBudgets) {
+    const budget = entry.budget
+    if (budget.kind !== 'event' || budget.archived) continue
+    candidates.set(budget.id, budgetMoveCandidates(transactionsStore.transactions, {
+      linkedAccountIds: budget.linkedAccountIds ?? [],
+      categoryIds: Object.keys(entry.categoryCaps),
+      startDate: budget.startDate,
+      endDate: budget.endDate
+    }).filter(transaction =>
+      // Mirror-account expenses are replicated elsewhere, and a movement of another budget's linked account stays there.
+      !(transaction.type === 'expense' && accountsStore.getAccountById(transaction.accountId)?.mirror)
+      && canAssignBudget(linkableOperatingBudgets.value, transaction.accountId, budget.id)))
+  }
+  return candidates
+})
+const movementCountLabel = (count: number) => `${count} ${count === 1 ? 'movimiento' : 'movimientos'}`
+
+const moveSheetBudgetId = ref('')
+const moveSelectedIds = ref(new Set<string>())
+const movingMovements = ref(false)
+const moveProgress = ref(0)
+const moveTotal = ref(0)
+const moveError = ref('')
+const moveSheetBudget = computed(() =>
+  goalsStore.operatingBudgets.find(entry => entry.budget.id === moveSheetBudgetId.value)?.budget ?? null)
+// Frozen while moving, so rows don't vanish under the cursor and the counter stays coherent.
+const frozenMoveCandidates = ref<Array<(typeof transactionsStore.transactions)[number]> | null>(null)
+const moveSheetCandidates = computed(() =>
+  frozenMoveCandidates.value ?? budgetMoveCandidatesById.value.get(moveSheetBudgetId.value) ?? [])
+
+const openMoveSheet = (budgetId: string) => {
+  const candidates = budgetMoveCandidatesById.value.get(budgetId) ?? []
+  if (!candidates.length) return
+  moveSheetBudgetId.value = budgetId
+  moveSelectedIds.value = new Set(candidates.map(transaction => transaction.id))
+  moveError.value = ''
+}
+const closeMoveSheet = () => {
+  if (movingMovements.value) return
+  moveSheetBudgetId.value = ''
+  moveSelectedIds.value = new Set()
+  moveError.value = ''
+}
+const toggleMoveCandidate = (transactionId: string) => {
+  const next = new Set(moveSelectedIds.value)
+  if (next.has(transactionId)) next.delete(transactionId)
+  else next.add(transactionId)
+  moveSelectedIds.value = next
+}
+const toggleAllMoveCandidates = () => {
+  moveSelectedIds.value = moveSelectedIds.value.size === moveSheetCandidates.value.length
+    ? new Set()
+    : new Set(moveSheetCandidates.value.map(transaction => transaction.id))
+}
+
+// Budget-only updates through the same assigner as a single reassignment, a few at a time.
+const MOVE_BATCH_SIZE = 10
+const applyMoveSelection = async () => {
+  const budgetId = moveSheetBudgetId.value
+  // Expenses first: moving this month's income first would briefly lower the month's income and
+  // could send a false spending alert.
+  const typeOf = new Map(moveSheetCandidates.value.map(transaction => [transaction.id, transaction.type]))
+  const ids = [...moveSelectedIds.value].sort((left, right) =>
+    Number(typeOf.get(left) === 'income') - Number(typeOf.get(right) === 'income'))
+  if (!budgetId || !ids.length || movingMovements.value) return
+  frozenMoveCandidates.value = [...moveSheetCandidates.value]
+  movingMovements.value = true
+  moveError.value = ''
+  moveProgress.value = 0
+  moveTotal.value = ids.length
+  const failed: string[] = []
+  try {
+    for (let index = 0; index < ids.length; index += MOVE_BATCH_SIZE) {
+      const batch = ids.slice(index, index + MOVE_BATCH_SIZE)
+      const results = await Promise.allSettled(batch.map(id => transactionsStore.assignExpenseBudget(id, budgetId)))
+      results.forEach((result, position) => { if (result.status === 'rejected') failed.push(batch[position]) })
+      moveProgress.value = Math.min(index + batch.length, ids.length)
+    }
+  } finally {
+    movingMovements.value = false
+    frozenMoveCandidates.value = null
+  }
+  if (failed.length) {
+    moveSelectedIds.value = new Set(failed)
+    moveError.value = `Se movieron ${ids.length - failed.length} de ${ids.length}. Los que quedaron marcados no se pudieron mover; inténtalo de nuevo.`
+    return
+  }
+  closeMoveSheet()
+}
+
 const isValidCurrencyCode = (value: string): boolean => /^[A-Z]{3}$/.test(value.trim())
 
 const dateInputValue = (value?: Date): string => value ? toLocalDateKey(toDateValue(value)) : ''
@@ -970,6 +1305,7 @@ const openBudgetModal = (entry?: BudgetWorkspaceBudgetSnapshot) => {
   budgetStartDateInput.value = dateInputValue(entry?.budget.startDate)
   budgetEndDateInput.value = dateInputValue(entry?.budget.endDate)
   budgetManagementError.value = ''
+  budgetLinkedAccountIds.value = [...(entry?.budget.linkedAccountIds ?? [])]
   for (const key of Object.keys(budgetCategoryCapInputs)) delete budgetCategoryCapInputs[key]
   if (entry) Object.assign(budgetCategoryCapInputs, entry.categoryCaps)
   budgetSelectedCategoryIds.value = Object.keys(entry?.categoryCaps ?? {})
@@ -1040,6 +1376,12 @@ const handleSaveOperatingBudget = async () => {
     budgetManagementError.value = 'Escribe un nombre para el presupuesto.'
     return
   }
+  // Creating or renaming into the default budget's name; a budget already stored with it keeps it.
+  const storedName = editingOperatingBudget.value?.budget.name
+  if (isReservedBudgetName(name) && (storedName === undefined || !isReservedBudgetName(storedName))) {
+    budgetManagementError.value = 'Ese nombre está reservado para el presupuesto mensual predeterminado.'
+    return
+  }
   if (!isValidCurrencyCode(capCurrency)) {
     budgetManagementError.value = 'Indica un código de moneda válido de tres letras.'
     return
@@ -1055,6 +1397,15 @@ const handleSaveOperatingBudget = async () => {
 
   const toDate = (value: string): Date | undefined => value ? new Date(`${value}T00:00:00`) : undefined
   const caps = categoryCapDraft()
+  // Accounts that move here leave their previous budget in the same write as this one.
+  const movedLinks = budgetLinkConflicts.value
+  const linkedAccountIds = [...budgetLinkedAccountIds.value]
+  const releases = [...new Set(movedLinks.map(conflict => conflict.budgetId))].flatMap(ownerId => {
+    const owner = linkableOperatingBudgets.value.find(budget => budget.id === ownerId)
+    if (!owner) return []
+    const moved = new Set(movedLinks.filter(conflict => conflict.budgetId === ownerId).map(conflict => conflict.accountId))
+    return [{ budgetId: ownerId, linkedAccountIds: (owner.linkedAccountIds ?? []).filter(accountId => !moved.has(accountId)) }]
+  })
   savingOperatingBudget.value = true
   try {
     let budgetId: string
@@ -1062,20 +1413,22 @@ const handleSaveOperatingBudget = async () => {
       const existing = editingOperatingBudget.value.budget
       const patch: OperatingBudgetPatch = {
         name,
-        totalLimit: totalLimit ?? null
+        totalLimit: totalLimit ?? null,
+        linkedAccountIds
       }
       if (existing.kind === 'event') {
         patch.startDate = toDate(budgetStartDateInput.value) ?? null
         patch.endDate = toDate(budgetEndDateInput.value) ?? null
       }
-      const updated = await goalsStore.updateOperatingBudget(existing.id, patch)
+      const updated = await goalsStore.updateOperatingBudget(existing.id, patch, { releases })
       budgetId = updated.id
     } else {
       const draft: OperatingBudgetDraft = {
         kind: budgetKindInput.value,
         name,
         capCurrency,
-        ...(totalLimit === undefined ? {} : { totalLimit })
+        ...(totalLimit === undefined ? {} : { totalLimit }),
+        ...(linkedAccountIds.length ? { linkedAccountIds } : {})
       }
       if (draft.kind === 'event') {
         const startDate = toDate(budgetStartDateInput.value)
@@ -1083,13 +1436,15 @@ const handleSaveOperatingBudget = async () => {
         if (startDate) draft.startDate = startDate
         if (endDate) draft.endDate = endDate
       }
-      const created = await goalsStore.createOperatingBudget(draft)
+      const created = await goalsStore.createOperatingBudget(draft, { releases })
       budgetId = created.id
       editingOperatingBudget.value = goalsStore.operatingBudgets.find(entry => entry.budget.id === created.id)
         ?? { budget: created, categoryCaps: {} }
     }
     await goalsStore.saveOperatingBudgetCategoryCaps(budgetId, caps)
     showBudgetModal.value = false
+    // Offer to bring in the movements that already belong here.
+    openMoveSheet(budgetId)
   } catch (error) {
     budgetManagementError.value = error instanceof Error ? error.message : 'No se pudo guardar el presupuesto.'
   } finally {
@@ -1267,6 +1622,8 @@ const openContributeModal = (goal: Goal) => {
   selectedGoal.value = goal
   contributeAccountId.value = ''
   contributeAmount.value = null
+  contributeBudgetId.value = DEFAULT_MONTHLY_BUDGET_ID
+  contributeBudgetTouched.value = false
   showContributeModal.value = true
 }
 
@@ -1303,7 +1660,8 @@ const handleContribute = async () => {
       description: `Aporte a meta: ${goal.name}`,
       categoryId: savingsCat?.id || '',
       date: new Date(),
-      type: 'expense'
+      type: 'expense',
+      budgetId: showContributeBudget.value ? (contributeLinkedBudget.value?.id ?? contributeBudgetId.value) : null
     })
 
     // 2. Sumar al saldo acumulado del objetivo de ahorro

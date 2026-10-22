@@ -320,3 +320,88 @@ test('keeps category rollups prototype-safe for special own category IDs', () =>
     assert.equal(report.categories[categoryId].cap?.amount, amount)
   }
 })
+
+const income = (overrides: Partial<BudgetExpenseTransaction> = {}): BudgetExpenseTransaction =>
+  expense({ type: 'income', amount: 100, ...overrides })
+
+test('event funds are all income assigned to the budget, and available is funds minus committed spending', () => {
+  const report = reportBudgetScope(scopeInput({
+    scope: { id: 'casa', kind: 'event', capCurrency: 'USD', totalLimit: 500 },
+    transactions: [
+      income({ amount: 1000, budgetId: 'casa', date: new Date(2025, 5, 1) }),
+      income({ amount: 50, currency: 'EUR', budgetId: 'casa' }),
+      income({ amount: 999 }),
+      income({ amount: 999, budgetId: 'other' }),
+      expense({ amount: -300, budgetId: 'casa', date: new Date(2025, 11, 1) }),
+      expense({ amount: -999 })
+    ],
+    exchangeRates: { EUR: 2 }
+  }))
+  assert.deepEqual(report.funds, {
+    amount: 1100, currency: 'USD', complete: true, missingRateCurrencies: [], invalidRateCurrencies: []
+  })
+  assert.equal(report.available, 800)
+  assert.deepEqual(report.totalComparison, { spentAmount: 300, limitAmount: 500, remainingAmount: 200 })
+})
+
+test('monthly funds count only income assigned in the reported month', () => {
+  const report = reportBudgetScope(scopeInput({
+    transactions: [
+      income({ amount: 400, budgetId: 'monthly' }),
+      income({ amount: 999, budgetId: 'monthly', date: new Date(2025, 11, 31) }),
+      expense({ amount: -100, budgetId: 'monthly' })
+    ]
+  }))
+  assert.equal(report.funds?.amount, 400)
+  assert.equal(report.available, 300)
+})
+
+test('budgets without assigned income report no funds and no available amount, as before', () => {
+  const report = reportBudgetScope(scopeInput({
+    scope: { id: 'casa', kind: 'event', capCurrency: 'USD', totalLimit: 500 },
+    transactions: [expense({ amount: -300, budgetId: 'casa' })]
+  }))
+  assert.equal(report.funds, null)
+  assert.equal(report.available, null)
+  assert.equal(report.totalComparison?.remainingAmount, 200)
+})
+
+test('the default budget never has funds: unassigned income is the monthly income, not funds', () => {
+  const report = reportBudgetScope(scopeInput({
+    scope: { id: DEFAULT_MONTHLY_BUDGET_ID, kind: 'monthly', capCurrency: 'USD' },
+    transactions: [income({ amount: 500 }), income({ amount: 500, budgetId: DEFAULT_MONTHLY_BUDGET_ID })]
+  }))
+  assert.equal(report.funds, null)
+  assert.equal(report.available, null)
+})
+
+test('a budget that only had money transferred out has no funds, like a budget without income', () => {
+  const linkedBudgetOf = (accountId: string) => (accountId === 'cash-casa' ? 'casa' : null)
+  const transfer = (accountId: string, toAccountId: string, amount: number) =>
+    expense({ type: 'transfer', accountId, toAccountId, amount, categoryId: undefined })
+  const outOnly = reportBudgetScope(scopeInput({
+    scope: { id: 'casa', kind: 'event', capCurrency: 'USD' },
+    transactions: [transfer('cash-casa', 'bank', 300), expense({ amount: -50, budgetId: 'casa' })],
+    linkedBudgetOf
+  }))
+  assert.equal(outOnly.funds, null)
+  assert.equal(outOnly.available, null)
+  // With an inflow, outflows above it keep the real negative funds and available.
+  const overdrawn = reportBudgetScope(scopeInput({
+    scope: { id: 'casa', kind: 'event', capCurrency: 'USD' },
+    transactions: [transfer('bank', 'cash-casa', 100), transfer('cash-casa', 'bank', 300), expense({ amount: -50, budgetId: 'casa' })],
+    linkedBudgetOf
+  }))
+  assert.equal(overdrawn.funds?.amount, -200)
+  assert.equal(overdrawn.available, -250)
+})
+
+test('funds with a missing rate hide both the funds amount and the available amount', () => {
+  const report = reportBudgetScope(scopeInput({
+    scope: { id: 'casa', kind: 'event', capCurrency: 'USD' },
+    transactions: [income({ amount: 100, currency: 'COP', budgetId: 'casa' })]
+  }))
+  assert.equal(report.funds?.amount, null)
+  assert.deepEqual(report.funds?.missingRateCurrencies, ['COP'])
+  assert.equal(report.available, null)
+})

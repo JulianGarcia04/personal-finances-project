@@ -56,12 +56,17 @@ import {
   incomeReference,
   monthlyExpenseTotal,
   monthlyIncomeTotal,
+  selfFundedBudgetIds,
   evaluateBudgetThresholds,
   monthKey,
   resolveAlertBudgetId,
   scopeTotalSpend,
   spendFieldsChanged,
-  TOTAL_ALERT_SUBJECT
+  TOTAL_ALERT_SUBJECT,
+  FUNDS_ALERT_SUBJECT,
+  scopeFundsTotal,
+  skipsUnlinkedTransferWrite,
+  incomeChangeAlertScope
 } from "./budgetAlerts";
 import { cardBillingByAccount } from "./agentQueries";
 import { DEFAULT_MONTHLY_BUDGET_ID, parseLegacyCategoryBudgetCurrency } from "./legacyCategoryBudgets";
@@ -345,17 +350,40 @@ export const notifyBudgetThreshold = onDocumentWritten(
     }
     const before = event.data?.before?.exists ? event.data.before.data() : undefined;
     const after = event.data?.after?.exists ? event.data.after.data() : undefined;
-    // A delete can never newly cross a threshold; lowering edits fall through to the ledger check.
-    if (!after || after.type !== "expense" || typeof after.workspaceId !== "string" || !after.workspaceId) return;
+    // An expense write can raise spending. An income or transfer write (create, edit or delete) can
+    // lower the month's income or a budget's funds. Deleting an expense can never newly cross a
+    // threshold.
+    const expense = after?.type === "expense" ? after : undefined;
+    const funding = (tx: Record<string, any> | undefined) => tx?.type === "income" || tx?.type === "transfer" ? tx : undefined;
+    const written = expense ?? funding(before) ?? funding(after);
+    if (!written || typeof written.workspaceId !== "string" || !written.workspaceId) return;
     if (!spendFieldsChanged(before, after)) return;
 
-    const workspaceId: string = after.workspaceId;
+    const workspaceId: string = written.workspaceId;
     const workspaceSnap = await db.collection("workspaces").doc(workspaceId).get();
     const workspace = workspaceSnap.data();
     if (!workspace || workspace.budgetAlertsEnabled === false) return;
+    // Every budget of the workspace (archived included): kinds decide per-period self-funding,
+    // and active budgets' linked accounts decide which transfers move funds.
+    const budgetsSnap = await db.collection("budgets").where("workspaceId", "==", workspaceId).get();
+    const kinds = new Map(budgetsSnap.docs.map((d) => [d.id, d.get("kind")]));
+    const kindOf = (budgetId: string) => {
+      const kind = kinds.get(budgetId);
+      return kind === "monthly" || kind === "event" ? kind : undefined;
+    };
+    const links = new Map<string, string>();
+    for (const d of budgetsSnap.docs) {
+      const linked = d.get("linkedAccountIds");
+      if (d.get("archived") !== false || !Array.isArray(linked)) continue;
+      for (const accountId of linked) if (typeof accountId === "string" && !links.has(accountId)) links.set(accountId, d.id);
+    }
+    const linkedBudgetOf = (accountId: string) => links.get(accountId) ?? null;
+    // A transfer between accounts no active budget links moves nothing the alerts measure.
+    if (skipsUnlinkedTransferWrite(before, after, linkedBudgetOf)) return;
     // Null for archived/foreign budgets: their category and overall caps never alert, but the
-    // expense still counts toward the month's spending vs income.
-    const budgetScope = await loadBudgetScope(workspaceId, workspace, resolveAlertBudgetId(after.budgetId));
+    // expense still counts toward the month's spending vs income unless its budget is self-funded
+    // in the month (selfFundedBudgetIds).
+    const budgetScope = expense ? await loadBudgetScope(workspaceId, workspace, resolveAlertBudgetId(expense.budgetId)) : null;
 
     const ownerSnap = typeof workspace.ownerId === "string" && workspace.ownerId
       ? await db.collection("users").doc(workspace.ownerId).get()
@@ -373,15 +401,26 @@ export const notifyBudgetThreshold = onDocumentWritten(
 
     // Which caps this write can move: its category cap, its additional budget's overall cap and
     // the workspace's month spending vs income (the default budget's overall cap).
-    const categoryId = typeof after.categoryId === "string" ? after.categoryId : "";
-    const categoryCap = budgetScope && categoryId &&
-      alertCategoryFor(after, budgetScope.scope, month, { timeZone, billingFor }) === categoryId
+    const categoryId = typeof expense?.categoryId === "string" ? expense.categoryId : "";
+    const categoryCap = expense && budgetScope && categoryId &&
+      alertCategoryFor(expense, budgetScope.scope, month, { timeZone, billingFor }) === categoryId
       ? await budgetScope.categoryCap(categoryId)
       : 0;
     const scopeTotalApplies = budgetScope !== null && budgetScope.totalLimit !== null &&
-      countsTowardScopeTotal(after, budgetScope.scope, month, { timeZone, billingFor });
-    const incomeApplies = countsTowardMonthlySpend(after, month, { timeZone, billingFor });
-    if (categoryCap === 0 && !scopeTotalApplies && !incomeApplies) return;
+      countsTowardScopeTotal(expense, budgetScope.scope, month, { timeZone, billingFor });
+    const incomeChange = incomeChangeAlertScope(before, after, month, { timeZone }, linkedBudgetOf);
+    const incomeApplies = countsTowardMonthlySpend(expense, month, { timeZone, billingFor }) || incomeChange?.monthlyIncome === true;
+    // Additional budgets' spending vs the income assigned to them (their funds): the expense's
+    // budget, and every budget whose assigned income an income write changed.
+    const fundsScopes: BudgetScopeInfo[] = [];
+    if (budgetScope !== null && budgetScope.scope.id !== DEFAULT_MONTHLY_BUDGET_ID &&
+      countsTowardScopeTotal(expense, budgetScope.scope, month, { timeZone, billingFor })) fundsScopes.push(budgetScope);
+    for (const budgetId of incomeChange?.fundsBudgetIds ?? []) {
+      if (fundsScopes.some((entry) => entry.scope.id === budgetId)) continue;
+      const scope = await loadBudgetScope(workspaceId, workspace, budgetId);
+      if (scope) fundsScopes.push(scope);
+    }
+    if (categoryCap === 0 && !scopeTotalApplies && !incomeApplies && fundsScopes.length === 0) return;
 
     const smtp = smtpConfigFromEnvironment();
     const memberUids = memberUidsOf(workspace.members);
@@ -390,7 +429,7 @@ export const notifyBudgetThreshold = onDocumentWritten(
     if (!smtp) console.warn("SMTP_USER / SMTP_PASS are not configured; budget alert email skipped.");
     if (!delivery.claim) return;
 
-    const [txSnap, incomeSnap] = await Promise.all(["expense", "income"].map((type) => db.collection("transactions")
+    const [txSnap, incomeSnap, transferSnap] = await Promise.all(["expense", "income", "transfer"].map((type) => db.collection("transactions")
       .where("workspaceId", "==", workspaceId)
       .where("type", "==", type)
       .get()));
@@ -416,10 +455,22 @@ export const notifyBudgetThreshold = onDocumentWritten(
         subjects.push({ kind: "total", subjectId: TOTAL_ALERT_SUBJECT, spent, budget, scope: budgetScope.scope, budgetName: budgetScope.budgetName });
       }
     }
+    const incomes = incomeSnap.docs.map((d) => d.data());
+    const fundingMovements = [...incomes, ...transferSnap.docs.map((d) => d.data())];
+    for (const fundsScope of fundsScopes) {
+      const funds = scopeFundsTotal(fundingMovements, fundsScope.scope, month, spendOptions, linkedBudgetOf);
+      const spent = scopeTotalSpend(transactions, fundsScope.scope, month, spendOptions);
+      if (funds === null || spent === null) {
+        console.warn(`Funds alert for workspace ${workspaceId} skipped: manual rate missing.`);
+      } else if (funds > 0) {
+        subjects.push({ kind: "funds", subjectId: FUNDS_ALERT_SUBJECT, spent, budget: funds, scope: fundsScope.scope, budgetName: fundsScope.budgetName });
+      }
+    }
     if (incomeApplies) {
-      const realIncome = monthlyIncomeTotal(incomeSnap.docs.map((d) => d.data()), month, spendOptions);
+      const realIncome = monthlyIncomeTotal(incomes, month, spendOptions);
       const budget = incomeReference(workspace.budgetIncome, realIncome);
-      const spent = monthlyExpenseTotal(transactions, month, spendOptions);
+      const spent = monthlyExpenseTotal(transactions, month, spendOptions,
+        selfFundedBudgetIds(fundingMovements, month, { timeZone }, kindOf, linkedBudgetOf));
       if (budget === null || spent === null) {
         console.warn(`Income alert for workspace ${workspaceId} skipped: no income to compare or manual rate missing.`);
       } else {
@@ -458,7 +509,7 @@ interface BudgetScopeInfo {
  * spending vs income (ledger slot TOTAL_ALERT_SUBJECT of the default budget).
  */
 interface BudgetAlertSubject {
-  kind: "category" | "total" | "income";
+  kind: "category" | "total" | "income" | "funds";
   subjectId: string;
   spent: number;
   budget: number;
@@ -569,7 +620,8 @@ async function deliverBudgetAlert(ctx: BudgetAlertContext, subject: BudgetAlertS
       }),
       ...(subject.budgetName ? { budgetName: subject.budgetName } : {}),
       ...(kind === "total" ? { totalBudget: true } : {}),
-      ...(kind === "income" ? { incomeBudget: true } : {})
+      ...(kind === "income" ? { incomeBudget: true } : {}),
+      ...(kind === "funds" ? { fundsBudget: true } : {})
     };
     if (smtp) {
       const recipients = await resolveMemberEmails(memberUids);
@@ -716,6 +768,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
 
       QUÉ HERRAMIENTA USAR:
       - Totales, resúmenes, "¿cuánto gasté/gané…?", gastos por categoría/cuenta/mes/día, comparaciones y promedios → getFinancialSummary. NUNCA sumes tú mismo los resultados de listTransactions para dar totales: listTransactions es solo para mostrar movimientos concretos.
+      - getFinancialSummary trae dos vistas: totals (todo el dinero que entró y salió, sin importar el presupuesto) y byBudget (ingreso del mes sin los fondos asignados a presupuestos, gasto sin el de presupuestos que se pagan con sus propios fondos, y por cada presupuesto sus fondos, gastado y disponible). Para "¿cuánto me entró/gasté en total?" responde con totals; para preguntas de presupuestos (por ejemplo "¿cuánto me queda en Ventas Casa?" o "¿cuánto gasté sin contar el presupuesto X?") usa byBudget. Si la pregunta es ambigua, da ambas cifras y explica la diferencia.
       - Buscar movimientos por concepto o descripción ("Netflix", "ropa", "el arriendo") → semanticSearchTransactions (para el total de un concepto, suma solo las coincidencias relevantes e indica que es aproximado).
       - Presupuestos, límite de gasto, tasas de cambio, ingreso declarado, "¿cómo voy este mes?" → getWorkspaceSettings.
       - Saldos, cupos de tarjetas y patrimonio neto → listAccounts: usa totals.netWorth (ya convertido a ${primaryCurrency}, igual que el panel de control) y balanceInPrimary por cuenta; nunca conviertas monedas a mano.

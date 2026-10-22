@@ -4,8 +4,21 @@ import {
   DEFAULT_MONTHLY_BUDGET_ID,
   allBudgetsEstimatedMonthlyTotal,
   eventBudgetCommittedAllocation,
+  budgetIdForAccount,
+  budgetFundsAllocation,
+  budgetIdToPersist,
+  budgetChangeForEdit,
+  budgetMoveCandidates,
+  canAssignBudget,
+  canCarryBudget,
+  linkedAccountConflicts,
+  linkedAccountsChange,
+  linkedBudgetForAccount,
   monthlyBudgetAllocation,
-  resolveBudgetId
+  resolveBudgetId,
+  transferFundsDelta,
+  selfFundedBudgetIds,
+  budgetScopedMonthFilter
 } from './budgets.ts'
 import { createCardBillingLookup } from './installments.ts'
 
@@ -201,4 +214,202 @@ test('passes positive amounts to the explicit converter and leaves input transac
   assert.equal(allBudgetsEstimatedMonthlyTotal(transactions, 2026, 0, convert), 47.5)
   assert.deepEqual(converted, [[12.5, 'EUR'], [12.5, 'EUR'], [7.5, 'USD']])
   assert.deepEqual(transactions, before)
+})
+
+test('only expenses and income can carry a budget', () => {
+  assert.deepEqual(
+    (['expense', 'income', 'transfer', 'loan', 'loan_payment'] as const).map(canCarryBudget),
+    [true, true, false, false, false]
+  )
+})
+
+const linkedBudgets = [
+  { id: 'casa', name: 'Casa', archived: false, linkedAccountIds: ['cash-casa'] },
+  { id: 'old', name: 'Viejo', archived: true, linkedAccountIds: ['cash-old'] },
+  { id: 'plain', name: 'Sin cuentas', archived: false }
+]
+
+test('a movement inherits the active budget its account is linked to, else the default', () => {
+  assert.equal(budgetIdForAccount(linkedBudgets, 'cash-casa'), 'casa')
+  assert.equal(budgetIdForAccount(linkedBudgets, 'cash-old'), DEFAULT_MONTHLY_BUDGET_ID)
+  assert.equal(budgetIdForAccount(linkedBudgets, 'unlinked'), DEFAULT_MONTHLY_BUDGET_ID)
+  assert.equal(budgetIdForAccount(linkedBudgets, ''), DEFAULT_MONTHLY_BUDGET_ID)
+})
+
+test('reports accounts already linked to another active budget', () => {
+  assert.deepEqual(linkedAccountConflicts(linkedBudgets, ['cash-casa', 'cash-old', 'free']), [
+    { accountId: 'cash-casa', budgetId: 'casa', budgetName: 'Casa' }
+  ])
+  assert.deepEqual(linkedAccountConflicts(linkedBudgets, ['cash-casa'], 'casa'), [])
+})
+
+test('a movement saved under the default budget stores no explicit reference', () => {
+  assert.equal(budgetIdToPersist('expense', DEFAULT_MONTHLY_BUDGET_ID), null)
+  assert.equal(budgetIdToPersist('income', 'casa'), 'casa')
+  assert.equal(budgetIdToPersist('transfer', 'casa'), null)
+  assert.equal(budgetIdToPersist('expense', ''), null)
+})
+
+test('a monthly budget is self-funded only in months with assigned income; an event budget always', () => {
+  const kinds: Record<string, 'monthly' | 'event'> = { hogar: 'monthly', 'ventas-casa': 'event' }
+  const kindOf = (budgetId: string) => kinds[budgetId]
+  const september = new Date(2026, 8, 10, 12)
+  const october = new Date(2026, 9, 10, 12)
+  const funded = selfFundedBudgetIds([
+    { type: 'income', budgetId: 'ventas-casa', date: september },
+    { type: 'income', budgetId: 'hogar', date: september },
+    { type: 'income', budgetId: DEFAULT_MONTHLY_BUDGET_ID, date: october },
+    { type: 'income', date: october },
+    { type: 'income', budgetId: 'gone', date: october },
+    { type: 'expense', budgetId: 'hogar', date: october }
+  ], { year: 2026, month: 9, kindOf })
+  assert.deepEqual([...funded], ['ventas-casa'])
+  assert.deepEqual([...selfFundedBudgetIds([{ type: 'income', budgetId: 'hogar', date: october }], { year: 2026, month: 9, kindOf })], ['hogar'])
+})
+
+test('a movement of a linked account can only go to that account\'s budget', () => {
+  const budgets = [
+    { id: 'casa', name: 'Casa', archived: false, linkedAccountIds: ['cash-casa'] },
+    { id: 'viaje', name: 'Viaje', archived: true, linkedAccountIds: ['cash-viaje'] }
+  ]
+  assert.equal(linkedBudgetForAccount(budgets, 'cash-casa')?.id, 'casa')
+  // Archiving the budget frees its accounts.
+  assert.equal(linkedBudgetForAccount(budgets, 'cash-viaje'), null)
+  assert.equal(canAssignBudget(budgets, 'cash-casa', 'casa'), true)
+  assert.equal(canAssignBudget(budgets, 'cash-casa', DEFAULT_MONTHLY_BUDGET_ID), false)
+  assert.equal(canAssignBudget(budgets, 'cash-casa', 'other'), false)
+  assert.equal(canAssignBudget(budgets, 'bank', 'casa'), true)
+  assert.equal(canAssignBudget(budgets, '', DEFAULT_MONTHLY_BUDGET_ID), true)
+})
+
+test('existing default-budget movements from linked accounts or capped categories can move to an event budget', () => {
+  const day = (iso: string) => new Date(`${iso}T12:00:00`)
+  const transactions = [
+    { id: 'linked-expense', type: 'expense', accountId: 'cash-casa', categoryId: 'food', date: day('2026-10-05') },
+    { id: 'linked-income', type: 'income', accountId: 'cash-casa', categoryId: 'sales', date: day('2026-10-06') },
+    { id: 'capped-expense', type: 'expense', accountId: 'bank', categoryId: 'furniture', date: day('2026-10-07') },
+    // Income is never matched by category: it only enters through a linked account.
+    { id: 'capped-income', type: 'income', accountId: 'bank', categoryId: 'furniture', date: day('2026-10-07') },
+    { id: 'already-assigned', type: 'expense', accountId: 'cash-casa', budgetId: 'viaje', date: day('2026-10-08') },
+    { id: 'explicit-default', type: 'expense', accountId: 'cash-casa', budgetId: DEFAULT_MONTHLY_BUDGET_ID, date: day('2026-10-08') },
+    { id: 'transfer', type: 'transfer', accountId: 'cash-casa', date: day('2026-10-08') },
+    { id: 'unrelated', type: 'expense', accountId: 'bank', categoryId: 'food', date: day('2026-10-08') },
+    { id: 'before-start', type: 'expense', accountId: 'cash-casa', date: day('2026-09-30') },
+    { id: 'on-end-day', type: 'expense', accountId: 'cash-casa', date: new Date('2026-10-31T23:30:00') },
+    { id: 'after-end', type: 'expense', accountId: 'cash-casa', date: day('2026-11-01') }
+  ]
+  const ids = (options: Parameters<typeof budgetMoveCandidates>[1]) =>
+    budgetMoveCandidates(transactions, options).map(transaction => transaction.id)
+
+  assert.deepEqual(ids({
+    linkedAccountIds: ['cash-casa'],
+    categoryIds: ['furniture'],
+    startDate: day('2026-10-01'),
+    endDate: new Date('2026-10-31T00:00:00')
+  }), ['linked-expense', 'linked-income', 'capped-expense', 'explicit-default', 'on-end-day'])
+  assert.deepEqual(ids({ linkedAccountIds: [], categoryIds: [] }), [])
+  assert.equal(ids({ linkedAccountIds: ['cash-casa'], categoryIds: [] }).length, 6)
+  // Without dates a capped category would sweep the whole history, so only linked accounts count.
+  assert.deepEqual(ids({ linkedAccountIds: [], categoryIds: ['furniture'] }), [])
+})
+
+test('transfers fund the budget of the linked account they enter and drain the one they leave', () => {
+  const links: Record<string, string> = { 'cash-casa': 'casa', 'cash-casa-2': 'casa', 'cash-viaje': 'viaje' }
+  const linkedBudgetOf = (accountId: string) => links[accountId] ?? null
+  const transfer = (accountId: string, toAccountId: string, amount = 100) =>
+    ({ type: 'transfer', accountId, toAccountId, amount, date: new Date(2026, 9, 5, 12), currency: 'COP' })
+  // Unlinked → linked adds; linked → unlinked subtracts.
+  assert.equal(transferFundsDelta(transfer('bank', 'cash-casa'), 'casa', linkedBudgetOf), 100)
+  assert.equal(transferFundsDelta(transfer('cash-casa', 'bank'), 'casa', linkedBudgetOf), -100)
+  // Between two accounts of the same budget the money never leaves it.
+  assert.equal(transferFundsDelta(transfer('cash-casa', 'cash-casa-2'), 'casa', linkedBudgetOf), 0)
+  // Between two budgets: out of one, into the other.
+  assert.equal(transferFundsDelta(transfer('cash-casa', 'cash-viaje'), 'casa', linkedBudgetOf), -100)
+  assert.equal(transferFundsDelta(transfer('cash-casa', 'cash-viaje'), 'viaje', linkedBudgetOf), 100)
+  // Older transfers may hold a negative amount; the direction comes from the accounts.
+  assert.equal(transferFundsDelta(transfer('bank', 'cash-casa', -100), 'casa', linkedBudgetOf), 100)
+  assert.equal(transferFundsDelta({ type: 'expense', accountId: 'bank', amount: -5, date: new Date(), currency: 'COP' }, 'casa', linkedBudgetOf), 0)
+
+  const transactions = [
+    transfer('bank', 'cash-casa', 1_000),
+    transfer('cash-casa', 'bank', 200),
+    { type: 'income', budgetId: 'casa', amount: 50, date: new Date(2026, 9, 6, 12), currency: 'COP' },
+    { ...transfer('bank', 'cash-casa', 999), date: new Date(2026, 8, 6, 12) }
+  ]
+  assert.deepEqual(budgetFundsAllocation(transactions, 'casa', 'monthly', 2026, 9, undefined, linkedBudgetOf), { total: 850, count: 3, inflows: 2 })
+  assert.deepEqual(budgetFundsAllocation(transactions, 'casa', 'event', 2026, 9, undefined, linkedBudgetOf), { total: 1_849, count: 4, inflows: 3 })
+  // Without links, only assigned income funds a budget.
+  assert.deepEqual(budgetFundsAllocation(transactions, 'casa', 'event', 2026, 9), { total: 50, count: 1, inflows: 1 })
+})
+
+test('funds count their inflows, so a budget that only had money taken out has no funding', () => {
+  const links: Record<string, string> = { 'cash-casa': 'casa' }
+  const linkedBudgetOf = (accountId: string) => links[accountId] ?? null
+  const transfer = (accountId: string, toAccountId: string, amount: number, date = new Date(2026, 9, 5, 12)) =>
+    ({ type: 'transfer', accountId, toAccountId, amount, date, currency: 'COP' })
+  // Only outflows: no inflow, so callers treat the budget as unfunded.
+  assert.deepEqual(budgetFundsAllocation([transfer('cash-casa', 'bank', 300)], 'casa', 'event', 2026, 9, undefined, linkedBudgetOf),
+    { total: -300, count: 1, inflows: 0 })
+  // A monthly budget funded in another month has no inflow in this one.
+  assert.deepEqual(budgetFundsAllocation(
+    [transfer('bank', 'cash-casa', 500, new Date(2026, 8, 5, 12)), transfer('cash-casa', 'bank', 300)],
+    'casa', 'monthly', 2026, 9, undefined, linkedBudgetOf
+  ), { total: -300, count: 1, inflows: 0 })
+  // With an inflow, outflows above it keep the real negative total.
+  assert.deepEqual(budgetFundsAllocation([transfer('bank', 'cash-casa', 100), transfer('cash-casa', 'bank', 300)], 'casa', 'event', 2026, 9, undefined, linkedBudgetOf),
+    { total: -200, count: 2, inflows: 1 })
+})
+
+test('a transfer into a linked account makes its budget self-funded in that period', () => {
+  const kindOf = () => 'monthly' as const
+  const linkedBudgetOf = (accountId: string) => accountId === 'cash-casa' ? 'casa' : null
+  const transfers = [{ type: 'transfer', accountId: 'bank', toAccountId: 'cash-casa', amount: 100, date: new Date(2026, 9, 5, 12) }]
+  assert.deepEqual([...selfFundedBudgetIds(transfers, { year: 2026, month: 9, kindOf, linkedBudgetOf })], ['casa'])
+  assert.deepEqual([...selfFundedBudgetIds(transfers, { year: 2026, month: 8, kindOf, linkedBudgetOf })], [])
+  // A transfer out of the budget is not funding.
+  const out = [{ type: 'transfer', accountId: 'cash-casa', toAccountId: 'bank', amount: 100, date: new Date(2026, 9, 5, 12) }]
+  assert.deepEqual([...selfFundedBudgetIds(out, { year: 2026, month: 9, kindOf, linkedBudgetOf })], [])
+})
+
+
+test('an edit decides the budget in the same write: linked account first, then type rules', () => {
+  // Transfers and loans never carry a budget, even from a linked account.
+  for (const toType of ['transfer', 'loan', 'loan_payment']) {
+    assert.deepEqual(budgetChangeForEdit({ fromType: 'expense', toType, linkedBudgetId: 'casa' }), { action: 'clear' })
+  }
+  // A movement of a linked account belongs to that budget, whatever its type was.
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'transfer', toType: 'expense', linkedBudgetId: 'casa' }), { action: 'set', budgetId: 'casa' })
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'income', toType: 'expense', linkedBudgetId: 'casa' }), { action: 'set', budgetId: 'casa' })
+  // Switching between expense and income leaves the budget (R3).
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'income', toType: 'expense', linkedBudgetId: null }), { action: 'clear' })
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'expense', toType: 'income', linkedBudgetId: null }), { action: 'clear' })
+  // Otherwise the stored budget stays.
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'expense', toType: 'expense', linkedBudgetId: null }), { action: 'keep' })
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'transfer', toType: 'income', linkedBudgetId: null }), { action: 'keep' })
+})
+
+test('a link change lists the accounts that join and leave a budget, ignoring order', () => {
+  assert.deepEqual(linkedAccountsChange(['a', 'b'], ['b', 'c']), { changed: true, added: ['c'], removed: ['a'] })
+  assert.deepEqual(linkedAccountsChange(undefined, ['a']), { changed: true, added: ['a'], removed: [] })
+  assert.deepEqual(linkedAccountsChange(['a', 'b'], ['b', 'a']), { changed: false, added: [], removed: [] })
+  assert.deepEqual(linkedAccountsChange(['a'], []), { changed: true, added: [], removed: ['a'] })
+  assert.deepEqual(linkedAccountsChange(undefined, []), { changed: false, added: [], removed: [] })
+})
+
+test('S9: seen by budget, the month keeps unassigned income and spending of budgets without own funds', () => {
+  const kindOf = (budgetId: string) => ({ 'ventas-casa': 'event', hogar: 'monthly' } as const)[budgetId]
+  const october = new Date(2026, 9, 5, 12)
+  const transactions = [
+    { type: 'income', amount: 5000000, date: october },
+    { type: 'income', amount: 1000000, budgetId: 'ventas-casa', date: october },
+    { type: 'expense', amount: -300000, budgetId: 'ventas-casa', date: october },
+    { type: 'expense', amount: -20000, budgetId: 'hogar', date: october },
+    { type: 'expense', amount: -50000, date: october }
+  ]
+  const filter = budgetScopedMonthFilter(transactions, { year: 2026, month: 9, kindOf, linkedBudgetOf: () => null })
+  const income = transactions.filter(t => t.type === 'income' && filter.countsIncome(t)).reduce((sum, t) => sum + t.amount, 0)
+  const expense = transactions.filter(t => t.type === 'expense' && filter.countsExpense(t)).reduce((sum, t) => sum - t.amount, 0)
+  assert.equal(income, 5000000)
+  assert.equal(expense, 70000)
+  assert.deepEqual([...filter.selfFunded], ['ventas-casa'])
 })

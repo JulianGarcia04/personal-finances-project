@@ -23,7 +23,7 @@ import {
   type CategoryBudgetCurrencyPatch,
   type CategoryBudgetCurrencyState
 } from '../lib/budgetWorkspaceAdapter.ts'
-import { createBudgetPersistence } from '../lib/budgetPersistence.ts'
+import { createBudgetPersistence, type BudgetLinkOptions } from '../lib/budgetPersistence.ts'
 import { createBudgetCategoryCapsPersistence } from '../lib/budgetCategoryCapsPersistence.ts'
 import { DEFAULT_MONTHLY_BUDGET_ID } from '../lib/budgets.ts'
 import { toDateValue } from '../lib/dates.ts'
@@ -157,6 +157,18 @@ export const createGoalsBudgetActions = (
     state.operatingBudgets = budgetByName(updated)
   }
 
+  // Budgets that gave up accounts to the saved budget (written in the same batch).
+  const applyLinkReleases = (options: BudgetLinkOptions): void => {
+    for (const release of options.releases ?? []) {
+      const entry = state.operatingBudgets.find(candidate => candidate.budget.id === release.budgetId)
+      if (!entry) continue
+      const { linkedAccountIds: _previous, ...rest } = entry.budget
+      updateBudgetEntry(release.linkedAccountIds.length
+        ? { ...rest, linkedAccountIds: [...release.linkedAccountIds] }
+        : rest)
+    }
+  }
+
   return {
     async loadBudgetSettings(): Promise<void> {
       const context = dependencies.getCurrentContext()
@@ -231,10 +243,11 @@ export const createGoalsBudgetActions = (
       state.exchangeRates = ownNumericRecord(patch.exchangeRates)
     },
 
-    async createOperatingBudget(draft: OperatingBudgetDraft): Promise<OperatingBudget> {
+    async createOperatingBudget(draft: OperatingBudgetDraft, options: BudgetLinkOptions = {}): Promise<OperatingBudget> {
       const context = requireLoadedContext()
-      const budget = await dependencies.createBudgetPersistence(context.workspaceId).create(draft)
+      const budget = await dependencies.createBudgetPersistence(context.workspaceId).create(draft, options)
       assertContextIsCurrent(context)
+      applyLinkReleases(options)
       if (budget.id === DEFAULT_MONTHLY_BUDGET_ID) throw new Error('The protected default monthly budget cannot be created')
       state.operatingBudgets = budgetByName([
         ...state.operatingBudgets.filter(entry => entry.budget.id !== budget.id),
@@ -243,11 +256,12 @@ export const createGoalsBudgetActions = (
       return budget
     },
 
-    async updateOperatingBudget(budgetId: string, patch: OperatingBudgetPatch): Promise<OperatingBudget> {
+    async updateOperatingBudget(budgetId: string, patch: OperatingBudgetPatch, options: BudgetLinkOptions = {}): Promise<OperatingBudget> {
       assertAdditionalBudgetId(budgetId)
       const context = requireLoadedContext()
-      const budget = await dependencies.createBudgetPersistence(context.workspaceId).patch(budgetId, patch)
+      const budget = await dependencies.createBudgetPersistence(context.workspaceId).patch(budgetId, patch, options)
       assertContextIsCurrent(context)
+      applyLinkReleases(options)
       updateBudgetEntry(budget)
       return budget
     },
@@ -515,14 +529,14 @@ export const useGoalsStore = defineStore('goals', {
       return createGoalsBudgetActions(this, createRuntimeBudgetDependencies(runtime)).loadBudgetSettings()
     },
 
-    async createOperatingBudget(draft: OperatingBudgetDraft): Promise<OperatingBudget> {
+    async createOperatingBudget(draft: OperatingBudgetDraft, options: BudgetLinkOptions = {}): Promise<OperatingBudget> {
       const runtime = await loadGoalsRuntime()
-      return createGoalsBudgetActions(this, createRuntimeBudgetDependencies(runtime)).createOperatingBudget(draft)
+      return createGoalsBudgetActions(this, createRuntimeBudgetDependencies(runtime)).createOperatingBudget(draft, options)
     },
 
-    async updateOperatingBudget(budgetId: string, patch: OperatingBudgetPatch): Promise<OperatingBudget> {
+    async updateOperatingBudget(budgetId: string, patch: OperatingBudgetPatch, options: BudgetLinkOptions = {}): Promise<OperatingBudget> {
       const runtime = await loadGoalsRuntime()
-      return createGoalsBudgetActions(this, createRuntimeBudgetDependencies(runtime)).updateOperatingBudget(budgetId, patch)
+      return createGoalsBudgetActions(this, createRuntimeBudgetDependencies(runtime)).updateOperatingBudget(budgetId, patch, options)
     },
 
     async archiveOperatingBudget(budgetId: string): Promise<OperatingBudget> {

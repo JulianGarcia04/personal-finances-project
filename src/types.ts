@@ -56,6 +56,9 @@ export interface Account {
   openingAllocationId?: string | null;
   lastPocketMovementId?: string;
   lastPocketMovementType?: 'created' | 'updated' | 'deleted';
+  // Active budget this account is linked to, mirrored from the budget's linkedAccountIds so the
+  // rules can require its expenses and income to carry that budget. Never set on pockets or bridges.
+  linkedBudgetId?: string;
   createdAt: Date;
 }
 
@@ -144,6 +147,8 @@ export interface OperatingBudget {
   name: string;
   capCurrency: string; // Stable denomination shared by this budget's scalar caps.
   totalLimit?: number;
+  // Accounts whose movements belong to this budget (the selector is locked to it).
+  linkedAccountIds?: string[];
   archived: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -154,7 +159,7 @@ export interface OperatingBudget {
 
 // Form input contains no record identity, lifecycle, audit, or ledger fields.
 export type OperatingBudgetDraft = Pick<OperatingBudget,
-  'kind' | 'name' | 'capCurrency' | 'totalLimit' | 'startDate' | 'endDate'
+  'kind' | 'name' | 'capCurrency' | 'totalLimit' | 'startDate' | 'endDate' | 'linkedAccountIds'
 >;
 
 // Omitted keys mean no change; null clears the optional limit or event date.
@@ -163,6 +168,7 @@ export interface OperatingBudgetPatch {
   totalLimit?: number | null;
   startDate?: Date | null;
   endDate?: Date | null;
+  linkedAccountIds?: string[];
 }
 
 export interface ChatMessage {

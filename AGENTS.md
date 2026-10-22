@@ -59,7 +59,7 @@ Permite subir archivos de texto (`.txt`, `.csv`) o pegar fragmentos de texto de 
 * **Pantalla de Revisión Interactiva:** Antes de guardar, los movimientos parsed se cargan en una tabla interactiva donde el usuario puede modificar montos, descripciones, reclasificar categorías o desmarcar transacciones específicas antes de guardarlas masivamente.
 
 ### 5. Presupuestos y Objetivos de Ahorro
-Permite establecer metas financieras personalizadas (ej. ahorrar para un carro o un viaje) y asignar fondos de manera atómica descontándolos de cuentas bancarias reales. Incluye un planificador de presupuestos interactivo basado en la regla 50/30/20, soportado por gráficos de distribución en tiempo real con Chart.js.
+Permite establecer metas financieras personalizadas (ej. ahorrar para un carro o un viaje) y asignar fondos de manera atómica descontándolos de cuentas bancarias reales. Incluye un planificador de presupuestos interactivo basado en la regla 50/30/20, soportado por gráficos de distribución en tiempo real con Chart.js. Un presupuesto puede ligar cuentas: cada cuenta ligada guarda `linkedBudgetId` (en el mismo lote que la lista `linkedAccountIds` del presupuesto; al eliminar el presupuesto se libera) y las reglas de Firestore y los escritores del servidor exigen que sus gastos e ingresos lleven ese presupuesto.
 
 ### 6. Asesor Financiero IA (Modo Agente Chatbot)
 Un chatbot integrado e interactivo (pestaña "Asesor IA") impulsado por Genkit y Gemini 2.5 Flash (`gemini-2.5-flash`).
@@ -102,7 +102,7 @@ Vault está diseñado para correr completamente offline utilizando **Firebase Em
    ENCRYPTION_SECRET=vault-super-secure-encryption-secret-32-chars
    ```
 
-   **Alertas de presupuesto por correo (opcional):** el trigger `notifyBudgetThreshold` envía un correo a los miembros del workspace cuando una categoría llega al 80 % o al 100 % de su tope, o cuando lo hace el tope total del presupuesto (el `totalLimit` de los presupuestos creados) o cuando el gasto total del mes llega al 80 % o al 100 % de los ingresos del mes (el mayor entre el ingreso del planificador 50/30/20 y los ingresos registrados en el mes), usando `nodemailer` sobre Gmail SMTP. Requiere una cuenta de Gmail con verificación en dos pasos y una **contraseña de aplicación** (https://myaccount.google.com/apppasswords); la contraseña normal de la cuenta no funciona.
+   **Alertas de presupuesto por correo (opcional):** el trigger `notifyBudgetThreshold` envía un correo a los miembros del workspace cuando una categoría llega al 80 % o al 100 % de su tope, o cuando lo hace el tope total del presupuesto (el `totalLimit` de los presupuestos creados) o cuando el gasto de un presupuesto llega al 80 % o al 100 % de sus fondos (los ingresos asignados a ese presupuesto más las transferencias que entran a sus cuentas ligadas, menos las que salen), o cuando el gasto total del mes llega al 80 % o al 100 % de los ingresos del mes (el mayor entre el ingreso del planificador 50/30/20 y los ingresos registrados en el mes sin presupuesto asignado; los gastos de presupuestos con fondos propios no cuentan). Editar o borrar un ingreso que baja el ingreso del mes o los fondos de un presupuesto también vuelve a revisar esas alertas. Usa `nodemailer` sobre Gmail SMTP. Requiere una cuenta de Gmail con verificación en dos pasos y una **contraseña de aplicación** (https://myaccount.google.com/apppasswords); la contraseña normal de la cuenta no funciona.
    * **Local (emuladores):** crea `functions/.secret.local` (no se versiona) con:
      ```env
      SMTP_USER=tu-cuenta@gmail.com

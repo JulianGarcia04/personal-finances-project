@@ -5,7 +5,9 @@ import {
   OperatingBudgetDraftSchema,
   OperatingBudgetPatchSchema,
   OperatingBudgetRecordSchema,
-  TransactionSchema
+  StoredOperatingBudgetRecordSchema,
+  TransactionSchema,
+  isReservedBudgetName
 } from '../schemas.ts'
 
 const baseTransaction = {
@@ -47,6 +49,18 @@ test('Operating budget drafts support monthly and event budgets without requirin
   }).success, true)
   assert.equal(OperatingBudgetRecordSchema.safeParse(monthlyRecord).success, true)
   assert.equal(OperatingBudgetRecordSchema.safeParse(eventRecord).success, true)
+})
+
+test('new operating budgets cannot take the name reserved for the default monthly budget; stored ones still load', () => {
+  for (const name of ['Presupuesto mensual', ' presupuesto MENSUAL ', 'Presupuésto mensual']) {
+    const result = OperatingBudgetDraftSchema.safeParse({ ...monthlyDraft, name })
+    assert.equal(result.success, false)
+    assert.equal(result.error?.issues[0]?.message, 'Ese nombre está reservado para el presupuesto mensual predeterminado.')
+  }
+  assert.equal(OperatingBudgetDraftSchema.safeParse({ ...monthlyDraft, name: 'Presupuesto mensual hogar' }).success, true)
+  assert.equal(StoredOperatingBudgetRecordSchema.safeParse({ ...monthlyRecord, name: 'Presupuesto mensual' }).success, true)
+  assert.equal(isReservedBudgetName('presupuesto mensual'), true)
+  assert.equal(isReservedBudgetName('Hogar'), false)
 })
 
 test('Operating budget limits accept zero and fractions but reject negative and non-finite values', () => {
@@ -118,4 +132,17 @@ test('Operating budget patches use null to clear optional limits and event dates
   const unchanged = OperatingBudgetPatchSchema.safeParse({ name: 'Renamed' })
   assert.equal(unchanged.success, true)
   if (unchanged.success) assert.equal(Object.hasOwn(unchanged.data, 'totalLimit'), false)
+})
+
+test('stored budget records drop fields a newer client added instead of failing the load', () => {
+  const stored = {
+    id: 'viaje', workspaceId: 'ws1', kind: 'event', name: 'Viaje', capCurrency: 'COP', archived: false,
+    createdAt: new Date('2026-10-01T12:00:00'), updatedAt: new Date('2026-10-01T12:00:00'),
+    fieldFromTheFuture: true
+  }
+  const parsed = StoredOperatingBudgetRecordSchema.parse(stored)
+  assert.equal('fieldFromTheFuture' in parsed, false)
+  assert.equal(parsed.name, 'Viaje')
+  // Writes stay strict.
+  assert.throws(() => OperatingBudgetRecordSchema.parse(stored))
 })

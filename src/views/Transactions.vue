@@ -202,19 +202,21 @@
                   <span>{{ getCategory(tx.categoryId)?.name }}</span>
                 </span>
                 <span v-else class="text-text-muted text-xs">-</span>
-                <div v-if="tx.type === 'expense'" class="mt-2 max-w-48">
+                <div v-if="canCarryBudget(tx.type)" class="mt-2 max-w-48">
                   <label class="sr-only" :for="`budget-assignment-row-${tx.id}`">Presupuesto asignado</label>
                   <select
                     v-if="budgetSettingsReady"
                     data-testid="budget-assignment-row"
                     :id="`budget-assignment-row-${tx.id}`"
                     :value="resolveBudgetId(tx.budgetId)"
-                    :disabled="isBudgetAssignmentPending(tx.id)"
+                    :disabled="isBudgetAssignmentPending(tx.id) || isBudgetLockedFor(tx)"
+                    :title="budgetLockTitle(tx)"
+                    :aria-describedby="budgetLockTitle(tx) ? `budget-lock-row-${tx.id}` : undefined"
                     @change="handleBudgetAssignmentChange(tx, $event)"
                     class="w-full px-2 py-1.5 rounded-lg bg-slate-900/50 border border-border text-[10px] text-text-primary focus:outline-none focus:border-accent-emerald disabled:opacity-50"
                   >
                     <option
-                      v-for="option in budgetOptionsForExpense(tx.budgetId)"
+                      v-for="option in budgetOptionsForExpense(tx.budgetId, tx.accountId)"
                       :key="option.id"
                       :value="option.id"
                       :disabled="option.archived"
@@ -222,6 +224,7 @@
                       {{ option.label }}{{ option.archived ? ' · Archivado' : '' }}
                     </option>
                   </select>
+                  <span v-if="budgetLockTitle(tx)" :id="`budget-lock-row-${tx.id}`" class="sr-only">{{ budgetLockTitle(tx) }}: este movimiento pertenece a ese presupuesto.</span>
                 </div>
               </td>
               <!-- Date -->
@@ -400,19 +403,21 @@
               <TrashIcon class="w-4 h-4" />
             </button>
           </div>
-          <div v-if="tx.type === 'expense'" class="w-full pt-1.5">
+          <div v-if="canCarryBudget(tx.type)" class="w-full pt-1.5">
             <label class="sr-only" :for="`budget-assignment-card-${tx.id}`">Presupuesto asignado</label>
             <select
               v-if="budgetSettingsReady"
               data-testid="budget-assignment-card"
               :id="`budget-assignment-card-${tx.id}`"
               :value="resolveBudgetId(tx.budgetId)"
-              :disabled="isBudgetAssignmentPending(tx.id)"
+              :disabled="isBudgetAssignmentPending(tx.id) || isBudgetLockedFor(tx)"
+              :title="budgetLockTitle(tx)"
+              :aria-describedby="budgetLockTitle(tx) ? `budget-lock-card-${tx.id}` : undefined"
               @change="handleBudgetAssignmentChange(tx, $event)"
               class="field text-base sm:text-xs disabled:opacity-50"
             >
               <option
-                v-for="option in budgetOptionsForExpense(tx.budgetId)"
+                v-for="option in budgetOptionsForExpense(tx.budgetId, tx.accountId)"
                 :key="option.id"
                 :value="option.id"
                 :disabled="option.archived"
@@ -420,6 +425,7 @@
                 {{ option.label }}{{ option.archived ? ' · Archivado' : '' }}
               </option>
             </select>
+            <span v-if="budgetLockTitle(tx)" :id="`budget-lock-card-${tx.id}`" class="sr-only">{{ budgetLockTitle(tx) }}: este movimiento pertenece a ese presupuesto.</span>
           </div>
         </div>
       </div>
@@ -560,6 +566,38 @@
                   : 'Registra en la descripción quién te pagó (ej. "Juan me pagó"). Entra a la cuenta pero no cuenta como ingreso.' }}
               </p>
             </div>
+          </div>
+
+          <!-- Budget (Expense/Income only) -->
+          <div v-if="showNewTxBudget" class="space-y-1 animate-fade-in" data-testid="new-tx-budget">
+            <label for="new-tx-budget" class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Presupuesto</label>
+            <select
+              id="new-tx-budget"
+              v-model="newTx.budgetId"
+              class="field disabled:opacity-70"
+              :disabled="!!newTxLinkedBudget"
+              :aria-describedby="newTxLinkedBudget ? 'new-tx-budget-lock' : undefined"
+              @change="newTxBudgetTouched = true"
+            >
+              <option
+                v-for="option in budgetOptionsForExpense(null, newTx.accountId)"
+                :key="option.id"
+                :value="option.id"
+                :disabled="option.archived"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+            <p v-if="newTxLinkedBudget" id="new-tx-budget-lock" class="flex items-start gap-1 text-[10px] text-accent-emerald">
+              <LinkIcon class="w-3 h-3 mt-px shrink-0" />
+              <span>Esta cuenta está ligada a «{{ newTxLinkedBudget.name }}»: todos sus movimientos van a ese presupuesto. Para usar otro, elige otra cuenta o desliga esta en Presupuestos.</span>
+            </p>
+            <p v-else-if="newTx.type === 'income' && newTx.budgetId !== DEFAULT_MONTHLY_BUDGET_ID" class="text-[10px] text-text-secondary">
+              Este ingreso financia solo este presupuesto y no se suma al ingreso del mes.
+            </p>
+            <p v-else class="text-[10px] text-text-secondary">
+              Los movimientos entran a este presupuesto cuando se lo asignas o cuando salen de una cuenta ligada.
+            </p>
           </div>
 
           <!-- Description and amount -->
@@ -794,6 +832,15 @@
           <p v-if="isEditingOpeningAllocation" class="text-[11px] text-text-muted">
             La asignación inicial conserva sus cuentas y tipo; puedes editar su monto, fecha y descripción.
           </p>
+          <p v-if="editBudgetNoticeState && editBudgetNoticeState.kind !== 'linked'" role="status" class="flex items-start gap-1.5 rounded-lg border border-accent-amber/20 bg-accent-amber/10 px-3 py-2 text-[11px] text-accent-amber" data-testid="edit-budget-released">
+            <LinkIcon class="w-3.5 h-3.5 mt-px shrink-0" />
+            <span v-if="editBudgetNoticeState.kind === 'released'">Las transferencias y los préstamos no pertenecen a un presupuesto: al guardar, este movimiento saldrá de «{{ editBudgetNoticeState.budgetName }}».</span>
+            <span v-else>Al cambiar entre gasto e ingreso, este movimiento saldrá de «{{ editBudgetNoticeState.budgetName }}» y quedará en el presupuesto mensual.</span>
+          </p>
+          <p v-else-if="editBudgetNoticeState" role="status" class="flex items-start gap-1.5 rounded-lg border border-accent-emerald/20 bg-accent-emerald/10 px-3 py-2 text-[11px] text-accent-emerald" data-testid="edit-budget-linked">
+            <LinkIcon class="w-3.5 h-3.5 mt-px shrink-0" />
+            <span>Al guardar, este movimiento pasará a «{{ editBudgetNoticeState.budgetName }}» porque la cuenta está ligada a ese presupuesto.</span>
+          </p>
 
           <!-- Account select -->
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -856,18 +903,19 @@
             </div>
           </div>
 
-          <div v-if="editingOriginalType === 'expense' && editTx.type === 'expense'" class="rounded-xl border border-border/60 bg-slate-900/30 p-3 space-y-2">
+          <div v-if="canCarryBudget(editingOriginalType) && editTx.type === editingOriginalType" class="rounded-xl border border-border/60 bg-slate-900/30 p-3 space-y-2">
             <label class="block text-[10px] font-semibold text-text-secondary uppercase tracking-wider">
               Presupuesto asignado
               <select
                 v-if="budgetSettingsReady"
                 data-testid="budget-assignment-edit"
                 v-model="editBudgetId"
-                :disabled="isBudgetAssignmentPending(editingTxId)"
-                class="mt-1 field"
+                :disabled="isBudgetAssignmentPending(editingTxId) || !!editingLinkedBudget"
+                :aria-describedby="editingLinkedBudget ? 'edit-budget-lock' : undefined"
+                class="mt-1 field disabled:opacity-70"
               >
                 <option
-                  v-for="option in budgetOptionsForExpense(editingOriginalBudgetId)"
+                  v-for="option in budgetOptionsForExpense(editingOriginalBudgetId, editingTransaction?.accountId)"
                   :key="option.id"
                   :value="option.id"
                   :disabled="option.archived"
@@ -876,6 +924,10 @@
                 </option>
               </select>
             </label>
+            <p v-if="editingLinkedBudget" id="edit-budget-lock" class="flex items-start gap-1 text-[10px] text-accent-emerald" data-testid="budget-assignment-edit-locked">
+              <LinkIcon class="w-3 h-3 mt-px shrink-0" />
+              <span>Este movimiento sale de una cuenta ligada a «{{ editingLinkedBudget.name }}», así que pertenece a ese presupuesto.</span>
+            </p>
             <button
               type="button"
               data-testid="budget-assignment-apply"
@@ -1032,7 +1084,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useGoalsStore } from '@/stores/goalsStore'
-import { DEFAULT_MONTHLY_BUDGET_ID, resolveBudgetId } from '@/lib/budgets'
+import { DEFAULT_MONTHLY_BUDGET_ID, budgetChangeForEdit, canAssignBudget, canCarryBudget, linkedBudgetForAccount, resolveBudgetId } from '@/lib/budgets'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useAuthStore } from '@/stores/authStore'
 import type { Category, Transaction, TransactionType } from '@/types'
@@ -1052,7 +1104,8 @@ import {
   Activity, Scissors, BookOpen, Wrench, Shield,
   HandCoins as HandCoinsIcon,
   RotateCcw as RotateCcwIcon,
-  SlidersHorizontal as SlidersHorizontalIcon
+  SlidersHorizontal as SlidersHorizontalIcon,
+  Link2 as LinkIcon
 } from 'lucide-vue-next'
 import BaseSheet from '@/components/ui/BaseSheet.vue'
 import CategoryQuickCreate from '@/components/CategoryQuickCreate.vue'
@@ -1068,6 +1121,13 @@ const assigningBudgetIds = ref(new Set<string>())
 const editBudgetId = ref(DEFAULT_MONTHLY_BUDGET_ID)
 const editingOriginalBudgetId = ref(DEFAULT_MONTHLY_BUDGET_ID)
 const editingOriginalType = ref<TransactionType>('expense')
+const editingTransaction = computed(() => transactionsStore.transactions.find(tx => tx.id === editingTxId.value))
+const editingLinkedBudget = computed(() => {
+  const transaction = editingTransaction.value
+  if (!transaction) return null
+  const linked = linkedBudgetForAccount(linkableBudgets.value, transaction.accountId)
+  return linked && linked.id === resolveBudgetId(transaction.budgetId) ? linked : null
+})
 
 const syncBudgetSettingsAvailability = () => {
   if (goalsStore.budgetSettingsLoading) {
@@ -1188,6 +1248,7 @@ const newTx = ref<{
   description: string;
   notes: string;
   userId?: string;
+  budgetId: string;
 }>({
   type: 'expense',
   accountId: '',
@@ -1198,6 +1259,7 @@ const newTx = ref<{
   date: toLocalDateKey(),
   description: '',
   notes: '',
+  budgetId: DEFAULT_MONTHLY_BUDGET_ID,
   userId: ''
 })
 
@@ -1248,8 +1310,11 @@ const isEditingOpeningAllocation = computed(() => {
   return !!transaction && accountsStore.accounts.some(account => account.openingAllocationId === transaction.id)
 })
 
-const budgetOptionsForExpense = (currentBudgetId?: string | null) => {
+// A linked account's movements only offer its budget (plus the current one, to move them there).
+const budgetOptionsForExpense = (currentBudgetId?: string | null, accountId = '') => {
   const resolvedBudgetId = resolveBudgetId(currentBudgetId)
+  const allowed = (budgetId: string) =>
+    budgetId === resolvedBudgetId || canAssignBudget(linkableBudgets.value, accountId, budgetId)
   const additionalOptions = goalsStore.operatingBudgets
     .filter(({ budget }) => budget.id !== DEFAULT_MONTHLY_BUDGET_ID
       && (!budget.archived || budget.id === resolvedBudgetId))
@@ -1262,15 +1327,26 @@ const budgetOptionsForExpense = (currentBudgetId?: string | null) => {
   return [
     { id: DEFAULT_MONTHLY_BUDGET_ID, label: 'Presupuesto mensual predeterminado', archived: false },
     ...additionalOptions
-  ]
+  ].filter(option => allowed(option.id))
+}
+
+/** Locked when the movement already sits in its linked account's budget. */
+const isBudgetLockedFor = (transaction: any) => {
+  const linked = linkedBudgetForAccount(linkableBudgets.value, transaction.accountId)
+  return !!linked && linked.id === resolveBudgetId(transaction.budgetId)
+}
+const budgetLockTitle = (transaction: any) => {
+  const linked = linkedBudgetForAccount(linkableBudgets.value, transaction.accountId)
+  return linked ? `La cuenta está ligada a «${linked.name}»` : undefined
 }
 
 const isBudgetAssignmentPending = (transactionId: string) =>
   assigningBudgetIds.value.has(transactionId)
 
 const assignBudgetToExpense = async (transaction: any, budgetId: string): Promise<boolean> => {
-  if (!budgetSettingsReady.value || transaction.type !== 'expense') return false
+  if (!budgetSettingsReady.value || !canCarryBudget(transaction.type)) return false
   if (resolveBudgetId(transaction.budgetId) === budgetId) return false
+  if (!canAssignBudget(linkableBudgets.value, transaction.accountId, budgetId)) return false
   if (assigningBudgetIds.value.has(transaction.id)) return false
 
   assigningBudgetIds.value.add(transaction.id)
@@ -1278,8 +1354,8 @@ const assignBudgetToExpense = async (transaction: any, budgetId: string): Promis
     await transactionsStore.assignExpenseBudget(transaction.id, budgetId)
     return true
   } catch (error: unknown) {
-    console.error('Error actualizando presupuesto del gasto:', error)
-    alert(error instanceof Error ? error.message : 'No se pudo actualizar el presupuesto del gasto')
+    console.error('Error actualizando presupuesto del movimiento:', error)
+    alert(error instanceof Error ? error.message : 'No se pudo actualizar el presupuesto del movimiento')
     return false
   } finally {
     assigningBudgetIds.value.delete(transaction.id)
@@ -1299,7 +1375,7 @@ const applyEditBudgetAssignment = async () => {
   if (!budgetSettingsReady.value) return
 
   const transaction = transactionsStore.transactions.find(tx => tx.id === editingTxId.value)
-  if (!transaction || transaction.type !== 'expense') return
+  if (!transaction || !canCarryBudget(transaction.type)) return
 
   const selectedOption = budgetOptionsForExpense(editingOriginalBudgetId.value)
     .find(option => option.id === editBudgetId.value)
@@ -1384,6 +1460,28 @@ const availableNewSourceAccounts = computed(() => {
 
 // Filtrar categorías según tipo seleccionado (ingreso o gasto)
 const creatingNewTxCategory = ref(false)
+
+// Budget of a new movement: inherited from the account's linked budget until the user picks one.
+const newTxBudgetTouched = ref(false)
+const linkableBudgets = computed(() => goalsStore.operatingBudgets.map(({ budget }) => budget))
+const showNewTxBudget = computed(() => {
+  if (!budgetSettingsReady.value || !canCarryBudget(newTx.value.type)) return false
+  // Bridge-account expenses are replicated into the mirror workspace, which has its own budgets.
+  return !(newTx.value.type === 'expense' && accountsStore.getAccountById(newTx.value.accountId)?.mirror)
+})
+// Every movement of a linked account belongs to its budget, so the selector is locked.
+const newTxLinkedBudget = computed(() => linkedBudgetForAccount(linkableBudgets.value, newTx.value.accountId))
+watch([() => newTx.value.accountId, linkableBudgets], (_, [previousAccountId]) => {
+  if (newTxLinkedBudget.value) {
+    newTx.value.budgetId = newTxLinkedBudget.value.id
+    return
+  }
+  // Leaving a linked account drops its forced budget; otherwise keep the user's pick.
+  const leftLinkedAccount = linkedBudgetForAccount(linkableBudgets.value, previousAccountId ?? '')
+  if (newTxBudgetTouched.value && !leftLinkedAccount) return
+  newTxBudgetTouched.value = false
+  newTx.value.budgetId = DEFAULT_MONTHLY_BUDGET_ID
+})
 const handleNewTxCategoryCreated = (category: Category) => {
   newTx.value.categoryId = category.id
   creatingNewTxCategory.value = false
@@ -1414,8 +1512,10 @@ const closeAddModal = () => {
     date: toLocalDateKey(),
     description: '',
     notes: '',
-    userId: ''
+    userId: '',
+    budgetId: DEFAULT_MONTHLY_BUDGET_ID
   }
+  newTxBudgetTouched.value = false
   clearReceipt()
   clearPocketTransferQuery()
 }
@@ -1510,7 +1610,8 @@ const saveTransaction = async () => {
       receiptUrl: uploadedReceiptUrl.value || null,
       notes: newTx.value.notes || null,
       installments,
-      userId: newTx.value.userId || undefined
+      userId: newTx.value.userId || undefined,
+      budgetId: showNewTxBudget.value ? (newTxLinkedBudget.value?.id ?? newTx.value.budgetId) : null
     })
     closeAddModal()
   } catch (err: any) {
@@ -1566,6 +1667,27 @@ const closeEditModal = () => {
   clearEditReceipt()
 }
 
+// Active budget the edited account is linked to: saving moves the movement into it.
+const editLinkedBudget = computed(() => linkedBudgetForAccount(linkableBudgets.value, editTx.value.accountId))
+// What saving does to the movement's budget (decided in the same write as the edit): transfers and
+// loans leave it, an expense/income switch leaves it, a linked account takes the movement.
+const editBudgetNotice = () => {
+  const change = budgetChangeForEdit({
+    fromType: editingOriginalType.value,
+    toType: editTx.value.type,
+    linkedBudgetId: editLinkedBudget.value?.id ?? null
+  })
+  const nameOf = (budgetId: string) => linkableBudgets.value.find(budget => budget.id === budgetId)?.name ?? 'su presupuesto'
+  if (change.action === 'set') {
+    return change.budgetId === editingOriginalBudgetId.value ? null : { kind: 'linked' as const, budgetName: nameOf(change.budgetId) }
+  }
+  if (change.action === 'clear' && editingOriginalBudgetId.value !== DEFAULT_MONTHLY_BUDGET_ID) {
+    return { kind: canCarryBudget(editTx.value.type) ? 'switched' as const : 'released' as const, budgetName: nameOf(editingOriginalBudgetId.value) }
+  }
+  return null
+}
+const editBudgetNoticeState = computed(editBudgetNotice)
+
 const saveEditedTransaction = async () => {
   const parsedAmount = Number(editTx.value.amount || 0)
   const installments = isEditCreditExpense.value ? Number(editTx.value.installments || 1) : 1
@@ -1610,7 +1732,8 @@ const saveEditedTransaction = async () => {
       receiptUrl: editUploadedReceiptUrl.value || null,
       notes: editTx.value.notes || null,
       installments,
-      userId: editTx.value.userId || undefined
+      userId: editTx.value.userId || undefined,
+      linkedBudgetId: editLinkedBudget.value?.id ?? null
     })
     closeEditModal()
   } catch (err: any) {

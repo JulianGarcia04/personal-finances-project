@@ -84,8 +84,8 @@ test("budget alert email falls back to plain numbers for an unknown currency cod
   assert.match(email.text, /850000(\.00)? NOPE!/);
 });
 
-test("budget alert email for the default budget does not name a budget", () => {
-  const email = renderBudgetAlertEmail({ ...baseAlert, threshold: 80 });
+test("the month's spending vs income alert names no budget", () => {
+  const email = renderBudgetAlertEmail({ ...baseAlert, threshold: 80, incomeBudget: true, spent: 4_250_000, budget: 5_000_000 });
   assert.doesNotMatch(email.text, /presupuesto «/);
   assert.match(email.text, /Casa · octubre de 2026/);
 });
@@ -123,4 +123,24 @@ test("income alert compares the month's spending with the month's income", () =>
   const reached = renderBudgetAlertEmail({ ...baseAlert, threshold: 100, incomeBudget: true, spent: 5_200_000, budget: 5_000_000 });
   assert.match(reached.subject, /Tus gastos del mes ya alcanzaron tus ingresos/);
   assert.match(reached.text, /Te pasaste por: /);
+});
+
+test("funds alert compares a budget's spending with the income assigned to it", () => {
+  const near = renderBudgetAlertEmail({ ...baseAlert, threshold: 80, fundsBudget: true, budgetName: "Ventas Casa", eventBudget: true, monthLabel: undefined });
+  assert.match(near.subject, /Ya usaste el 85 % de los fondos de «Ventas Casa»/);
+  assert.match(near.text, /Fondos: /);
+  assert.match(near.text, /la plata que le asignaste/);
+  assert.doesNotMatch(near.text, /esta categoría|Ingresos del mes/);
+  const reached = renderBudgetAlertEmail({ ...baseAlert, threshold: 100, fundsBudget: true, budgetName: "Ventas Casa", spent: 1_200_000 });
+  assert.match(reached.subject, /Ya usaste todos los fondos de «Ventas Casa»/);
+  assert.match(reached.text, /Te pasaste por: /);
+});
+
+test("alerts of the default monthly budget name it like any other budget", () => {
+  const category = renderBudgetAlertEmail({ ...baseAlert, threshold: 80 });
+  assert.match(category.subject, /Estás cerca del tope de Mercado \(Presupuesto mensual\) \(85 %\)/);
+  assert.match(category.text, /Mercado del presupuesto «Presupuesto mensual»/);
+  assert.match(category.text, /Casa · Presupuesto mensual · octubre de 2026/);
+  const total = renderBudgetAlertEmail({ ...baseAlert, threshold: 100, totalBudget: true });
+  assert.match(total.subject, /tope total del presupuesto «Presupuesto mensual»/);
 });

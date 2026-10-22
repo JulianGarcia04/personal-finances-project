@@ -1,5 +1,5 @@
 import type { Transaction } from '../types.ts'
-import { resolveBudgetId } from './budgets.ts'
+import { budgetIdToPersist, canCarryBudget, resolveBudgetId } from './budgets.ts'
 
 export interface ExpenseBudgetAssignmentContext {
   getUserId(): string | null
@@ -28,17 +28,20 @@ export const createExpenseBudgetAssigner = (context: ExpenseBudgetAssignmentCont
     const transaction = context.findTransaction(transactionId)
     if (!transaction) throw new Error('Transaction not found')
     if (transaction.workspaceId !== workspaceId) throw new Error('Transaction belongs to a different workspace')
-    if (transaction.type !== 'expense') throw new Error('Only expenses can be assigned to operating budgets')
+    if (!canCarryBudget(transaction.type)) throw new Error('Only expenses and income can be assigned to operating budgets')
+    const type = transaction.type
 
+    // The default budget is the absence of a reference: a stored literal would block later type changes.
+    const stored = budgetId === null ? null : budgetIdToPersist(type, budgetId)
     // Firestore rules validate the actual parent's workspace and archive state.
-    await context.writePatch(transactionId, { budgetId })
+    await context.writePatch(transactionId, { budgetId: stored })
 
     // A completed write must not leak into another user's/workspace's projection.
     if (context.getUserId() !== userId || context.getWorkspaceId() !== workspaceId) return
     const current = context.findTransaction(transactionId)
-    if (current?.workspaceId === workspaceId && current.type === 'expense') {
+    if (current?.workspaceId === workspaceId && current.type === type) {
       // Re-find and patch, rather than restoring stale financial fields after a refresh.
-      current.budgetId = budgetId
+      current.budgetId = stored
     }
   }
 

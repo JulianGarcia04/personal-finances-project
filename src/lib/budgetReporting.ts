@@ -1,5 +1,7 @@
 import {
   allBudgetsEstimatedMonthlyTotal,
+  budgetFundsAllocation,
+  type LinkedBudgetLookup,
   eventBudgetCommittedAllocation,
   monthlyBudgetAllocation,
   resolveBudgetId,
@@ -66,6 +68,13 @@ export interface BudgetScopeReport {
   eventCommittedPrincipal: BudgetAmountReport | null
   totalCap: BudgetCapReport | null
   totalComparison: BudgetCapComparison | null
+  /**
+   * Income assigned to this budget plus transfers into its linked accounts minus out; null without
+   * any funding inflow in the period (the budget is then cap-only). Negative when more left than came in.
+   */
+  funds: BudgetAmountReport | null
+  /** Funds minus the spending compared against the cap; null without complete funds and spending. */
+  available: number | null
   /** Own-property-safe category-ID lookup, including cap-only categories. */
   categories: Record<string, BudgetCategoryReport>
 }
@@ -81,6 +90,8 @@ export interface BudgetScopeReportInput {
   exchangeRates: Readonly<Record<string, number>>
   /** Card billing days by account; billed card installments count in their payment month. */
   cardBilling?: CardBillingLookup
+  /** Budget each account is linked to: transfers into or out of those accounts move funds. */
+  linkedBudgetOf?: LinkedBudgetLookup
 }
 
 export interface AllBudgetsEstimateInput {
@@ -236,10 +247,26 @@ export const reportBudgetScope = (input: BudgetScopeReportInput): BudgetScopeRep
   const totalCap = scope.totalLimit === undefined
     ? null
     : capReport(scope.totalLimit, scope.capCurrency, reportingCurrency, exchangeRates)
-  const totalComparison = compare(
-    scope.kind === 'event' ? eventCommittedPrincipal! : monthlyAllocation,
-    totalCap
+  const scopeSpending = scope.kind === 'event' ? eventCommittedPrincipal! : monthlyAllocation
+  const totalComparison = compare(scopeSpending, totalCap)
+
+  const fundsDiagnostics = createDiagnostics()
+  const fundsSummary = budgetFundsAllocation(
+    transactions,
+    scope.id,
+    scope.kind,
+    period.year,
+    period.month,
+    (amount, currency) => convertOrZero(amount, currency, reportingCurrency, exchangeRates, fundsDiagnostics),
+    input.linkedBudgetOf
   )
+  // Without a funding inflow in the period the budget is unfunded, even if money went out.
+  const funds = fundsSummary.inflows === 0
+    ? null
+    : moneyReport(fundsSummary.total, reportingCurrency, fundsDiagnostics)
+  const available = funds?.amount == null || scopeSpending.amount === null
+    ? null
+    : funds.amount - scopeSpending.amount
   const categories: Record<string, BudgetCategoryReport> = {}
   const categoryIds = new Set([
     ...Object.keys(monthlySummary.byCategory),
@@ -313,6 +340,8 @@ export const reportBudgetScope = (input: BudgetScopeReportInput): BudgetScopeRep
     eventCommittedPrincipal,
     totalCap,
     totalComparison,
+    funds,
+    available,
     categories
   }
 }

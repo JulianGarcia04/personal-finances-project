@@ -9,9 +9,15 @@ import {
   countsTowardMonthlySpend,
   countsTowardScopeTotal,
   incomeReference,
+  incomeChangeAlertScope,
   monthlyExpenseTotal,
   monthlyIncomeTotal,
+  scopeFunding,
+  scopeFundsTotal,
+  skipsUnlinkedTransferWrite,
+  transferTouchesLinkedAccount,
   scopeTotalSpend,
+  selfFundedBudgetIds,
   TOTAL_ALERT_SUBJECT,
   evaluateBudgetThresholds,
   monthKey,
@@ -289,6 +295,16 @@ test("monthly income counts only income registered in the local month, converted
   assert.equal(monthlyIncomeTotal(txs, OCTOBER, COP_OPTIONS), null);
 });
 
+test("monthly income excludes income assigned to another budget", () => {
+  const txs = [
+    income(1_000),
+    income(200, { budgetId: null }),
+    income(300, { budgetId: "default-monthly" }),
+    income(5_000_000, { budgetId: "ventas-casa" })
+  ];
+  assert.equal(monthlyIncomeTotal(txs, OCTOBER, COP_OPTIONS), 1_500);
+});
+
 test("monthly expense total counts every budget's month share", () => {
   const txs = [
     expense(100),
@@ -299,6 +315,18 @@ test("monthly expense total counts every budget's month share", () => {
   ];
   assert.equal(monthlyExpenseTotal(txs, OCTOBER, COP_OPTIONS), 220);
   assert.equal(monthlyExpenseTotal([...txs, expense(1, { currency: "USD" })], OCTOBER, COP_OPTIONS), null);
+});
+
+test("monthly expense total skips budgets funded by their own income", () => {
+  const txs = [
+    expense(100),
+    expense(50, { budgetId: "hogar", categoryId: undefined }),
+    expense(700, { budgetId: "ventas-casa" })
+  ];
+  const funded = selfFundedBudgetIds([income(5_000, { budgetId: "ventas-casa" }), income(1_000), income(10, { budgetId: "default-monthly" })], OCTOBER, COP_OPTIONS, () => "event");
+  assert.deepEqual([...funded], ["ventas-casa"]);
+  assert.equal(monthlyExpenseTotal(txs, OCTOBER, COP_OPTIONS, funded), 150);
+  assert.equal(monthlyExpenseTotal(txs, OCTOBER, COP_OPTIONS), 850);
 });
 
 test("income reference is the larger of planner and real income, falling back to either", () => {
@@ -321,4 +349,134 @@ test("countsTowardMonthlySpend accepts any budget's expense with a share in the 
 test("monthly income skips income with a missing or unparseable date instead of throwing", () => {
   const txs = [income(1_000), income(999, { date: undefined }), income(999, { date: "garbage" })];
   assert.equal(monthlyIncomeTotal(txs, OCTOBER, COP_OPTIONS), 1_000);
+});
+
+test("budget funds are its assigned income: all of it for an event, the month's for a monthly budget", () => {
+  const incomes = [
+    income(3_000, { budgetId: "ventas-casa" }),
+    income(2_000, { budgetId: "ventas-casa", date: new Date("2026-08-10T17:00:00.000Z") }),
+    income(9_999, { budgetId: "otro" }),
+    income(9_999)
+  ];
+  assert.equal(scopeFundsTotal(incomes, { id: "ventas-casa", kind: "event" }, OCTOBER, COP_OPTIONS), 5_000);
+  assert.equal(scopeFundsTotal(incomes, { id: "ventas-casa", kind: "monthly" }, OCTOBER, COP_OPTIONS), 3_000);
+  assert.equal(scopeFundsTotal(incomes, { id: "sin-fondos", kind: "event" }, OCTOBER, COP_OPTIONS), 0);
+  assert.equal(scopeFundsTotal([income(1, { budgetId: "ventas-casa", currency: "USD" })], { id: "ventas-casa", kind: "event" }, OCTOBER, COP_OPTIONS), null);
+});
+
+test("an income change re-checks the alerts it can push over a threshold", () => {
+  const options = { timeZone: BOGOTA };
+  const scope = (before?: Record<string, unknown>, after?: Record<string, unknown>) =>
+    incomeChangeAlertScope(before, after, OCTOBER, options);
+  // Monthly income drops: deleted, moved to a budget, lowered, or moved out of the month.
+  assert.deepEqual(scope(income(1_000), undefined), { monthlyIncome: true, fundsBudgetIds: [] });
+  assert.deepEqual(scope(income(1_000), income(1_000, { budgetId: "casa" })), { monthlyIncome: true, fundsBudgetIds: ["casa"] });
+  assert.deepEqual(scope(income(1_000), income(400)), { monthlyIncome: true, fundsBudgetIds: [] });
+  assert.deepEqual(scope(income(1_000), income(1_000, { date: new Date("2026-11-02T17:00:00.000Z") })), { monthlyIncome: true, fundsBudgetIds: [] });
+  // A budget losing income can lose its own funding, so its spending returns to the month's.
+  assert.deepEqual(scope(income(1_000, { budgetId: "casa" }), undefined), { monthlyIncome: true, fundsBudgetIds: ["casa"] });
+  assert.deepEqual(scope(income(1_000, { budgetId: "casa" }), income(1_000)), { monthlyIncome: true, fundsBudgetIds: ["casa"] });
+  assert.deepEqual(scope(income(1_000, { budgetId: "casa" }), income(900, { budgetId: "casa" })), { monthlyIncome: true, fundsBudgetIds: ["casa"] });
+  assert.deepEqual(scope(income(1_000, { budgetId: "casa" }), income(1_000, { budgetId: "viaje" })), { monthlyIncome: true, fundsBudgetIds: ["casa", "viaje"] });
+  // A budget's first income can find its spending already over the new funds.
+  assert.deepEqual(scope(undefined, income(1_000, { budgetId: "casa" })), { monthlyIncome: false, fundsBudgetIds: ["casa"] });
+  // Raising unassigned income, a new unassigned income, another month's income or an expense never re-checks.
+  assert.equal(scope(undefined, income(1_000)), null);
+  assert.equal(scope(income(1_000), income(2_000)), null);
+  assert.equal(scope(income(1_000, { date: new Date("2026-09-02T17:00:00.000Z") }), undefined), null);
+  assert.equal(scope(income(1_000), income(1_000, { description: "renamed" })), null);
+  assert.equal(scope(expense(10), undefined), null);
+});
+
+test("a monthly budget is self-funded only in months with assigned income; an event budget always", () => {
+  const kinds: Record<string, "monthly" | "event"> = { hogar: "monthly", viaje: "event" };
+  const kindOf = (budgetId: string) => kinds[budgetId];
+  const september = new Date("2026-09-10T17:00:00.000Z");
+  const funded = (incomes: Record<string, unknown>[]) => [...selfFundedBudgetIds(incomes, OCTOBER, COP_OPTIONS, kindOf)].sort();
+  assert.deepEqual(funded([income(1, { budgetId: "hogar", date: september }), income(1, { budgetId: "viaje", date: september })]), ["viaje"]);
+  assert.deepEqual(funded([income(1, { budgetId: "hogar" })]), ["hogar"]);
+  // A budget the workspace no longer has (or an unknown kind) never hides spending.
+  assert.deepEqual(funded([income(1, { budgetId: "gone" })]), []);
+});
+
+test("transfers move a budget's funds by the linked accounts they touch", () => {
+  const links: Record<string, string> = { "cash-casa": "casa", "cash-viaje": "viaje" };
+  const linkedBudgetOf = (accountId: string) => links[accountId] ?? null;
+  const transfer = (accountId: string, toAccountId: string, amount: number, extra: Record<string, unknown> = {}) => ({
+    type: "transfer", accountId, toAccountId, amount, currency: "COP", date: new Date("2026-10-12T17:00:00.000Z"), ...extra
+  });
+  const funding = [
+    transfer("bank", "cash-casa", 1_000),
+    transfer("cash-casa", "bank", 200),
+    transfer("cash-casa", "cash-viaje", 300),
+    transfer("bank", "cash-casa", 5_000, { date: new Date("2026-08-12T17:00:00.000Z") }),
+    income(50, { budgetId: "casa" })
+  ];
+  assert.equal(scopeFundsTotal(funding, { id: "casa", kind: "monthly" }, OCTOBER, COP_OPTIONS, linkedBudgetOf), 550);
+  assert.equal(scopeFundsTotal(funding, { id: "casa", kind: "event" }, OCTOBER, COP_OPTIONS, linkedBudgetOf), 5_550);
+  assert.equal(scopeFundsTotal(funding, { id: "viaje", kind: "event" }, OCTOBER, COP_OPTIONS, linkedBudgetOf), 300);
+  // Without links only assigned income counts, as before.
+  assert.equal(scopeFundsTotal(funding, { id: "casa", kind: "event" }, OCTOBER, COP_OPTIONS), 50);
+  const kindOf = () => "monthly" as const;
+  assert.deepEqual([...selfFundedBudgetIds([transfer("bank", "cash-viaje", 10)], OCTOBER, COP_OPTIONS, kindOf, linkedBudgetOf)], ["viaje"]);
+  assert.deepEqual([...selfFundedBudgetIds([transfer("cash-viaje", "bank", 10)], OCTOBER, COP_OPTIONS, kindOf, linkedBudgetOf)], []);
+
+  // A transfer write re-checks the budgets it touches.
+  const scope = (before?: Record<string, unknown>, after?: Record<string, unknown>) =>
+    incomeChangeAlertScope(before, after, OCTOBER, { timeZone: BOGOTA }, linkedBudgetOf);
+  assert.deepEqual(scope(undefined, transfer("cash-casa", "bank", 10)), { monthlyIncome: true, fundsBudgetIds: ["casa"] });
+  assert.deepEqual(scope(transfer("bank", "cash-casa", 10), undefined), { monthlyIncome: true, fundsBudgetIds: ["casa"] });
+  assert.deepEqual(scope(undefined, transfer("cash-casa", "cash-viaje", 10)), { monthlyIncome: true, fundsBudgetIds: ["casa", "viaje"] });
+  assert.equal(scope(undefined, transfer("bank", "savings", 10)), null);
+});
+
+
+test("changing a transfer's destination counts as a spend field change", () => {
+  const base = { type: "transfer", accountId: "bank", toAccountId: "cash-casa", amount: 10, date: new Date("2026-10-12T17:00:00.000Z") };
+  assert.equal(spendFieldsChanged(base, { ...base, toAccountId: "savings" }), true);
+  assert.equal(spendFieldsChanged(base, { ...base }), false);
+});
+
+test("a budget without a funding inflow has no funds, even if money was transferred out of it", () => {
+  const links: Record<string, string> = { "cash-casa": "casa" };
+  const linkedBudgetOf = (accountId: string) => links[accountId] ?? null;
+  const transfer = (accountId: string, toAccountId: string, amount: number, date = new Date("2026-10-12T17:00:00.000Z")) => ({
+    type: "transfer", accountId, toAccountId, amount, currency: "COP", date
+  });
+  const casa = (kind: "event" | "monthly") => ({ id: "casa", kind });
+  // Only outflows: no funds, so the funds alert stays silent.
+  assert.equal(scopeFundsTotal([transfer("cash-casa", "bank", 300)], casa("event"), OCTOBER, COP_OPTIONS, linkedBudgetOf), 0);
+  assert.deepEqual(scopeFunding([transfer("cash-casa", "bank", 300)], casa("event"), OCTOBER, COP_OPTIONS, linkedBudgetOf), { total: -300, inflows: 0 });
+  // A monthly budget funded in another month has no inflow in this one.
+  const august = [transfer("bank", "cash-casa", 500, new Date("2026-08-12T17:00:00.000Z")), transfer("cash-casa", "bank", 300)];
+  assert.equal(scopeFundsTotal(august, casa("monthly"), OCTOBER, COP_OPTIONS, linkedBudgetOf), 0);
+  // With an inflow, outflows above it keep the real negative funds (S6 table unchanged).
+  const overdrawn = [transfer("bank", "cash-casa", 100), transfer("cash-casa", "bank", 300)];
+  assert.equal(scopeFundsTotal(overdrawn, casa("event"), OCTOBER, COP_OPTIONS, linkedBudgetOf), -200);
+  assert.deepEqual(scopeFunding(overdrawn, casa("event"), OCTOBER, COP_OPTIONS, linkedBudgetOf), { total: -200, inflows: 1 });
+  // A missing rate still makes the funds unknown.
+  assert.deepEqual(scopeFunding([{ ...transfer("bank", "cash-casa", 1), currency: "USD" }], casa("event"), OCTOBER, COP_OPTIONS, linkedBudgetOf), { total: null, inflows: 1 });
+});
+
+test("a write that is only a transfer touching no linked account cannot move any alert", () => {
+  const links: Record<string, string> = { "cash-casa": "casa" };
+  const linkedBudgetOf = (accountId: string) => links[accountId] ?? null;
+  const transfer = (accountId: string, toAccountId: string) => ({ type: "transfer", accountId, toAccountId, amount: 10, currency: "COP" });
+  assert.equal(transferTouchesLinkedAccount(transfer("bank", "cash-casa"), linkedBudgetOf), true);
+  assert.equal(transferTouchesLinkedAccount(transfer("cash-casa", "bank"), linkedBudgetOf), true);
+  assert.equal(transferTouchesLinkedAccount(transfer("bank", "savings"), linkedBudgetOf), false);
+  assert.equal(transferTouchesLinkedAccount(income(10), linkedBudgetOf), false);
+  assert.equal(transferTouchesLinkedAccount(undefined, linkedBudgetOf), false);
+
+  assert.equal(skipsUnlinkedTransferWrite(undefined, transfer("bank", "savings"), linkedBudgetOf), true);
+  assert.equal(skipsUnlinkedTransferWrite(transfer("bank", "savings"), undefined, linkedBudgetOf), true);
+  assert.equal(skipsUnlinkedTransferWrite(transfer("bank", "savings"), transfer("savings", "bank"), linkedBudgetOf), true);
+  // Either side touching a linked account, or any income or expense side, still runs the checks.
+  assert.equal(skipsUnlinkedTransferWrite(transfer("bank", "savings"), transfer("bank", "cash-casa"), linkedBudgetOf), false);
+  assert.equal(skipsUnlinkedTransferWrite(transfer("cash-casa", "bank"), undefined, linkedBudgetOf), false);
+  assert.equal(skipsUnlinkedTransferWrite(income(10), transfer("bank", "savings"), linkedBudgetOf), false);
+  assert.equal(skipsUnlinkedTransferWrite(transfer("bank", "savings"), income(10), linkedBudgetOf), false);
+  assert.equal(skipsUnlinkedTransferWrite(expense(10), transfer("bank", "savings"), linkedBudgetOf), false);
+  assert.equal(skipsUnlinkedTransferWrite(undefined, expense(10), linkedBudgetOf), false);
+  assert.equal(skipsUnlinkedTransferWrite(undefined, undefined, linkedBudgetOf), false);
 });

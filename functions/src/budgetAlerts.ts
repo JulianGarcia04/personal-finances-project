@@ -27,6 +27,8 @@ export const BUDGET_ALERT_THRESHOLDS = [80, 100] as const;
 export type BudgetThreshold = (typeof BUDGET_ALERT_THRESHOLDS)[number];
 /** Ledger slot (in place of a category id) for alerts on a budget's overall cap. */
 export const TOTAL_ALERT_SUBJECT = "__total";
+/** Ledger slot of a budget's spending vs the income assigned to it. */
+export const FUNDS_ALERT_SUBJECT = "__funds";
 
 export type BillingLookup = (accountId?: string | null) => CardBilling | null;
 
@@ -46,6 +48,90 @@ export interface SpendOptions {
 /** Operating budget of an expense: its budgetId, or the protected default monthly budget. */
 export function resolveAlertBudgetId(budgetId: unknown): string {
   return typeof budgetId === "string" && budgetId ? budgetId : DEFAULT_MONTHLY_BUDGET_ID;
+}
+
+/** Active budget each account is linked to, or null. */
+export type LinkedBudgetLookup = (accountId: string) => string | null;
+
+/**
+ * How a transfer moves a budget's funds, by the accounts it touches (never by its stored sign,
+ * which older records may hold negative): into a linked account adds, out of it subtracts, and
+ * between two accounts of the same budget the money never leaves it.
+ * Port of src/lib/budgets.ts transferFundsDelta.
+ */
+export function transferFundsDelta(tx: Record<string, any>, budgetId: string, linkedBudgetOf: LinkedBudgetLookup): number {
+  if (tx.type !== "transfer" || typeof tx.accountId !== "string" || typeof tx.toAccountId !== "string") return 0;
+  const from = linkedBudgetOf(tx.accountId);
+  const to = linkedBudgetOf(tx.toAccountId);
+  if (from === to) return 0;
+  const amount = Math.abs(Number(tx.amount) || 0);
+  if (to === budgetId) return amount;
+  if (from === budgetId) return -amount;
+  return 0;
+}
+
+/** Whether a transfer enters or leaves an account linked to an active budget. */
+export function transferTouchesLinkedAccount(tx: Record<string, any> | undefined, linkedBudgetOf: LinkedBudgetLookup): boolean {
+  if (!tx || tx.type !== "transfer") return false;
+  return [tx.accountId, tx.toAccountId].some((accountId) => typeof accountId === "string" && linkedBudgetOf(accountId) !== null);
+}
+
+/**
+ * A write whose every side is a transfer and none touches a linked account moves no income,
+ * spending or funds, so the alert trigger can stop before reading anything else.
+ */
+export function skipsUnlinkedTransferWrite(
+  before: Record<string, any> | undefined,
+  after: Record<string, any> | undefined,
+  linkedBudgetOf: LinkedBudgetLookup
+): boolean {
+  const sides = [before, after].filter((tx): tx is Record<string, any> => tx !== undefined);
+  return sides.length > 0 && sides.every((tx) => tx.type === "transfer" && !transferTouchesLinkedAccount(tx, linkedBudgetOf));
+}
+
+/** Budgets a transfer moves funds between (the linked budgets of its two accounts, when they differ). */
+function transferBudgetIds(tx: Record<string, any> | undefined, linkedBudgetOf?: LinkedBudgetLookup): string[] {
+  if (!tx || tx.type !== "transfer" || !linkedBudgetOf || typeof tx.accountId !== "string" || typeof tx.toAccountId !== "string") return [];
+  const from = linkedBudgetOf(tx.accountId);
+  const to = linkedBudgetOf(tx.toAccountId);
+  if (from === to) return [];
+  return [from, to].filter((id): id is string => id !== null);
+}
+
+/**
+ * Budgets paid by their own funds in the evaluated period, so their spending does not count
+ * against the month's income: an event budget with any funding inflow (assigned income or a
+ * transfer into a linked account), a monthly budget with one in that month. Unknown budgets
+ * (kindOf returns undefined) never qualify.
+ */
+export function selfFundedBudgetIds(
+  funding: Iterable<Record<string, any>>,
+  month: YearMonth,
+  options: { timeZone: string },
+  kindOf: (budgetId: string) => AlertScope["kind"] | undefined,
+  linkedBudgetOf?: LinkedBudgetLookup
+): Set<string> {
+  const funded = new Set<string>();
+  for (const tx of funding) {
+    // Funding inflows: assigned income, or a transfer into a budget's linked account.
+    const linkedTo = tx.type === "transfer" && linkedBudgetOf && typeof tx.toAccountId === "string"
+      ? linkedBudgetOf(tx.toAccountId) : null;
+    const budgetId = tx.type === "income" ? resolveAlertBudgetId(tx.budgetId)
+      : linkedTo && linkedBudgetOf && transferFundsDelta(tx, linkedTo, linkedBudgetOf) > 0 ? linkedTo
+      : DEFAULT_MONTHLY_BUDGET_ID;
+    if (budgetId === DEFAULT_MONTHLY_BUDGET_ID || funded.has(budgetId)) continue;
+    const kind = kindOf(budgetId);
+    if (kind === "event" || (kind === "monthly" && inYearMonth(tx.date, month, options.timeZone))) funded.add(budgetId);
+  }
+  return funded;
+}
+
+/** Whether a stored date falls in the given local month; malformed dates never do. */
+function inYearMonth(value: unknown, month: YearMonth, timeZone: string): boolean {
+  const date = storedDateValue(value, timeZone);
+  if (Number.isNaN(date.getTime())) return false;
+  const local = zonedYearMonth(date, timeZone);
+  return local.year === month.year && local.month === month.month;
 }
 
 /** Manual source -> reporting rate (port of budgetReporting.ts lookupRate); null when missing/invalid. */
@@ -186,15 +272,19 @@ export function countsTowardMonthlySpend(
   return expenseAmountForMonth(tx, month.year, month.month, options.timeZone, options.billingFor?.(tx.accountId) ?? null) > 0;
 }
 
-/** Month share of every expense, converted; null when a manual rate is missing. */
+/**
+ * Month share of every expense paid by the month's income, converted; null when a manual
+ * rate is missing. Expenses of self-funded budgets are skipped.
+ */
 export function monthlyExpenseTotal(
   transactions: Iterable<Record<string, any>>,
   month: YearMonth,
-  options: SpendOptions
+  options: SpendOptions,
+  selfFunded: ReadonlySet<string> = new Set()
 ): number | null {
   let total = 0;
   for (const tx of transactions) {
-    if (tx.type !== "expense") continue;
+    if (tx.type !== "expense" || selfFunded.has(resolveAlertBudgetId(tx.budgetId))) continue;
     const amount = expenseAmountForMonth(tx, month.year, month.month, options.timeZone, options.billingFor?.(tx.accountId) ?? null);
     if (amount === 0) continue;
     const rate = manualRate(tx.currency, options.reportingCurrency, options.exchangeRates);
@@ -204,7 +294,10 @@ export function monthlyExpenseTotal(
   return Math.round(total * 100) / 100;
 }
 
-/** Income registered in the local month, converted; null when a manual rate is missing. */
+/**
+ * Income registered in the local month, converted; null when a manual rate is missing.
+ * Income assigned to another budget funds only that budget, so it is not monthly income.
+ */
 export function monthlyIncomeTotal(
   transactions: Iterable<Record<string, any>>,
   month: YearMonth,
@@ -212,7 +305,7 @@ export function monthlyIncomeTotal(
 ): number | null {
   let total = 0;
   for (const tx of transactions) {
-    if (tx.type !== "income") continue;
+    if (tx.type !== "income" || resolveAlertBudgetId(tx.budgetId) !== DEFAULT_MONTHLY_BUDGET_ID) continue;
     const date = storedDateValue(tx.date, options.timeZone);
     if (Number.isNaN(date.getTime())) continue; // malformed date: skip, like expenseAmountForMonth
     const local = zonedYearMonth(date, options.timeZone);
@@ -224,6 +317,52 @@ export function monthlyIncomeTotal(
     total += amount * rate;
   }
   return Math.round(total * 100) / 100;
+}
+
+/**
+ * Funds movements of an operating budget: the income assigned to it plus transfers into its linked
+ * accounts minus transfers out of them; all of them for an event budget and the month's for a
+ * monthly one (like budgetReporting.ts funds). `inflows` counts the funding inflows (assigned income
+ * or a transfer in); `total` is null when a manual rate is missing.
+ */
+export function scopeFunding(
+  funding: Iterable<Record<string, any>>,
+  scope: AlertScope,
+  month: YearMonth,
+  options: SpendOptions,
+  linkedBudgetOf?: LinkedBudgetLookup
+): { total: number | null; inflows: number } {
+  let total: number | null = 0;
+  let inflows = 0;
+  for (const tx of funding) {
+    // Assigned income adds; transfers add or subtract by the linked accounts they touch.
+    const delta = tx.type === "income"
+      ? (resolveAlertBudgetId(tx.budgetId) === scope.id ? Math.abs(Number(tx.amount) || 0) : 0)
+      : linkedBudgetOf ? transferFundsDelta(tx, scope.id, linkedBudgetOf) : 0;
+    if (delta === 0) continue;
+    if (scope.kind === "monthly" && !inYearMonth(tx.date, month, options.timeZone)) continue;
+    if (delta > 0) inflows += 1;
+    if (total === null) continue;
+    const rate = manualRate(tx.currency, options.reportingCurrency, options.exchangeRates);
+    total = rate === null ? null : total + delta * rate;
+  }
+  return { total: total === null ? null : Math.round(total * 100) / 100, inflows };
+}
+
+/**
+ * Funds of an operating budget (scopeFunding). A budget without any funding inflow in the period
+ * has no funds (0), even if money was transferred out, so its funds alert stays silent; with an
+ * inflow, outflows above it give real negative funds. Null when a manual rate is missing.
+ */
+export function scopeFundsTotal(
+  funding: Iterable<Record<string, any>>,
+  scope: AlertScope,
+  month: YearMonth,
+  options: SpendOptions,
+  linkedBudgetOf?: LinkedBudgetLookup
+): number | null {
+  const { total, inflows } = scopeFunding(funding, scope, month, options, linkedBudgetOf);
+  return inflows === 0 ? 0 : total;
 }
 
 /**
@@ -263,12 +402,54 @@ function timeOf(value: any): number | null {
 }
 
 /** True when a write may change category spend (so edits to description/notes/receipt are skipped). */
+/**
+ * What an income or transfer write (create, edit or delete) can push over a threshold:
+ * - the month's spending vs income, when the current month's unassigned income drops or a budget
+ *   loses income (it may stop being self-funded, so its spending counts again);
+ * - the funds alert of each budget whose assigned income changed (a first income can already be
+ *   exceeded by the budget's spending).
+ * Null when the write cannot newly cross any threshold.
+ */
+export function incomeChangeAlertScope(
+  before: Record<string, any> | undefined,
+  after: Record<string, any> | undefined,
+  month: YearMonth,
+  options: { timeZone: string },
+  linkedBudgetOf?: LinkedBudgetLookup
+): { monthlyIncome: boolean; fundsBudgetIds: string[] } | null {
+  // A transfer touching a linked account moves funds between budgets: re-check each of them and
+  // the month's spending, since a budget may stop (or start) being self-funded.
+  const transferBudgets = [...new Set([...transferBudgetIds(before, linkedBudgetOf), ...transferBudgetIds(after, linkedBudgetOf)])];
+  const incomeBefore = before?.type === "income" ? before : undefined;
+  const incomeAfter = after?.type === "income" ? after : undefined;
+  if (!incomeBefore && !incomeAfter) {
+    return transferBudgets.length ? { monthlyIncome: true, fundsBudgetIds: transferBudgets } : null;
+  }
+  const amountOf = (tx: Record<string, any> | undefined) => tx ? Math.abs(Number(tx.amount) || 0) : 0;
+  const budgetOf = (tx: Record<string, any> | undefined) => tx ? resolveAlertBudgetId(tx.budgetId) : null;
+  const monthlyShare = (tx: Record<string, any> | undefined) =>
+    tx && budgetOf(tx) === DEFAULT_MONTHLY_BUDGET_ID && inYearMonth(tx.date, month, options.timeZone) ? amountOf(tx) : 0;
+  const beforeBudgetId = budgetOf(incomeBefore);
+  const afterBudgetId = budgetOf(incomeAfter);
+  const assigned = (budgetId: string | null): budgetId is string => budgetId !== null && budgetId !== DEFAULT_MONTHLY_BUDGET_ID;
+
+  const fundsBudgetIds: string[] = [];
+  if (assigned(beforeBudgetId)) fundsBudgetIds.push(beforeBudgetId);
+  if (assigned(afterBudgetId) && afterBudgetId !== beforeBudgetId) fundsBudgetIds.push(afterBudgetId);
+  for (const budgetId of transferBudgets) if (!fundsBudgetIds.includes(budgetId)) fundsBudgetIds.push(budgetId);
+  const monthlyIncome = monthlyShare(incomeAfter) < monthlyShare(incomeBefore) || assigned(beforeBudgetId) ||
+    transferBudgets.length > 0;
+  if (!monthlyIncome && fundsBudgetIds.length === 0) return null;
+  return { monthlyIncome, fundsBudgetIds };
+}
+
 export function spendFieldsChanged(before: Record<string, any> | undefined, after: Record<string, any> | undefined): boolean {
   if (!before || !after) return true;
   return before.type !== after.type ||
     before.categoryId !== after.categoryId ||
     (before.budgetId ?? null) !== (after.budgetId ?? null) ||
     (before.accountId ?? null) !== (after.accountId ?? null) ||
+    (before.toAccountId ?? null) !== (after.toAccountId ?? null) ||
     Number(before.amount) !== Number(after.amount) ||
     (before.currency ?? null) !== (after.currency ?? null) ||
     (before.installments ?? null) !== (after.installments ?? null) ||

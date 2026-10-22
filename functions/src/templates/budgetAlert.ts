@@ -20,6 +20,8 @@ export interface BudgetAlertEmailInput {
   totalBudget?: boolean;
   /** Alert on the month's total spending vs the month's income (`budget` is the income). */
   incomeBudget?: boolean;
+  /** Alert on the budget's spending vs the income assigned to it (`budget` is the funds). */
+  fundsBudget?: boolean;
 }
 
 export interface RenderedEmail {
@@ -61,10 +63,15 @@ export interface BudgetAlertCopy {
   money: (value: number) => string;
 }
 
+/** Name shown for the protected default monthly budget. */
+export const DEFAULT_BUDGET_LABEL = "Presupuesto mensual";
+
 export function budgetAlertCopy(input: BudgetAlertEmailInput): BudgetAlertCopy {
   const category = oneLine(input.categoryName) || "Sin categoría";
   const workspace = oneLine(input.workspaceName);
-  const budgetName = oneLine(input.budgetName ?? "");
+  // Every cap alert names the budget reaching it; the default budget has no stored name.
+  // The month's spending vs income alert covers the whole workspace, so it names none.
+  const budgetName = oneLine(input.budgetName ?? "") || (input.incomeBudget ? "" : DEFAULT_BUDGET_LABEL);
   const wholeBudget = budgetName ? `del presupuesto «${budgetName}»` : "de tu presupuesto mensual";
   const label = budgetName ? `${category} (${budgetName})` : category;
   const target = budgetName ? `${category} del presupuesto «${budgetName}»` : `tu presupuesto de ${category}`;
@@ -74,10 +81,15 @@ export function budgetAlertCopy(input: BudgetAlertEmailInput): BudgetAlertCopy {
   const overspend = Math.max(input.spent - input.budget, 0);
   const reached = input.threshold === 100;
   const money = (value: number) => formatMoney(value, input.currency);
-  const subject = input.incomeBudget
+  const funds = `los fondos de «${budgetName}»`;
+  const subject = input.fundsBudget
+    ? reached ? `Ya usaste todos ${funds}` : `Ya usaste el ${percent} % de ${funds}`
+    : input.incomeBudget
     ? reached ? "Tus gastos del mes ya alcanzaron tus ingresos" : `Ya gastaste el ${percent} % de tus ingresos del mes`
     : reached ? `Ya alcanzaste el ${capOf(label)}` : `Estás cerca del ${capOf(label)} (${percent} %)`;
-  const headline = input.incomeBudget
+  const headline = input.fundsBudget
+    ? reached ? `Ya usaste todos ${funds}.` : `Ya usaste el ${percent} % de ${funds}.`
+    : input.incomeBudget
     ? reached ? "Tus gastos del mes ya alcanzaron tus ingresos." : `Ya gastaste el ${percent} % de tus ingresos del mes.`
     : reached ? `Ya alcanzaste el ${capOf(target)}.` : `Estás cerca del ${capOf(target)}.`;
   const month = input.eventBudget ? "" : oneLine(input.monthLabel ?? "");
@@ -88,7 +100,11 @@ export function budgetAlertCopy(input: BudgetAlertEmailInput): BudgetAlertCopy {
 export function renderBudgetAlertEmail(input: BudgetAlertEmailInput): RenderedEmail {
   const { reached, percent, remaining, overspend, scope, subject, headline, money } = budgetAlertCopy(input);
   const where = input.totalBudget ? "en este presupuesto" : "en esta categoría";
-  const advice = input.incomeBudget
+  const advice = input.fundsBudget
+    ? reached
+      ? "Cualquier gasto adicional en este presupuesto será más de la plata que le asignaste."
+      : "Revisa tus próximos gastos en este presupuesto para no gastar más de la plata que le asignaste."
+    : input.incomeBudget
     ? reached
       ? "Cualquier gasto adicional este mes será más de lo que ganaste."
       : "Revisa tus próximos gastos para no gastar más de lo que ganas este mes."
@@ -98,7 +114,7 @@ export function renderBudgetAlertEmail(input: BudgetAlertEmailInput): RenderedEm
 
   const rows: Array<[string, string]> = [
     ["Gastado", money(input.spent)],
-    [input.incomeBudget ? "Ingresos del mes" : "Presupuesto", money(input.budget)],
+    [input.fundsBudget ? "Fondos" : input.incomeBudget ? "Ingresos del mes" : "Presupuesto", money(input.budget)],
     ["Porcentaje usado", `${percent} %`],
     ["Disponible", money(remaining)]
   ];

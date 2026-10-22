@@ -9,10 +9,20 @@ import {
 } from '../lib/budgetReporting.ts'
 import {
   DEFAULT_MONTHLY_BUDGET_ID,
+  budgetScopedMonthFilter,
   type BudgetExpenseTransaction
 } from '../lib/budgets.ts'
-import { projectMonthEndExpenses, splitMonthEndExpenses } from '../lib/dashboardMetrics.ts'
-import { createCardBillingLookup, type BillingAccount } from '../lib/installments.ts'
+import {
+  alignedMonthPeriods,
+  budgetCardFigures,
+  expenseAmountInPeriod,
+  hasBudgetActivity,
+  isDateInPeriod,
+  percentChange,
+  projectMonthEndExpenses,
+  splitMonthEndExpenses
+} from '../lib/dashboardMetrics.ts'
+import { createCardBillingLookup, expenseAmountForMonth, type BillingAccount } from '../lib/installments.ts'
 
 const componentSource = readFileSync(new URL('./Dashboard.vue', import.meta.url), 'utf8')
 const script = componentSource.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)?.[1]
@@ -253,4 +263,102 @@ test('Dashboard month-end projection adds card statements of earlier purchases o
 
   assert.equal(projection.value.total, (40 / elapsed) * days + 50)
   assert.equal(projection.value.budgeted, (10 / elapsed) * days + 50)
+})
+
+// --- S9: "Todo" / "Por presupuesto" ---
+
+// Salary 5,000,000 + 1,000,000 income assigned to the event "Ventas Casa", 300,000 spent in
+// Ventas Casa and 50,000 of everyday spending, all on day 1 of the current month.
+const s9Transactions = () => {
+  const now = new Date()
+  const day1 = new Date(now.getFullYear(), now.getMonth(), 1, 12)
+  return [
+    { type: 'income', amount: 5000000, date: day1, currency: 'COP', accountId: 'bank' },
+    { type: 'income', amount: 1000000, date: day1, currency: 'COP', accountId: 'bank', budgetId: 'ventas-casa' },
+    { type: 'expense', amount: -300000, date: day1, currency: 'COP', accountId: 'bank', budgetId: 'ventas-casa', installments: 1 },
+    { type: 'expense', amount: -50000, date: day1, currency: 'COP', accountId: 'bank', installments: 1 }
+  ] as unknown as BudgetExpenseTransaction[]
+}
+
+const s9OperatingBudgets = [
+  { budget: { id: 'ventas-casa', name: 'Ventas Casa', kind: 'event', capCurrency: 'COP', archived: false }, categoryCaps: {} },
+  { budget: { id: 'viaje', name: 'Viaje', kind: 'event', capCurrency: 'COP', archived: false }, categoryCaps: {} },
+  { budget: { id: 'viejo', name: 'Viejo', kind: 'event', capCurrency: 'COP', archived: true }, categoryCaps: {} }
+]
+
+const s9MonthFlow = (transactions: BudgetExpenseTransaction[]) => {
+  const transactionsStore = { transactions }
+  const budgetMonthFilter = evaluateComputed<never>('budgetMonthFilter', {
+    budgetScopedMonthFilter,
+    transactionsStore,
+    budgetKinds: { value: new Map(s9OperatingBudgets.map(({ budget }) => [budget.id, budget.kind])) },
+    linkedBudgetOfAccount: () => null
+  })
+  return evaluateComputed<never>('getMoMData', {
+    alignedMonthPeriods,
+    transactionsStore,
+    cardBillingFor: billingDependency(),
+    convert: (amount: number) => amount,
+    expenseAmountForMonth,
+    expenseAmountInPeriod,
+    isDateInPeriod,
+    percentChange,
+    budgetMonthFilter
+  }) as unknown as (type: 'income' | 'expense', view: 'all' | 'budget') => { current: number; toDate: number; previous: number }
+}
+
+test('S9: "Todo" keeps every movement while "Por presupuesto" leaves out budget funds and self-funded spending', () => {
+  const getMoMData = s9MonthFlow(s9Transactions())
+  assert.equal(getMoMData('income', 'all').current, 6000000)
+  assert.equal(getMoMData('expense', 'all').current, 350000)
+  assert.equal(getMoMData('income', 'budget').current, 5000000)
+  assert.equal(getMoMData('income', 'budget').toDate, 5000000)
+  assert.equal(getMoMData('expense', 'budget').current, 50000)
+})
+
+test('S9: the month-over-month comparison of "Por presupuesto" judges each month by its own funding', () => {
+  const now = new Date()
+  const previousDay1 = new Date(now.getFullYear(), now.getMonth() - 1, 1, 12)
+  const getMoMData = s9MonthFlow([
+    { type: 'income', amount: 400, date: previousDay1, currency: 'COP', budgetId: 'ventas-casa' },
+    { type: 'income', amount: 900, date: previousDay1, currency: 'COP' }
+  ] as unknown as BudgetExpenseTransaction[])
+  assert.equal(getMoMData('income', 'all').previous, 1300)
+  assert.equal(getMoMData('income', 'budget').previous, 900)
+})
+
+test('S9: "Todo" is the default and runway, limit and savings keep their meaning', () => {
+  assert.match(script, /const flowView = ref<FlowView>\(readFlowView\(\)\)/)
+  assert.match(script, /const allExpensesData = computed\(\(\) => getMoMData\('expense', 'all'\)\)/)
+  assert.match(script, /monthToDateExpenses: allExpensesData\.value\.toDate/)
+  assert.match(script, /const incomeData = computed\(\(\) => getMoMData\('income', flowView\.value\)\)/)
+  assert.match(componentSource, /aria-pressed="flowView === 'all'"[\s\S]{0,500}Todo/)
+  assert.match(componentSource, /aria-pressed="flowView === 'budget'"[\s\S]{0,500}Por presupuesto/)
+  assert.match(componentSource, /Todo el dinero que entra y sale de tus cuentas\./)
+  assert.match(componentSource, /Ingresos y gastos del mes sin los fondos propios de tus presupuestos\./)
+  // The choice is remembered per device and survives storage being unavailable.
+  assert.match(script, /try \{[^}]*localStorage\.getItem\(FLOW_VIEW_KEY\)/)
+  assert.match(script, /try \{[^}]*localStorage\.setItem\(FLOW_VIEW_KEY, view\)/)
+})
+
+test('the per-budget panel explains funds overdrawn by transfers out', () => {
+  assert.match(componentSource, /data-testid="dashboard-budget-breakdown"[\s\S]*?v-if="budget\.overdrawn"[^>]*>\s*Salió más plata de la que entró a este presupuesto\.\s*</)
+})
+
+test('S9: the per-budget panel lists active budgets with activity and their funds, spending and available', () => {
+  const breakdown = evaluateComputed<{ id: string; name: string; fundsAmount: number | null; spent: number | null; available: number | null }[]>('budgetBreakdown', {
+    computed: computedDependency,
+    goalsStore: { operatingBudgets: s9OperatingBudgets, exchangeRates: {} },
+    transactionsStore: { transactions: s9Transactions() },
+    primaryCurrency: { value: 'COP' },
+    cardBillingFor: billingDependency(),
+    linkedBudgetOfAccount: () => null,
+    budgetCardFigures,
+    hasBudgetActivity
+  })
+  assert.deepEqual(breakdown.value.map(({ id, name, fundsAmount, spent, available }) => ({ id, name, fundsAmount, spent, available })), [
+    { id: 'ventas-casa', name: 'Ventas Casa', fundsAmount: 1000000, spent: 300000, available: 700000 }
+  ])
+  assert.match(componentSource, /v-if="flowView === 'budget'"[\s\S]{0,400}data-testid="dashboard-budget-breakdown"/)
+  assert.match(componentSource, /data-testid="dashboard-budget-breakdown"[\s\S]*?to="\/goals"/)
 })
