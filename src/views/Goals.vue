@@ -898,7 +898,8 @@ import BaseSheet from '@/components/ui/BaseSheet.vue'
 import CategoryPicker from '@/components/CategoryPicker.vue'
 import { suggestCategoriesBySpending, visibleBaselineCategories } from '@/lib/categoryPicker'
 import { getCategoryIconComponent } from '@/lib/categoryIcons'
-import { DEFAULT_MONTHLY_BUDGET_ID, budgetIdForAccount, budgetMoveCandidates, canAssignBudget, linkedAccountConflicts, linkedBudgetForAccount, resolveBudgetId, selfFundedBudgetIds } from '@/lib/budgets'
+import { DEFAULT_MONTHLY_BUDGET_ID, budgetIdForAccount, budgetMoveCandidates, budgetScopedMonthFilter, canAssignBudget, linkedAccountConflicts, linkedBudgetForAccount } from '@/lib/budgets'
+import { budgetCardFigures } from '@/lib/dashboardMetrics'
 import { reportBudgetScope } from '@/lib/budgetReporting'
 import type { BudgetWorkspaceBudgetSnapshot } from '@/lib/budgetWorkspaceAdapter'
 import { createCardBillingLookup, expenseAmountForDate } from '@/lib/installments'
@@ -1024,33 +1025,18 @@ const linkedBudgetOfAccount = (accountId: string) =>
 const budgetCards = computed(() => {
   const now = new Date()
   return new Map(activeOperatingBudgets.value.map(entry => {
-    const report = reportBudgetScope({
+    const figures = budgetCardFigures(entry, {
       linkedBudgetOf: linkedBudgetOfAccount,
-      scope: {
-        id: entry.budget.id,
-        kind: entry.budget.kind,
-        capCurrency: entry.budget.capCurrency,
-        totalLimit: entry.budget.totalLimit
-      },
-      categoryCaps: entry.categoryCaps,
       transactions: transactionsStore.transactions,
       period: { year: now.getFullYear(), month: now.getMonth() },
       reportingCurrency: userCurrency.value,
       exchangeRates: goalsStore.exchangeRates,
       cardBilling: cardBillingFor.value
     })
-    const spending = entry.budget.kind === 'event' ? report.eventCommittedPrincipal : report.monthlyAllocation
-    const spent = spending?.amount ?? null
-    const fundsAmount = report.funds?.amount ?? null
-    const limitAmount = report.totalComparison?.limitAmount ?? null
+    const { spent, fundsAmount, limitAmount } = figures
     return [entry.budget.id, {
-      currency: report.reportingCurrency,
-      spent,
-      funds: report.funds,
-      fundsAmount,
-      available: report.available,
+      ...figures,
       fundsPercent: spent !== null && fundsAmount !== null ? percentOf(spent, fundsAmount) : null,
-      limitAmount,
       limitPercent: spent !== null && limitAmount !== null ? percentOf(spent, limitAmount) : 0
     }] as const
   }))
@@ -1096,19 +1082,19 @@ const realMonthTotals = computed(() => {
   const now = new Date()
   let income = 0, expense = 0
   const kinds = new Map(goalsStore.operatingBudgets.map(({ budget }) => [budget.id, budget.kind]))
-  const selfFunded = selfFundedBudgetIds(transactionsStore.transactions, {
+  // Income assigned to another budget funds only that budget, and spending of a budget with its
+  // own income is paid by that income, so neither counts against the month.
+  const scoped = budgetScopedMonthFilter(transactionsStore.transactions, {
     year: now.getFullYear(), month: now.getMonth(), kindOf: budgetId => kinds.get(budgetId),
     linkedBudgetOf: linkedBudgetOfAccount
   })
   transactionsStore.transactions.forEach(t => {
     if (t.type === 'income') {
-      // Income assigned to another budget funds only that budget, so it is not monthly income.
-      if (resolveBudgetId(t.budgetId) !== DEFAULT_MONTHLY_BUDGET_ID) return
+      if (!scoped.countsIncome(t)) return
       if (t.date.getMonth() !== now.getMonth() || t.date.getFullYear() !== now.getFullYear()) return
       income += goalsStore.convertToPrimary(Math.abs(t.amount), t.currency, userCurrency.value)
     } else if (t.type === 'expense') {
-      // Spending of a budget with its own income is paid by that income, not by the month's.
-      if (selfFunded.has(resolveBudgetId(t.budgetId))) return
+      if (!scoped.countsExpense(t)) return
       const amount = expenseAmountForDate(t, now, cardBillingFor.value(t.accountId))
       expense += goalsStore.convertToPrimary(amount, t.currency, userCurrency.value)
     }

@@ -15,7 +15,10 @@ import {
   utilizationLevel,
   isSpendableAccount,
   projectionChecks,
-  cardDebtRows
+  cardDebtRows,
+  budgetCardFigures,
+  hasBudgetActivity,
+  parseFlowView
 } from './dashboardMetrics.ts'
 import { createCardBillingLookup } from './installments.ts'
 
@@ -272,4 +275,51 @@ test('card debt rows report per-card debt and utilization, highest utilization f
     { id: 'd', name: 'Al día', debt: 0, limit: 500, utilization: 0 },
     { id: 'c', name: 'Sin cupo', debt: 100, limit: 0, utilization: null }
   ])
+})
+
+// --- S9: per-budget view ---
+
+const budgetReportContext = (transactions: Record<string, unknown>[]) => ({
+  transactions: transactions as never,
+  period: { year: 2026, month: 9 },
+  reportingCurrency: 'COP',
+  exchangeRates: {},
+  linkedBudgetOf: () => null
+})
+
+test('S9: budget card figures report funds, spending and what is left of an event budget', () => {
+  const october = new Date(2026, 9, 5, 12)
+  const figures = budgetCardFigures(
+    { budget: { id: 'ventas-casa', kind: 'event', capCurrency: 'COP' }, categoryCaps: {} },
+    budgetReportContext([
+      { type: 'income', amount: 1000000, budgetId: 'ventas-casa', date: october, currency: 'COP' },
+      { type: 'expense', amount: -300000, budgetId: 'ventas-casa', date: october, currency: 'COP', installments: 1 }
+    ])
+  )
+  assert.equal(figures.currency, 'COP')
+  assert.equal(figures.fundsAmount, 1000000)
+  assert.equal(figures.spent, 300000)
+  assert.equal(figures.available, 700000)
+  assert.equal(figures.limitAmount, null)
+  assert.equal(hasBudgetActivity(figures), true)
+})
+
+test('S9: a budget with no funds and no spending in the period has no activity', () => {
+  const idle = budgetCardFigures(
+    { budget: { id: 'hogar', kind: 'monthly', capCurrency: 'COP', totalLimit: 500 }, categoryCaps: {} },
+    budgetReportContext([])
+  )
+  assert.equal(hasBudgetActivity(idle), false)
+  const spending = budgetCardFigures(
+    { budget: { id: 'hogar', kind: 'monthly', capCurrency: 'COP' }, categoryCaps: {} },
+    budgetReportContext([{ type: 'expense', amount: -20, budgetId: 'hogar', date: new Date(2026, 9, 2, 12), currency: 'COP', installments: 1 }])
+  )
+  assert.equal(hasBudgetActivity(spending), true)
+})
+
+test('S9: the remembered Dashboard view defaults to everything for unknown or missing values', () => {
+  assert.equal(parseFlowView('budget'), 'budget')
+  assert.equal(parseFlowView('all'), 'all')
+  assert.equal(parseFlowView(null), 'all')
+  assert.equal(parseFlowView('other'), 'all')
 })

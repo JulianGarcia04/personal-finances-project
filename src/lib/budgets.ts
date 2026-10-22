@@ -122,6 +122,25 @@ export const selfFundedBudgetIds = (
   return funded
 }
 
+/**
+ * Which movements of a month count when it is seen by budget: income assigned to another budget
+ * only funds that budget, and spending of a budget self-funded in the month is paid by its own
+ * funds. Shared by the Goals planner and the Dashboard "Por presupuesto" view.
+ */
+export const budgetScopedMonthFilter = (
+  transactions: Parameters<typeof selfFundedBudgetIds>[0],
+  period: Parameters<typeof selfFundedBudgetIds>[1]
+) => {
+  const selfFunded = selfFundedBudgetIds(transactions, period)
+  return {
+    selfFunded,
+    countsIncome: (transaction: { budgetId?: string | null }) =>
+      resolveBudgetId(transaction.budgetId) === DEFAULT_MONTHLY_BUDGET_ID,
+    countsExpense: (transaction: { budgetId?: string | null }) =>
+      !selfFunded.has(resolveBudgetId(transaction.budgetId))
+  }
+}
+
 export interface BudgetMoveCandidate {
   type: string
   accountId: string

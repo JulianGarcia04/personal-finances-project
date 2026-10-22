@@ -124,7 +124,32 @@
           </ul>
         </div>
       </div>
-      <!-- 1. Stats Cards Grid -->
+      <!-- 1. Month view: everything or by budget (S9) -->
+      <div class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4" data-testid="dashboard-flow-view">
+        <div role="group" aria-label="Vista de ingresos y gastos del mes" class="inline-flex self-start shrink-0 p-1 rounded-xl bg-slate-900 border border-border">
+          <button
+            type="button"
+            :aria-pressed="flowView === 'all'"
+            :class="['tap min-h-11 px-4 rounded-lg text-xs font-semibold transition-colors', flowView === 'all' ? 'bg-accent-emerald/15 text-accent-emerald' : 'text-text-secondary hover:text-text-primary']"
+            @click="setFlowView('all')"
+          >
+            Todo
+          </button>
+          <button
+            type="button"
+            :aria-pressed="flowView === 'budget'"
+            :class="['tap min-h-11 px-4 rounded-lg text-xs font-semibold transition-colors', flowView === 'budget' ? 'bg-accent-emerald/15 text-accent-emerald' : 'text-text-secondary hover:text-text-primary']"
+            @click="setFlowView('budget')"
+          >
+            Por presupuesto
+          </button>
+        </div>
+        <p class="min-w-0 text-xs text-text-secondary" aria-live="polite">
+          {{ flowView === 'all' ? 'Todo el dinero que entra y sale de tus cuentas.' : 'Ingresos y gastos del mes sin los fondos propios de tus presupuestos.' }}
+        </p>
+      </div>
+
+      <!-- Stats Cards Grid -->
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         <!-- Patrimonio Neto (USD/COP default) -->
         <div class="glass-panel rounded-2xl p-4 sm:p-6 relative overflow-hidden group border border-white/5 glow-card-emerald flex flex-col justify-between">
@@ -193,11 +218,11 @@
           <!-- ponytail: limit indicator -->
           <div v-if="currentExpenseLimit > 0" class="mt-3">
             <div class="flex justify-between text-[10px] mb-1">
-              <span class="text-text-secondary">Límite: {{ formatPrimaryCurrency(currentExpenseLimit) }}</span>
-              <span :class="monthlyExpenses > currentExpenseLimit ? 'text-accent-rose' : 'text-accent-emerald'">{{ Math.round((monthlyExpenses / currentExpenseLimit) * 100) }}%</span>
+              <span class="text-text-secondary">Límite{{ flowView === 'budget' ? ' (todos los gastos)' : '' }}: {{ formatPrimaryCurrency(currentExpenseLimit) }}</span>
+              <span :class="allMonthlyExpenses > currentExpenseLimit ? 'text-accent-rose' : 'text-accent-emerald'">{{ Math.round((allMonthlyExpenses / currentExpenseLimit) * 100) }}%</span>
             </div>
             <div class="w-full h-1 bg-white/10 rounded-full overflow-hidden">
-              <div class="h-full rounded-full" :class="monthlyExpenses > currentExpenseLimit ? 'bg-accent-rose' : 'bg-accent-emerald'" :style="{ width: Math.min((monthlyExpenses / currentExpenseLimit) * 100, 100) + '%' }"></div>
+              <div class="h-full rounded-full" :class="allMonthlyExpenses > currentExpenseLimit ? 'bg-accent-rose' : 'bg-accent-emerald'" :style="{ width: Math.min((allMonthlyExpenses / currentExpenseLimit) * 100, 100) + '%' }"></div>
             </div>
           </div>
         </div>
@@ -215,7 +240,49 @@
         </div>
       </div>
 
+      <!-- Per-budget breakdown: the funds each additional budget has and what is left (S9) -->
+      <section v-if="flowView === 'budget'" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-3" data-testid="dashboard-budget-breakdown" aria-labelledby="dashboard-budget-breakdown-title">
+        <div class="flex items-center justify-between gap-2">
+          <h4 id="dashboard-budget-breakdown-title" class="min-w-0 font-display font-bold text-base text-text-primary">Por presupuesto</h4>
+          <router-link to="/goals" class="-my-3 -mr-2 inline-flex items-center min-h-11 px-2 shrink-0 text-xs text-accent-emerald font-semibold hover:underline">
+            Ver presupuestos
+          </router-link>
+        </div>
+        <p v-if="budgetBreakdown.length === 0" class="text-xs text-text-secondary">
+          Ningún presupuesto adicional tiene fondos ni gastos este mes.
+        </p>
+        <ul v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <li v-for="budget in budgetBreakdown" :key="budget.id" class="min-w-0 rounded-xl border border-white/5 bg-white/[0.02] p-3 space-y-2">
+            <div class="flex items-baseline justify-between gap-2 min-w-0">
+              <span class="min-w-0 truncate text-sm font-semibold text-text-primary" :title="budget.name">{{ budget.name }}</span>
+              <span class="shrink-0 text-[10px] text-text-secondary">{{ budget.kind === 'event' ? 'Evento' : 'Mensual' }}</span>
+            </div>
+            <dl class="grid grid-cols-3 gap-2 text-[11px] tabular-nums">
+              <div class="min-w-0">
+                <dt class="text-text-secondary">Fondos</dt>
+                <dd class="font-semibold text-text-primary truncate" :title="budget.fundsAmount !== null ? formatCurrency(budget.fundsAmount, budget.currency) : undefined">
+                  {{ budget.fundsAmount !== null ? formatCurrency(budget.fundsAmount, budget.currency) : budget.funds ? 'Incompleto' : '—' }}
+                </dd>
+              </div>
+              <div class="min-w-0">
+                <dt class="text-text-secondary">Gastado</dt>
+                <dd class="font-semibold text-accent-rose truncate" :title="budget.spent !== null ? formatCurrency(budget.spent, budget.currency) : undefined">
+                  {{ budget.spent !== null ? formatCurrency(budget.spent, budget.currency) : 'Incompleto' }}
+                </dd>
+              </div>
+              <div class="min-w-0">
+                <dt class="text-text-secondary">Disponible</dt>
+                <dd :class="['font-semibold truncate', budget.available !== null && budget.available < 0 ? 'text-accent-rose' : 'text-accent-emerald']" :title="budget.available !== null ? formatCurrency(budget.available, budget.currency) : undefined">
+                  {{ budget.available !== null ? formatCurrency(budget.available, budget.currency) : '—' }}
+                </dd>
+              </div>
+            </dl>
+          </li>
+        </ul>
+      </section>
+
       <!-- 2. Charts Section -->
+      <p v-if="flowView === 'budget'" class="text-xs text-text-secondary">Las gráficas muestran todos tus movimientos, sin separar presupuestos.</p>
       <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
         <!-- Gastos por categoría (Donut) -->
         <div class="glass-panel rounded-2xl p-4 sm:p-6 md:col-span-1 flex flex-col justify-between sm:h-80 md:h-96">
@@ -502,10 +569,14 @@ import {
   utilizationLevel,
   isSpendableAccount,
   projectionChecks,
-  cardDebtRows
+  cardDebtRows,
+  budgetCardFigures,
+  hasBudgetActivity,
+  parseFlowView,
+  type FlowView
 } from '@/lib/dashboardMetrics'
 import { getNextOccurrence, daysUntil, expenseAmountForCycle, getStatementClosingForDueDate } from '@/lib/creditCycle'
-import { DEFAULT_MONTHLY_BUDGET_ID } from '@/lib/budgets'
+import { DEFAULT_MONTHLY_BUDGET_ID, budgetScopedMonthFilter, linkedBudgetForAccount } from '@/lib/budgets'
 import { reportAllBudgetsEstimatedMonthly, reportBudgetScope } from '@/lib/budgetReporting'
 import { 
   Plus as PlusIcon, 
@@ -613,37 +684,96 @@ const netWorthValue = computed(() => {
   return Object.entries(totals).reduce((sum, [cur, total]) => sum + convert(total, cur), 0)
 })
 
+// "Todo" shows every movement; "Por presupuesto" leaves out income that funds an additional
+// budget and spending of budgets self-funded in the month. Remembered per device.
+const FLOW_VIEW_KEY = 'vault.dashboard.flowView'
+const readFlowView = (): FlowView => {
+  try { return parseFlowView(localStorage.getItem(FLOW_VIEW_KEY)) } catch { return 'all' }
+}
+const flowView = ref<FlowView>(readFlowView())
+const setFlowView = (view: FlowView) => {
+  flowView.value = view
+  try { localStorage.setItem(FLOW_VIEW_KEY, view) } catch { /* storage unavailable: keep it for this visit */ }
+}
+
+// Budget each account is linked to: transfers into or out of linked accounts move funds.
+const linkableOperatingBudgets = computed(() => goalsStore.operatingBudgets.map(({ budget }) => budget))
+const linkedBudgetOfAccount = (accountId: string) =>
+  linkedBudgetForAccount(linkableOperatingBudgets.value, accountId)?.id ?? null
+const budgetKinds = computed(() => new Map(goalsStore.operatingBudgets.map(({ budget }) => [budget.id, budget.kind])))
+// Same rule as the Goals planner ("Ingreso real del mes"), judged per calendar month.
+const budgetMonthFilter = (period: { year: number; month: number }) =>
+  budgetScopedMonthFilter(transactionsStore.transactions, {
+    year: period.year,
+    month: period.month,
+    kindOf: budgetId => budgetKinds.value.get(budgetId),
+    linkedBudgetOf: linkedBudgetOfAccount
+  })
+
 // Ingresos del mes actual
 // MoM (Month-over-Month) aligned by elapsed days: day 1..N vs day 1..min(N, lastDay)
 // of the previous month. `current` stays the full imputed month for the headline amount.
-const getMoMData = (type: 'income' | 'expense') => {
+const getMoMData = (type: 'income' | 'expense', view: FlowView) => {
   const { current: currentPeriod, previous: previousPeriod } = alignedMonthPeriods(new Date())
+  // Each month is judged by its own funding; "Todo" filters nothing.
+  const currentFilter = view === 'budget' ? budgetMonthFilter(currentPeriod) : null
+  const previousFilter = view === 'budget' ? budgetMonthFilter(previousPeriod) : null
+  const counts = (filter: ReturnType<typeof budgetMonthFilter> | null, t: Transaction) =>
+    !filter || (type === 'income' ? filter.countsIncome(t) : filter.countsExpense(t))
 
   let current = 0, toDate = 0, previous = 0
   transactionsStore.transactions.forEach(t => {
     if (t.type !== type) return
+    const inCurrent = counts(currentFilter, t)
+    const inPrevious = counts(previousFilter, t)
     if (type === 'expense') {
       const billing = cardBillingFor.value(t.accountId)
-      current += convert(expenseAmountForMonth(t, currentPeriod.year, currentPeriod.month, billing), t.currency)
-      toDate += convert(expenseAmountInPeriod(t, currentPeriod, billing), t.currency)
-      previous += convert(expenseAmountInPeriod(t, previousPeriod, billing), t.currency)
+      if (inCurrent) {
+        current += convert(expenseAmountForMonth(t, currentPeriod.year, currentPeriod.month, billing), t.currency)
+        toDate += convert(expenseAmountInPeriod(t, currentPeriod, billing), t.currency)
+      }
+      if (inPrevious) previous += convert(expenseAmountInPeriod(t, previousPeriod, billing), t.currency)
       return
     }
     const amount = convert(Math.abs(t.amount), t.currency)
-    if (t.date.getMonth() === currentPeriod.month && t.date.getFullYear() === currentPeriod.year) current += amount
-    if (isDateInPeriod(t.date, currentPeriod)) toDate += amount
-    if (isDateInPeriod(t.date, previousPeriod)) previous += amount
+    if (inCurrent && t.date.getMonth() === currentPeriod.month && t.date.getFullYear() === currentPeriod.year) current += amount
+    if (inCurrent && isDateInPeriod(t.date, currentPeriod)) toDate += amount
+    if (inPrevious && isDateInPeriod(t.date, previousPeriod)) previous += amount
   })
 
   return { current, toDate, previous, percent: percentChange(toDate, previous) }
 }
 
-const incomeData = computed(() => getMoMData('income'))
+const incomeData = computed(() => getMoMData('income', flowView.value))
 const monthlyIncome = computed(() => incomeData.value.current)
 
-// Gastos del mes actual y comparativa
-const expensesData = computed(() => getMoMData('expense'))
+// Gastos del mes actual y comparativa. Runway and the workspace expense limit always use
+// every expense: they describe the money leaving the accounts, not the budget view.
+const allExpensesData = computed(() => getMoMData('expense', 'all'))
+const expensesData = computed(() => flowView.value === 'all' ? allExpensesData.value : getMoMData('expense', 'budget'))
 const monthlyExpenses = computed(() => expensesData.value.current)
+const allMonthlyExpenses = computed(() => allExpensesData.value.current)
+
+// Funds, spending and available of each active additional budget, as on the Goals budget cards.
+const budgetBreakdown = computed(() => {
+  const now = new Date()
+  return goalsStore.operatingBudgets
+    .filter(entry => !entry.budget.archived)
+    .map(entry => ({
+      id: entry.budget.id,
+      name: entry.budget.name,
+      kind: entry.budget.kind,
+      ...budgetCardFigures(entry, {
+        linkedBudgetOf: linkedBudgetOfAccount,
+        transactions: transactionsStore.transactions,
+        period: { year: now.getFullYear(), month: now.getMonth() },
+        reportingCurrency: primaryCurrency.value,
+        exchangeRates: goalsStore.exchangeRates,
+        cardBilling: cardBillingFor.value
+      })
+    }))
+    .filter(hasBudgetActivity)
+})
 
 const monthlyPurchaseTotal = computed(() => {
   const now = new Date()
@@ -678,7 +808,7 @@ const liquidityDays = computed(() => {
   return runwayDays({
     liquidBalance: liquidBalance.value,
     history,
-    monthToDateExpenses: expensesData.value.toDate,
+    monthToDateExpenses: allExpensesData.value.toDate,
     dayOfMonth: now.getDate()
   })
 })

@@ -2,6 +2,7 @@
 // amounts already converted to the primary currency, so results are deterministic.
 import type { CardBilling, CardBillingLookup, InstallmentTransaction } from './installments.ts'
 import { expenseAmountForMonth } from './installments.ts'
+import { reportBudgetScope, type BudgetAmountReport, type BudgetScopeReportInput } from './budgetReporting.ts'
 
 export const daysInMonth = (year: number, month: number) => new Date(year, month + 1, 0).getDate()
 
@@ -215,3 +216,52 @@ export const cardDebtRows = <T extends { id: string; name: string; balance: numb
       return { id: card.id, name: card.name, debt, limit, utilization: limit > 0 ? Math.round((debt / limit) * 100) : null }
     })
     .sort((a, b) => (b.utilization ?? -1) - (a.utilization ?? -1))
+
+// Dashboard month view: every movement ("Todo") or the month without budget funds ("Por presupuesto").
+export type FlowView = 'all' | 'budget'
+
+export const parseFlowView = (raw: string | null | undefined): FlowView => raw === 'budget' ? 'budget' : 'all'
+
+export interface BudgetCardFigures {
+  currency: string;
+  // Spending compared against funds and cap: event principal or the month's installments.
+  spent: number | null;
+  funds: BudgetAmountReport | null;
+  fundsAmount: number | null;
+  available: number | null;
+  limitAmount: number | null;
+}
+
+// Funds, spending, available and cap of one additional budget in the period. Shared by the Goals
+// budget cards and the Dashboard per-budget panel so both always show the same numbers.
+export const budgetCardFigures = (
+  entry: {
+    budget: { id: string; kind: 'monthly' | 'event'; capCurrency: string | null; totalLimit?: number };
+    categoryCaps: Readonly<Record<string, number>>;
+  },
+  context: Omit<BudgetScopeReportInput, 'scope' | 'categoryCaps'>
+): BudgetCardFigures => {
+  const report = reportBudgetScope({
+    ...context,
+    scope: {
+      id: entry.budget.id,
+      kind: entry.budget.kind,
+      capCurrency: entry.budget.capCurrency,
+      totalLimit: entry.budget.totalLimit
+    },
+    categoryCaps: entry.categoryCaps
+  })
+  const spending = entry.budget.kind === 'event' ? report.eventCommittedPrincipal : report.monthlyAllocation
+  return {
+    currency: report.reportingCurrency,
+    spent: spending?.amount ?? null,
+    funds: report.funds,
+    fundsAmount: report.funds?.amount ?? null,
+    available: report.available,
+    limitAmount: report.totalComparison?.limitAmount ?? null
+  }
+}
+
+// A budget with no funds and no spending in the period has nothing to report.
+export const hasBudgetActivity = (figures: Pick<BudgetCardFigures, 'funds' | 'spent'>) =>
+  figures.funds !== null || figures.spent !== 0

@@ -17,7 +17,8 @@ import {
   monthlyBudgetAllocation,
   resolveBudgetId,
   transferFundsDelta,
-  selfFundedBudgetIds
+  selfFundedBudgetIds,
+  budgetScopedMonthFilter
 } from './budgets.ts'
 import { createCardBillingLookup } from './installments.ts'
 
@@ -375,4 +376,22 @@ test('a link change lists the accounts that join and leave a budget, ignoring or
   assert.deepEqual(linkedAccountsChange(['a', 'b'], ['b', 'a']), { changed: false, added: [], removed: [] })
   assert.deepEqual(linkedAccountsChange(['a'], []), { changed: true, added: [], removed: ['a'] })
   assert.deepEqual(linkedAccountsChange(undefined, []), { changed: false, added: [], removed: [] })
+})
+
+test('S9: seen by budget, the month keeps unassigned income and spending of budgets without own funds', () => {
+  const kindOf = (budgetId: string) => ({ 'ventas-casa': 'event', hogar: 'monthly' } as const)[budgetId]
+  const october = new Date(2026, 9, 5, 12)
+  const transactions = [
+    { type: 'income', amount: 5000000, date: october },
+    { type: 'income', amount: 1000000, budgetId: 'ventas-casa', date: october },
+    { type: 'expense', amount: -300000, budgetId: 'ventas-casa', date: october },
+    { type: 'expense', amount: -20000, budgetId: 'hogar', date: october },
+    { type: 'expense', amount: -50000, date: october }
+  ]
+  const filter = budgetScopedMonthFilter(transactions, { year: 2026, month: 9, kindOf, linkedBudgetOf: () => null })
+  const income = transactions.filter(t => t.type === 'income' && filter.countsIncome(t)).reduce((sum, t) => sum + t.amount, 0)
+  const expense = transactions.filter(t => t.type === 'expense' && filter.countsExpense(t)).reduce((sum, t) => sum - t.amount, 0)
+  assert.equal(income, 5000000)
+  assert.equal(expense, 70000)
+  assert.deepEqual([...filter.selfFunded], ['ventas-casa'])
 })

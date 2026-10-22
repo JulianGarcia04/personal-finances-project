@@ -5,7 +5,7 @@ import { test } from 'node:test'
 import ts from 'typescript'
 import { toDateValue, toLocalDateKey } from '../lib/dates.ts'
 import { createCardBillingLookup, expenseAmountForDate } from '../lib/installments.ts'
-import { DEFAULT_MONTHLY_BUDGET_ID, resolveBudgetId, selfFundedBudgetIds } from '../lib/budgets.ts'
+import { budgetScopedMonthFilter } from '../lib/budgets.ts'
 
 const goalsPath = fileURLToPath(new URL('./Goals.vue', import.meta.url))
 const goalsView = readFileSync(goalsPath, 'utf8')
@@ -167,7 +167,7 @@ test('the planner counts card statements due this month instead of this month\'s
   ]
   const realMonthTotals = new Function(
     'computed', 'transactionsStore', 'goalsStore', 'userCurrency', 'expenseAmountForDate', 'cardBillingFor',
-    'resolveBudgetId', 'DEFAULT_MONTHLY_BUDGET_ID', 'selfFundedBudgetIds', 'linkedBudgetOfAccount',
+    'budgetScopedMonthFilter', 'linkedBudgetOfAccount',
     `${javascript}\nreturn realMonthTotals`
   )(
     (getter: () => unknown) => ({ get value() { return getter() } }),
@@ -179,9 +179,7 @@ test('the planner counts card statements due this month instead of this month\'s
     { value: 'COP' },
     expenseAmountForDate,
     cardBillingFor,
-    resolveBudgetId,
-    DEFAULT_MONTHLY_BUDGET_ID,
-    selfFundedBudgetIds,
+    budgetScopedMonthFilter,
     () => null
   ) as { value: { income: number; expense: number } }
 
