@@ -790,7 +790,7 @@
           </div>
 
           <!-- Budget the contribution counts against (inherited from a linked account) -->
-          <div v-if="contributeAccountId" class="space-y-1.5 animate-fade-in" data-testid="contribute-budget">
+          <div v-if="showContributeBudget" class="space-y-1.5 animate-fade-in" data-testid="contribute-budget">
             <label for="contribute-budget" class="block text-xs font-semibold text-text-secondary">Presupuesto</label>
             <select id="contribute-budget" v-model="contributeBudgetId" class="field cursor-pointer disabled:opacity-70 disabled:cursor-not-allowed" :disabled="!!contributeLinkedBudget" @change="contributeBudgetTouched = true">
               <option :value="DEFAULT_MONTHLY_BUDGET_ID">Presupuesto mensual predeterminado</option>
@@ -974,6 +974,9 @@ const contributeAccountId = ref('')
 const contributeAmount = ref<number | null>(null)
 const contributeBudgetId = ref(DEFAULT_MONTHLY_BUDGET_ID)
 const contributeBudgetTouched = ref(false)
+// Bridge-account expenses are replicated into the mirror workspace, which has its own budgets.
+const showContributeBudget = computed(() =>
+  !!contributeAccountId.value && !accountsStore.getAccountById(contributeAccountId.value)?.mirror)
 // Every movement of a linked account belongs to its budget, so the selector is locked.
 const contributeLinkedBudget = computed(() =>
   linkedBudgetForAccount(linkableOperatingBudgets.value, contributeAccountId.value))
@@ -1641,7 +1644,7 @@ const handleContribute = async () => {
       categoryId: savingsCat?.id || '',
       date: new Date(),
       type: 'expense',
-      budgetId: contributeLinkedBudget.value?.id ?? contributeBudgetId.value
+      budgetId: showContributeBudget.value ? (contributeLinkedBudget.value?.id ?? contributeBudgetId.value) : null
     })
 
     // 2. Sumar al saldo acumulado del objetivo de ahorro

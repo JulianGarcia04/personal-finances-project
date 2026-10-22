@@ -250,3 +250,26 @@ test('the new-movement form offers a budget for expenses and income, inherited f
   assert.match(script, /budgetId: showNewTxBudget\.value \? \(newTxLinkedBudget\.value\?\.id \?\? newTx\.value\.budgetId\) : null/)
   assert.match(script, /newTxBudgetTouched\.value = false/)
 })
+
+test('changing a budgeted movement into a transfer or loan first takes it out of its budget', async () => {
+  const calls: Array<[string, string | null]> = []
+  const release = (originalType: string, originalBudgetId: string, draftType: string) =>
+    evaluateComponentFunction<() => Promise<void>>('releaseBudgetBeforeTypeChange', {
+      transactionsStore: { assignExpenseBudget: async (id: string, budgetId: string | null) => { calls.push([id, budgetId]) } },
+      editingTxId: { value: 'tx-1' },
+      editingOriginalType: { value: originalType },
+      editingOriginalBudgetId: { value: originalBudgetId },
+      editTx: { value: { type: draftType } },
+      DEFAULT_MONTHLY_BUDGET_ID,
+      canCarryBudget
+    })
+
+  await release('income', 'casa', 'transfer')()
+  await release('expense', 'casa', 'loan')()
+  assert.deepEqual(calls, [['tx-1', null], ['tx-1', null]])
+  await release('income', 'casa', 'expense')()
+  await release('income', DEFAULT_MONTHLY_BUDGET_ID, 'transfer')()
+  assert.equal(calls.length, 2)
+  assert.match(script, /await releaseBudgetBeforeTypeChange\(\)\s+await transactionsStore\.updateTransaction\(editingTxId\.value/)
+  assert.match(template, /data-testid="edit-budget-released"/)
+})

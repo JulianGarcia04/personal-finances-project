@@ -827,6 +827,10 @@
           <p v-if="isEditingOpeningAllocation" class="text-[11px] text-text-muted">
             La asignación inicial conserva sus cuentas y tipo; puedes editar su monto, fecha y descripción.
           </p>
+          <p v-if="editReleasedBudgetName" class="flex items-start gap-1.5 rounded-lg border border-accent-amber/20 bg-accent-amber/10 px-3 py-2 text-[11px] text-accent-amber" data-testid="edit-budget-released">
+            <LinkIcon class="w-3.5 h-3.5 mt-px shrink-0" />
+            <span>Las transferencias y los préstamos no pertenecen a un presupuesto: al guardar, este movimiento saldrá de «{{ editReleasedBudgetName }}».</span>
+          </p>
 
           <!-- Account select -->
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1652,6 +1656,21 @@ const closeEditModal = () => {
   clearEditReceipt()
 }
 
+// Transfers and loans never carry a budget, and the rules reject a type change that keeps one.
+const editReleasesBudget = () => canCarryBudget(editingOriginalType.value)
+  && editingOriginalBudgetId.value !== DEFAULT_MONTHLY_BUDGET_ID
+  && !canCarryBudget(editTx.value.type)
+const editReleasedBudgetName = computed(() => editReleasesBudget()
+  ? linkableBudgets.value.find(budget => budget.id === editingOriginalBudgetId.value)?.name ?? 'su presupuesto'
+  : '')
+// A budget-only write first, so the financial edit that follows carries no budget.
+const releaseBudgetBeforeTypeChange = async () => {
+  if (!canCarryBudget(editingOriginalType.value)
+    || editingOriginalBudgetId.value === DEFAULT_MONTHLY_BUDGET_ID
+    || canCarryBudget(editTx.value.type)) return
+  await transactionsStore.assignExpenseBudget(editingTxId.value, null)
+}
+
 const saveEditedTransaction = async () => {
   const parsedAmount = Number(editTx.value.amount || 0)
   const installments = isEditCreditExpense.value ? Number(editTx.value.installments || 1) : 1
@@ -1685,6 +1704,7 @@ const saveEditedTransaction = async () => {
 
   loading.value = true
   try {
+    await releaseBudgetBeforeTypeChange()
     await transactionsStore.updateTransaction(editingTxId.value, {
       accountId: editTx.value.accountId,
       amount: finalAmount,

@@ -227,7 +227,10 @@ test('a goal contribution inherits the budget of its linked account and saves it
   assert.match(source, /data-testid="contribute-budget"/)
   assert.match(source, /contributeBudgetId\.value = budgetIdForAccount\(linkableOperatingBudgets\.value, accountId\)/)
   assert.match(source, /:disabled="!!contributeLinkedBudget"/)
-  assert.match(source, /type: 'expense',\s*budgetId: contributeLinkedBudget\.value\?\.id \?\? contributeBudgetId\.value/)
+  assert.match(source, /type: 'expense',\s*budgetId: showContributeBudget\.value \? \(contributeLinkedBudget\.value\?\.id \?\? contributeBudgetId\.value\) : null/)
+  // Mirror-account contributions are replicated into another workspace with its own budgets.
+  assert.match(source, /v-if="showContributeBudget"[\s\S]{0,120}data-testid="contribute-budget"/)
+  assert.match(source, /!accountsStore\.getAccountById\(contributeAccountId\.value\)\?\.mirror/)
 })
 
 test('saving a budget that takes a linked account removes the link from its previous budget', async () => {
