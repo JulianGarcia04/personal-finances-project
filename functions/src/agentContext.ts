@@ -14,6 +14,7 @@ import {
 } from "./agentTools";
 import {
   billingLookbackStart,
+  budgetBreakdownQueries,
   buildBudgetStatus,
   cardBillingByAccount,
   computeNetWorth,
@@ -474,28 +475,28 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
     return [...rows.values()];
   };
 
-  // Budgets for summarize's byBudget: one budgets query; only when an active event budget exists,
-  // its all-time transactions (budgetId in, chunks of 30) and, if it links accounts, the
-  // workspace's transfers (funds into/out of linked accounts), since event figures are all-time.
+  // Budgets for summarize's byBudget: one budgets query; then only what budgetBreakdownQueries asks
+  // for: all-time transactions of active event budgets and assigned income of archived ones
+  // (budgetId in, chunks of 30), and the workspace's transfers when an active event budget links accounts.
   const loadBudgetBreakdown = async (): Promise<NonNullable<SummaryOptions['budgetBreakdown']>> => {
     const snapshot = await db.collection('budgets').where('workspaceId', '==', workspaceId).get();
     const budgets: SummaryBudget[] = snapshot.docs.map(docSnap => ({ ...docSnap.data(), id: docSnap.id }));
-    const events = budgets.filter(budget => budget.archived === false && budget.kind === 'event');
-    if (events.length === 0) return { budgets };
+    const plan = budgetBreakdownQueries(budgets);
+    if (plan.eventIds.length === 0 && plan.archivedEventIds.length === 0) return { budgets };
     const transactions = db.collection('transactions').where('workspaceId', '==', workspaceId);
-    const ids = events.map(budget => budget.id);
-    const chunks = Array.from({ length: Math.ceil(ids.length / 30) }, (_, index) => ids.slice(index * 30, index * 30 + 30));
-    const linksAccounts = events.some(budget => Array.isArray(budget.linkedAccountIds) && budget.linkedAccountIds.length > 0);
+    const chunksOf = (ids: string[]) =>
+      Array.from({ length: Math.ceil(ids.length / 30) }, (_, index) => ids.slice(index * 30, index * 30 + 30));
     const snapshots = await Promise.all([
-      ...chunks.map(chunk => transactions.where('budgetId', 'in', chunk).get()),
-      ...(linksAccounts ? [transactions.where('type', '==', 'transfer').get()] : [])
+      ...chunksOf(plan.eventIds).map(chunk => transactions.where('budgetId', 'in', chunk).get()),
+      ...chunksOf(plan.archivedEventIds).map(chunk => transactions.where('type', '==', 'income').where('budgetId', 'in', chunk).get()),
+      ...(plan.transfers ? [transactions.where('type', '==', 'transfer').get()] : [])
     ]);
     return { budgets, extraRows: toSummaryRows(snapshots.flatMap(result => result.docs)) };
   };
 
   define(
     'getFinancialSummary',
-    `Resumen financiero de un periodo con la misma lógica del panel de control: ingresos, gastos, neto y tasa de ahorro en la moneda principal (${primaryCurrency}), convertidos con las tasas del workspace, cuotas repartidas por mes (las compras con tarjeta de crédito con día de corte y de pago cuentan en el mes en que se paga su extracto) y sin transferencias ni préstamos. Úsalo SIEMPRE para totales, resúmenes, "¿cuánto gasté…?", gastos por categoría/cuenta/mes/día, comparaciones con el periodo anterior y promedios mensuales (lastCompleteMonths). Define el periodo con preset, con startDate/endDate o con lastCompleteMonths (solo una forma; por defecto el mes en curso). La salida trae period {start, end, label}, totals, groups, topExpenses, comparison y notes. totals es TODO el dinero que entró y salió, sin importar el presupuesto. byBudget (solo para meses calendario completos y sin filtro de cuenta/categoría) separa por presupuesto: monthlyIncome es el ingreso sin el asignado a otros presupuestos (fondos de ese presupuesto), monthlyExpense es el gasto sin el de presupuestos que se pagan con sus propios fondos, y budgets trae por presupuesto funds (fondos), spent (gastado) y available (disponible); un valor null significa que falta una tasa de cambio (incomplete).`,
+    `Resumen financiero de un periodo con la misma lógica del panel de control: ingresos, gastos, neto y tasa de ahorro en la moneda principal (${primaryCurrency}), convertidos con las tasas del workspace, cuotas repartidas por mes (las compras con tarjeta de crédito con día de corte y de pago cuentan en el mes en que se paga su extracto) y sin transferencias ni préstamos. Úsalo SIEMPRE para totales, resúmenes, "¿cuánto gasté…?", gastos por categoría/cuenta/mes/día, comparaciones con el periodo anterior y promedios mensuales (lastCompleteMonths). Define el periodo con preset, con startDate/endDate o con lastCompleteMonths (solo una forma; por defecto el mes en curso). La salida trae period {start, end, label}, totals, groups, topExpenses, comparison y notes. totals es TODO el dinero que entró y salió, sin importar el presupuesto. byBudget (solo para meses calendario completos y sin filtro de cuenta/categoría) separa por presupuesto: monthlyIncome es el ingreso sin el asignado a otros presupuestos (fondos de ese presupuesto), monthlyExpense es el gasto sin el de presupuestos que se pagan con sus propios fondos, y budgets trae por presupuesto funds (fondos), spent (gastado) y available (disponible); funds y available en null sin incomplete significan que el presupuesto no recibió fondos en el periodo (solo tiene gasto); con incomplete, un null significa que falta una tasa de cambio. Fondos negativos significan que salió más plata de la que entró a ese presupuesto.`,
     z.object({
       preset: z.enum(['today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month', 'this_year', 'last_year']).optional()
         .describe('Periodo relativo en la zona horaria del usuario (semanas de lunes a domingo; meses y años calendario completos).'),

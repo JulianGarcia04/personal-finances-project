@@ -304,6 +304,28 @@ test('S9: budget card figures report funds, spending and what is left of an even
   assert.equal(hasBudgetActivity(figures), true)
 })
 
+test('budget card figures flag funds overdrawn by transfers out, and ignore a budget with only outflows', () => {
+  const october = new Date(2026, 9, 5, 12)
+  const context = (transactions: Record<string, unknown>[]) => ({
+    ...budgetReportContext(transactions),
+    linkedBudgetOf: (accountId: string) => (accountId === 'cash-casa' ? 'casa' : null)
+  })
+  const transfer = (accountId: string, toAccountId: string, amount: number) =>
+    ({ type: 'transfer', accountId, toAccountId, amount, date: october, currency: 'COP' })
+  const entry = { budget: { id: 'casa', kind: 'event' as const, capCurrency: 'COP' }, categoryCaps: {} }
+  const overdrawn = budgetCardFigures(entry, context([transfer('bank', 'cash-casa', 100), transfer('cash-casa', 'bank', 300)]))
+  assert.equal(overdrawn.fundsAmount, -200)
+  assert.equal(overdrawn.available, -200)
+  assert.equal(overdrawn.overdrawn, true)
+  const outOnly = budgetCardFigures(entry, context([transfer('cash-casa', 'bank', 300)]))
+  assert.equal(outOnly.funds, null)
+  assert.equal(outOnly.available, null)
+  assert.equal(outOnly.overdrawn, false)
+  assert.equal(hasBudgetActivity(outOnly), false)
+  const funded = budgetCardFigures(entry, context([transfer('bank', 'cash-casa', 300)]))
+  assert.equal(funded.overdrawn, false)
+})
+
 test('S9: a budget with no funds and no spending in the period has no activity', () => {
   const idle = budgetCardFigures(
     { budget: { id: 'hogar', kind: 'monthly', capCurrency: 'COP', totalLimit: 500 }, categoryCaps: {} },

@@ -336,10 +336,28 @@ test('transfers fund the budget of the linked account they enter and drain the o
     { type: 'income', budgetId: 'casa', amount: 50, date: new Date(2026, 9, 6, 12), currency: 'COP' },
     { ...transfer('bank', 'cash-casa', 999), date: new Date(2026, 8, 6, 12) }
   ]
-  assert.deepEqual(budgetFundsAllocation(transactions, 'casa', 'monthly', 2026, 9, undefined, linkedBudgetOf), { total: 850, count: 3 })
-  assert.deepEqual(budgetFundsAllocation(transactions, 'casa', 'event', 2026, 9, undefined, linkedBudgetOf), { total: 1_849, count: 4 })
+  assert.deepEqual(budgetFundsAllocation(transactions, 'casa', 'monthly', 2026, 9, undefined, linkedBudgetOf), { total: 850, count: 3, inflows: 2 })
+  assert.deepEqual(budgetFundsAllocation(transactions, 'casa', 'event', 2026, 9, undefined, linkedBudgetOf), { total: 1_849, count: 4, inflows: 3 })
   // Without links, only assigned income funds a budget.
-  assert.deepEqual(budgetFundsAllocation(transactions, 'casa', 'event', 2026, 9), { total: 50, count: 1 })
+  assert.deepEqual(budgetFundsAllocation(transactions, 'casa', 'event', 2026, 9), { total: 50, count: 1, inflows: 1 })
+})
+
+test('funds count their inflows, so a budget that only had money taken out has no funding', () => {
+  const links: Record<string, string> = { 'cash-casa': 'casa' }
+  const linkedBudgetOf = (accountId: string) => links[accountId] ?? null
+  const transfer = (accountId: string, toAccountId: string, amount: number, date = new Date(2026, 9, 5, 12)) =>
+    ({ type: 'transfer', accountId, toAccountId, amount, date, currency: 'COP' })
+  // Only outflows: no inflow, so callers treat the budget as unfunded.
+  assert.deepEqual(budgetFundsAllocation([transfer('cash-casa', 'bank', 300)], 'casa', 'event', 2026, 9, undefined, linkedBudgetOf),
+    { total: -300, count: 1, inflows: 0 })
+  // A monthly budget funded in another month has no inflow in this one.
+  assert.deepEqual(budgetFundsAllocation(
+    [transfer('bank', 'cash-casa', 500, new Date(2026, 8, 5, 12)), transfer('cash-casa', 'bank', 300)],
+    'casa', 'monthly', 2026, 9, undefined, linkedBudgetOf
+  ), { total: -300, count: 1, inflows: 0 })
+  // With an inflow, outflows above it keep the real negative total.
+  assert.deepEqual(budgetFundsAllocation([transfer('bank', 'cash-casa', 100), transfer('cash-casa', 'bank', 300)], 'casa', 'event', 2026, 9, undefined, linkedBudgetOf),
+    { total: -200, count: 2, inflows: 1 })
 })
 
 test('a transfer into a linked account makes its budget self-funded in that period', () => {

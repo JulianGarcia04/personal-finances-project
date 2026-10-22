@@ -65,6 +65,7 @@ import {
   TOTAL_ALERT_SUBJECT,
   FUNDS_ALERT_SUBJECT,
   scopeFundsTotal,
+  skipsUnlinkedTransferWrite,
   incomeChangeAlertScope
 } from "./budgetAlerts";
 import { cardBillingByAccount } from "./agentQueries";
@@ -377,6 +378,8 @@ export const notifyBudgetThreshold = onDocumentWritten(
       for (const accountId of linked) if (typeof accountId === "string" && !links.has(accountId)) links.set(accountId, d.id);
     }
     const linkedBudgetOf = (accountId: string) => links.get(accountId) ?? null;
+    // A transfer between accounts no active budget links moves nothing the alerts measure.
+    if (skipsUnlinkedTransferWrite(before, after, linkedBudgetOf)) return;
     // Null for archived/foreign budgets: their category and overall caps never alert, but the
     // expense still counts toward the month's spending vs income unless its budget is self-funded
     // in the month (selfFundedBudgetIds).

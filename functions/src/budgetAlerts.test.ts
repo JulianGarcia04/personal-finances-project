@@ -12,7 +12,10 @@ import {
   incomeChangeAlertScope,
   monthlyExpenseTotal,
   monthlyIncomeTotal,
+  scopeFunding,
   scopeFundsTotal,
+  skipsUnlinkedTransferWrite,
+  transferTouchesLinkedAccount,
   scopeTotalSpend,
   selfFundedBudgetIds,
   TOTAL_ALERT_SUBJECT,
@@ -432,4 +435,48 @@ test("changing a transfer's destination counts as a spend field change", () => {
   const base = { type: "transfer", accountId: "bank", toAccountId: "cash-casa", amount: 10, date: new Date("2026-10-12T17:00:00.000Z") };
   assert.equal(spendFieldsChanged(base, { ...base, toAccountId: "savings" }), true);
   assert.equal(spendFieldsChanged(base, { ...base }), false);
+});
+
+test("a budget without a funding inflow has no funds, even if money was transferred out of it", () => {
+  const links: Record<string, string> = { "cash-casa": "casa" };
+  const linkedBudgetOf = (accountId: string) => links[accountId] ?? null;
+  const transfer = (accountId: string, toAccountId: string, amount: number, date = new Date("2026-10-12T17:00:00.000Z")) => ({
+    type: "transfer", accountId, toAccountId, amount, currency: "COP", date
+  });
+  const casa = (kind: "event" | "monthly") => ({ id: "casa", kind });
+  // Only outflows: no funds, so the funds alert stays silent.
+  assert.equal(scopeFundsTotal([transfer("cash-casa", "bank", 300)], casa("event"), OCTOBER, COP_OPTIONS, linkedBudgetOf), 0);
+  assert.deepEqual(scopeFunding([transfer("cash-casa", "bank", 300)], casa("event"), OCTOBER, COP_OPTIONS, linkedBudgetOf), { total: -300, inflows: 0 });
+  // A monthly budget funded in another month has no inflow in this one.
+  const august = [transfer("bank", "cash-casa", 500, new Date("2026-08-12T17:00:00.000Z")), transfer("cash-casa", "bank", 300)];
+  assert.equal(scopeFundsTotal(august, casa("monthly"), OCTOBER, COP_OPTIONS, linkedBudgetOf), 0);
+  // With an inflow, outflows above it keep the real negative funds (S6 table unchanged).
+  const overdrawn = [transfer("bank", "cash-casa", 100), transfer("cash-casa", "bank", 300)];
+  assert.equal(scopeFundsTotal(overdrawn, casa("event"), OCTOBER, COP_OPTIONS, linkedBudgetOf), -200);
+  assert.deepEqual(scopeFunding(overdrawn, casa("event"), OCTOBER, COP_OPTIONS, linkedBudgetOf), { total: -200, inflows: 1 });
+  // A missing rate still makes the funds unknown.
+  assert.deepEqual(scopeFunding([{ ...transfer("bank", "cash-casa", 1), currency: "USD" }], casa("event"), OCTOBER, COP_OPTIONS, linkedBudgetOf), { total: null, inflows: 1 });
+});
+
+test("a write that is only a transfer touching no linked account cannot move any alert", () => {
+  const links: Record<string, string> = { "cash-casa": "casa" };
+  const linkedBudgetOf = (accountId: string) => links[accountId] ?? null;
+  const transfer = (accountId: string, toAccountId: string) => ({ type: "transfer", accountId, toAccountId, amount: 10, currency: "COP" });
+  assert.equal(transferTouchesLinkedAccount(transfer("bank", "cash-casa"), linkedBudgetOf), true);
+  assert.equal(transferTouchesLinkedAccount(transfer("cash-casa", "bank"), linkedBudgetOf), true);
+  assert.equal(transferTouchesLinkedAccount(transfer("bank", "savings"), linkedBudgetOf), false);
+  assert.equal(transferTouchesLinkedAccount(income(10), linkedBudgetOf), false);
+  assert.equal(transferTouchesLinkedAccount(undefined, linkedBudgetOf), false);
+
+  assert.equal(skipsUnlinkedTransferWrite(undefined, transfer("bank", "savings"), linkedBudgetOf), true);
+  assert.equal(skipsUnlinkedTransferWrite(transfer("bank", "savings"), undefined, linkedBudgetOf), true);
+  assert.equal(skipsUnlinkedTransferWrite(transfer("bank", "savings"), transfer("savings", "bank"), linkedBudgetOf), true);
+  // Either side touching a linked account, or any income or expense side, still runs the checks.
+  assert.equal(skipsUnlinkedTransferWrite(transfer("bank", "savings"), transfer("bank", "cash-casa"), linkedBudgetOf), false);
+  assert.equal(skipsUnlinkedTransferWrite(transfer("cash-casa", "bank"), undefined, linkedBudgetOf), false);
+  assert.equal(skipsUnlinkedTransferWrite(income(10), transfer("bank", "savings"), linkedBudgetOf), false);
+  assert.equal(skipsUnlinkedTransferWrite(transfer("bank", "savings"), income(10), linkedBudgetOf), false);
+  assert.equal(skipsUnlinkedTransferWrite(expense(10), transfer("bank", "savings"), linkedBudgetOf), false);
+  assert.equal(skipsUnlinkedTransferWrite(undefined, expense(10), linkedBudgetOf), false);
+  assert.equal(skipsUnlinkedTransferWrite(undefined, undefined, linkedBudgetOf), false);
 });

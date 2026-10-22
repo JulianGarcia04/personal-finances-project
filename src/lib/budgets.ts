@@ -276,9 +276,11 @@ export const eventBudgetCommittedAllocation = (
 }
 
 /**
- * Funds of a budget: income explicitly assigned to it. Event budgets add every such income;
- * monthly budgets only the income dated in the given calendar month. The default budget
- * has no funds, because unassigned income is the monthly income.
+ * Funds of a budget: income explicitly assigned to it plus transfers into its linked accounts
+ * minus transfers out. Event budgets add every such movement; monthly budgets only the ones dated
+ * in the given calendar month. The default budget has no funds, because unassigned income is the
+ * monthly income. `inflows` counts the funding inflows: without any, callers treat the budget as
+ * unfunded even if money was transferred out.
  */
 export const budgetFundsAllocation = (
   transactions: readonly BudgetExpenseTransaction[],
@@ -288,10 +290,11 @@ export const budgetFundsAllocation = (
   month: number,
   convert?: BudgetCurrencyConverter,
   linkedBudgetOf?: LinkedBudgetLookup
-): { total: number; count: number } => {
+): { total: number; count: number; inflows: number } => {
   let total = 0
   let count = 0
-  if (budgetId === DEFAULT_MONTHLY_BUDGET_ID) return { total, count }
+  let inflows = 0
+  if (budgetId === DEFAULT_MONTHLY_BUDGET_ID) return { total, count, inflows }
 
   for (const transaction of transactions) {
     // Assigned income adds; transfers add or subtract by the linked accounts they touch.
@@ -306,9 +309,10 @@ export const budgetFundsAllocation = (
     const converted = convert ? convert(Math.abs(delta), transaction.currency) : Math.abs(delta)
     total += delta > 0 ? converted : -converted
     count += 1
+    if (delta > 0) inflows += 1
   }
 
-  return { total, count }
+  return { total, count, inflows }
 }
 
 export const allBudgetsEstimatedMonthlyTotal = (

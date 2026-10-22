@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   billingLookbackStart,
+  budgetBreakdownQueries,
   buildBudgetStatus,
   cardBillingByAccount,
   computeNetWorth,
@@ -381,6 +382,50 @@ test("byBudget uses all-time rows of event budgets and lists only active budgets
   assert.equal(s.totals.income, 5_000_000);
   assert.equal(s.byBudget?.monthlyExpense, 120_000);
   assert.deepEqual(s.byBudget?.budgets.map(b => [b.id, b.funds, b.spent, b.available]), [["ventas", 1_000_000, 300_000, 700_000]]);
+});
+
+test("byBudget reports no funds for a budget that only had money transferred out, and real negative funds after an inflow", () => {
+  const out = tx("out", "transfer", 200_000, "2026-10-05T17:00:00Z", { accountId: "ventasAcct", toAccountId: "bank" });
+  const spend = tx("paint", "expense", -300_000, "2026-10-03T17:00:00Z", { categoryId: "fun", budgetId: "ventas" });
+  const outOnly = runBudgets([out, spend], { preset: "this_month" }, { budgetBreakdown: { budgets: [VENTAS] } });
+  assert.deepEqual(outOnly.byBudget?.budgets, [
+    { id: "ventas", name: "Ventas Casa", kind: "event", funds: null, spent: 300_000, available: null }
+  ]);
+  assert.equal(outOnly.byBudget?.incomplete, false);
+  // No inflow and no spending: nothing to report, like the client's per-budget panel.
+  assert.deepEqual(runBudgets([out], { preset: "this_month" }, { budgetBreakdown: { budgets: [VENTAS] } }).byBudget?.budgets, []);
+  const topUp = tx("in", "transfer", 100_000, "2026-10-02T17:00:00Z", { accountId: "bank", toAccountId: "ventasAcct" });
+  const overdrawn = runBudgets([topUp, out, spend], { preset: "this_month" }, { budgetBreakdown: { budgets: [VENTAS] } });
+  assert.deepEqual(overdrawn.byBudget?.budgets, [
+    { id: "ventas", name: "Ventas Casa", kind: "event", funds: -100_000, spent: 300_000, available: -400_000 }
+  ]);
+});
+
+test("byBudget treats an archived event budget funded in an earlier month as self-funded, like the client", () => {
+  const archived = { id: "trip", name: "Viaje", kind: "event", archived: true };
+  const rows = [
+    ...BUDGET_ROWS,
+    tx("tripSpend", "expense", -50_000, "2026-10-06T17:00:00Z", { categoryId: "fun", budgetId: "trip" })
+  ];
+  const older = [tx("tripIncome", "income", 500_000, "2026-08-02T17:00:00Z", { budgetId: "trip" })];
+  const s = runBudgets(rows, { preset: "this_month" }, { budgetBreakdown: { budgets: [VENTAS, archived], extraRows: older } });
+  assert.equal(s.byBudget?.monthlyExpense, 120_000);
+  assert.deepEqual(s.byBudget?.budgets.map(b => b.id), ["ventas"]);
+});
+
+test("byBudget loads all-time rows of active event budgets, assigned income of archived ones, and transfers only for links", () => {
+  assert.deepEqual(budgetBreakdownQueries([
+    VENTAS,
+    { id: "trip", kind: "event", archived: false },
+    { id: "oldTrip", kind: "event", archived: true, linkedAccountIds: ["x"] },
+    { id: "hogar", kind: "monthly", archived: false, linkedAccountIds: ["y"] },
+    { id: "oldHogar", kind: "monthly", archived: true }
+  ]), { eventIds: ["ventas", "trip"], archivedEventIds: ["oldTrip"], transfers: true });
+  assert.deepEqual(budgetBreakdownQueries([{ id: "trip", kind: "event", archived: false }]),
+    { eventIds: ["trip"], archivedEventIds: [], transfers: false });
+  assert.deepEqual(budgetBreakdownQueries([{ id: "oldTrip", kind: "event", archived: true }]),
+    { eventIds: [], archivedEventIds: ["oldTrip"], transfers: false });
+  assert.deepEqual(budgetBreakdownQueries([]), { eventIds: [], archivedEventIds: [], transfers: false });
 });
 
 test("byBudget leaves existing summary fields identical for a workspace without budgets", () => {

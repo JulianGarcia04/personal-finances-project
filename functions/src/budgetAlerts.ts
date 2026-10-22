@@ -70,6 +70,25 @@ export function transferFundsDelta(tx: Record<string, any>, budgetId: string, li
   return 0;
 }
 
+/** Whether a transfer enters or leaves an account linked to an active budget. */
+export function transferTouchesLinkedAccount(tx: Record<string, any> | undefined, linkedBudgetOf: LinkedBudgetLookup): boolean {
+  if (!tx || tx.type !== "transfer") return false;
+  return [tx.accountId, tx.toAccountId].some((accountId) => typeof accountId === "string" && linkedBudgetOf(accountId) !== null);
+}
+
+/**
+ * A write whose every side is a transfer and none touches a linked account moves no income,
+ * spending or funds, so the alert trigger can stop before reading anything else.
+ */
+export function skipsUnlinkedTransferWrite(
+  before: Record<string, any> | undefined,
+  after: Record<string, any> | undefined,
+  linkedBudgetOf: LinkedBudgetLookup
+): boolean {
+  const sides = [before, after].filter((tx): tx is Record<string, any> => tx !== undefined);
+  return sides.length > 0 && sides.every((tx) => tx.type === "transfer" && !transferTouchesLinkedAccount(tx, linkedBudgetOf));
+}
+
 /** Budgets a transfer moves funds between (the linked budgets of its two accounts, when they differ). */
 function transferBudgetIds(tx: Record<string, any> | undefined, linkedBudgetOf?: LinkedBudgetLookup): string[] {
   if (!tx || tx.type !== "transfer" || !linkedBudgetOf || typeof tx.accountId !== "string" || typeof tx.toAccountId !== "string") return [];
@@ -301,9 +320,39 @@ export function monthlyIncomeTotal(
 }
 
 /**
- * Funds of an operating budget: the income assigned to it plus transfers into its linked accounts
- * minus transfers out of them; all of them for an event budget and the month's for a monthly one
- * (like budgetReporting.ts funds). Null when a manual rate is missing.
+ * Funds movements of an operating budget: the income assigned to it plus transfers into its linked
+ * accounts minus transfers out of them; all of them for an event budget and the month's for a
+ * monthly one (like budgetReporting.ts funds). `inflows` counts the funding inflows (assigned income
+ * or a transfer in); `total` is null when a manual rate is missing.
+ */
+export function scopeFunding(
+  funding: Iterable<Record<string, any>>,
+  scope: AlertScope,
+  month: YearMonth,
+  options: SpendOptions,
+  linkedBudgetOf?: LinkedBudgetLookup
+): { total: number | null; inflows: number } {
+  let total: number | null = 0;
+  let inflows = 0;
+  for (const tx of funding) {
+    // Assigned income adds; transfers add or subtract by the linked accounts they touch.
+    const delta = tx.type === "income"
+      ? (resolveAlertBudgetId(tx.budgetId) === scope.id ? Math.abs(Number(tx.amount) || 0) : 0)
+      : linkedBudgetOf ? transferFundsDelta(tx, scope.id, linkedBudgetOf) : 0;
+    if (delta === 0) continue;
+    if (scope.kind === "monthly" && !inYearMonth(tx.date, month, options.timeZone)) continue;
+    if (delta > 0) inflows += 1;
+    if (total === null) continue;
+    const rate = manualRate(tx.currency, options.reportingCurrency, options.exchangeRates);
+    total = rate === null ? null : total + delta * rate;
+  }
+  return { total: total === null ? null : Math.round(total * 100) / 100, inflows };
+}
+
+/**
+ * Funds of an operating budget (scopeFunding). A budget without any funding inflow in the period
+ * has no funds (0), even if money was transferred out, so its funds alert stays silent; with an
+ * inflow, outflows above it give real negative funds. Null when a manual rate is missing.
  */
 export function scopeFundsTotal(
   funding: Iterable<Record<string, any>>,
@@ -312,19 +361,8 @@ export function scopeFundsTotal(
   options: SpendOptions,
   linkedBudgetOf?: LinkedBudgetLookup
 ): number | null {
-  let total = 0;
-  for (const tx of funding) {
-    // Assigned income adds; transfers add or subtract by the linked accounts they touch.
-    const delta = tx.type === "income"
-      ? (resolveAlertBudgetId(tx.budgetId) === scope.id ? Math.abs(Number(tx.amount) || 0) : 0)
-      : linkedBudgetOf ? transferFundsDelta(tx, scope.id, linkedBudgetOf) : 0;
-    if (delta === 0) continue;
-    if (scope.kind === "monthly" && !inYearMonth(tx.date, month, options.timeZone)) continue;
-    const rate = manualRate(tx.currency, options.reportingCurrency, options.exchangeRates);
-    if (rate === null) return null;
-    total += delta * rate;
-  }
-  return Math.round(total * 100) / 100;
+  const { total, inflows } = scopeFunding(funding, scope, month, options, linkedBudgetOf);
+  return inflows === 0 ? 0 : total;
 }
 
 /**

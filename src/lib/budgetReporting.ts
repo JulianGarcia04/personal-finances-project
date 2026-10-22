@@ -68,7 +68,10 @@ export interface BudgetScopeReport {
   eventCommittedPrincipal: BudgetAmountReport | null
   totalCap: BudgetCapReport | null
   totalComparison: BudgetCapComparison | null
-  /** Income assigned to this budget; null when it has none (the budget is then cap-only). */
+  /**
+   * Income assigned to this budget plus transfers into its linked accounts minus out; null without
+   * any funding inflow in the period (the budget is then cap-only). Negative when more left than came in.
+   */
   funds: BudgetAmountReport | null
   /** Funds minus the spending compared against the cap; null without complete funds and spending. */
   available: number | null
@@ -257,7 +260,8 @@ export const reportBudgetScope = (input: BudgetScopeReportInput): BudgetScopeRep
     (amount, currency) => convertOrZero(amount, currency, reportingCurrency, exchangeRates, fundsDiagnostics),
     input.linkedBudgetOf
   )
-  const funds = fundsSummary.count === 0
+  // Without a funding inflow in the period the budget is unfunded, even if money went out.
+  const funds = fundsSummary.inflows === 0
     ? null
     : moneyReport(fundsSummary.total, reportingCurrency, fundsDiagnostics)
   const available = funds?.amount == null || scopeSpending.amount === null

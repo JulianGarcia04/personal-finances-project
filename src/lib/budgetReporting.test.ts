@@ -375,6 +375,27 @@ test('the default budget never has funds: unassigned income is the monthly incom
   assert.equal(report.available, null)
 })
 
+test('a budget that only had money transferred out has no funds, like a budget without income', () => {
+  const linkedBudgetOf = (accountId: string) => (accountId === 'cash-casa' ? 'casa' : null)
+  const transfer = (accountId: string, toAccountId: string, amount: number) =>
+    expense({ type: 'transfer', accountId, toAccountId, amount, categoryId: undefined })
+  const outOnly = reportBudgetScope(scopeInput({
+    scope: { id: 'casa', kind: 'event', capCurrency: 'USD' },
+    transactions: [transfer('cash-casa', 'bank', 300), expense({ amount: -50, budgetId: 'casa' })],
+    linkedBudgetOf
+  }))
+  assert.equal(outOnly.funds, null)
+  assert.equal(outOnly.available, null)
+  // With an inflow, outflows above it keep the real negative funds and available.
+  const overdrawn = reportBudgetScope(scopeInput({
+    scope: { id: 'casa', kind: 'event', capCurrency: 'USD' },
+    transactions: [transfer('bank', 'cash-casa', 100), transfer('cash-casa', 'bank', 300), expense({ amount: -50, budgetId: 'casa' })],
+    linkedBudgetOf
+  }))
+  assert.equal(overdrawn.funds?.amount, -200)
+  assert.equal(overdrawn.available, -250)
+})
+
 test('funds with a missing rate hide both the funds amount and the available amount', () => {
   const report = reportBudgetScope(scopeInput({
     scope: { id: 'casa', kind: 'event', capCurrency: 'USD' },

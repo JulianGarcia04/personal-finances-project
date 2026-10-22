@@ -230,6 +230,8 @@ export interface BudgetCardFigures {
   fundsAmount: number | null;
   available: number | null;
   limitAmount: number | null;
+  // More money left the budget than came in (negative funds after at least one inflow).
+  overdrawn: boolean;
 }
 
 // Funds, spending, available and cap of one additional budget in the period. Shared by the Goals
@@ -258,7 +260,8 @@ export const budgetCardFigures = (
     funds: report.funds,
     fundsAmount: report.funds?.amount ?? null,
     available: report.available,
-    limitAmount: report.totalComparison?.limitAmount ?? null
+    limitAmount: report.totalComparison?.limitAmount ?? null,
+    overdrawn: report.funds?.amount != null && report.funds.amount < 0
   }
 }
 

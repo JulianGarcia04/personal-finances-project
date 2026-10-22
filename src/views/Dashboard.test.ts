@@ -341,6 +341,10 @@ test('S9: "Todo" is the default and runway, limit and savings keep their meaning
   assert.match(script, /try \{[^}]*localStorage\.setItem\(FLOW_VIEW_KEY, view\)/)
 })
 
+test('the per-budget panel explains funds overdrawn by transfers out', () => {
+  assert.match(componentSource, /data-testid="dashboard-budget-breakdown"[\s\S]*?v-if="budget\.overdrawn"[^>]*>\s*Salió más plata de la que entró a este presupuesto\.\s*</)
+})
+
 test('S9: the per-budget panel lists active budgets with activity and their funds, spending and available', () => {
   const breakdown = evaluateComputed<{ id: string; name: string; fundsAmount: number | null; spent: number | null; available: number | null }[]>('budgetBreakdown', {
     computed: computedDependency,

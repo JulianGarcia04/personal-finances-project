@@ -277,6 +277,9 @@
                 </dd>
               </div>
             </dl>
+            <p v-if="budget.overdrawn" class="text-[10px] text-accent-amber">
+              Salió más plata de la que entró a este presupuesto.
+            </p>
           </li>
         </ul>
       </section>

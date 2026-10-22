@@ -6,7 +6,8 @@ import {
   OperatingBudgetPatchSchema,
   OperatingBudgetRecordSchema,
   StoredOperatingBudgetRecordSchema,
-  TransactionSchema
+  TransactionSchema,
+  isReservedBudgetName
 } from '../schemas.ts'
 
 const baseTransaction = {
@@ -48,6 +49,18 @@ test('Operating budget drafts support monthly and event budgets without requirin
   }).success, true)
   assert.equal(OperatingBudgetRecordSchema.safeParse(monthlyRecord).success, true)
   assert.equal(OperatingBudgetRecordSchema.safeParse(eventRecord).success, true)
+})
+
+test('new operating budgets cannot take the name reserved for the default monthly budget; stored ones still load', () => {
+  for (const name of ['Presupuesto mensual', ' presupuesto MENSUAL ', 'Presupuésto mensual']) {
+    const result = OperatingBudgetDraftSchema.safeParse({ ...monthlyDraft, name })
+    assert.equal(result.success, false)
+    assert.equal(result.error?.issues[0]?.message, 'Ese nombre está reservado para el presupuesto mensual predeterminado.')
+  }
+  assert.equal(OperatingBudgetDraftSchema.safeParse({ ...monthlyDraft, name: 'Presupuesto mensual hogar' }).success, true)
+  assert.equal(StoredOperatingBudgetRecordSchema.safeParse({ ...monthlyRecord, name: 'Presupuesto mensual' }).success, true)
+  assert.equal(isReservedBudgetName('presupuesto mensual'), true)
+  assert.equal(isReservedBudgetName('Hogar'), false)
 })
 
 test('Operating budget limits accept zero and fractions but reject negative and non-finite values', () => {

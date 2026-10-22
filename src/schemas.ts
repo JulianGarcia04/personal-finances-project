@@ -158,9 +158,16 @@ const validateOperatingBudgetPlanning = (
   }
 }
 
+// Alerts and lists call the default budget "Presupuesto mensual", so a new budget cannot take that
+// name (compared trimmed, case- and accent-insensitive). Stored budgets with it still load.
+const RESERVED_BUDGET_NAME = 'presupuesto mensual'
+export const RESERVED_BUDGET_NAME_ERROR = 'Ese nombre está reservado para el presupuesto mensual predeterminado.'
+export const isReservedBudgetName = (name: string): boolean =>
+  name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/\s+/g, ' ').toLowerCase() === RESERVED_BUDGET_NAME
+
 export const OperatingBudgetDraftSchema = z.object({
   kind: OperatingBudgetKindSchema,
-  name: operatingBudgetNameSchema,
+  name: operatingBudgetNameSchema.refine(name => !isReservedBudgetName(name), RESERVED_BUDGET_NAME_ERROR),
   capCurrency: operatingBudgetCurrencySchema,
   totalLimit: operatingBudgetLimitSchema.optional(),
   linkedAccountIds: operatingBudgetLinkedAccountsSchema.optional(),

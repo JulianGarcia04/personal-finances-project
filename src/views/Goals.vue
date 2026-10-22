@@ -324,6 +324,9 @@
                   <p v-if="card.fundsAmount !== null" class="text-[10px] text-text-secondary tabular-nums">
                     Gastado {{ formatCurrency(card.spent, card.currency) }} de {{ formatCurrency(card.fundsAmount, card.currency) }} en fondos{{ card.fundsPercent !== null ? ` · ${card.fundsPercent} %` : '' }}
                   </p>
+                  <p v-if="card.overdrawn" class="text-[10px] text-accent-amber">
+                    Salió más plata de la que entró a este presupuesto.
+                  </p>
                 </div>
 
                 <div v-if="card.limitAmount !== null" class="space-y-1.5" data-testid="budget-card-limit">
@@ -900,6 +903,7 @@ import { suggestCategoriesBySpending, visibleBaselineCategories } from '@/lib/ca
 import { getCategoryIconComponent } from '@/lib/categoryIcons'
 import { DEFAULT_MONTHLY_BUDGET_ID, budgetIdForAccount, budgetMoveCandidates, budgetScopedMonthFilter, canAssignBudget, linkedAccountConflicts, linkedBudgetForAccount } from '@/lib/budgets'
 import { budgetCardFigures } from '@/lib/dashboardMetrics'
+import { isReservedBudgetName } from '@/schemas'
 import { reportBudgetScope } from '@/lib/budgetReporting'
 import type { BudgetWorkspaceBudgetSnapshot } from '@/lib/budgetWorkspaceAdapter'
 import { createCardBillingLookup, expenseAmountForDate } from '@/lib/installments'
@@ -1370,6 +1374,12 @@ const handleSaveOperatingBudget = async () => {
   const totalLimit = rawTotalLimit === '' ? undefined : Number(rawTotalLimit)
   if (!name) {
     budgetManagementError.value = 'Escribe un nombre para el presupuesto.'
+    return
+  }
+  // Creating or renaming into the default budget's name; a budget already stored with it keeps it.
+  const storedName = editingOperatingBudget.value?.budget.name
+  if (isReservedBudgetName(name) && (storedName === undefined || !isReservedBudgetName(storedName))) {
+    budgetManagementError.value = 'Ese nombre está reservado para el presupuesto mensual predeterminado.'
     return
   }
   if (!isValidCurrencyCode(capCurrency)) {

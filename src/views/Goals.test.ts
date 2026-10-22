@@ -6,6 +6,7 @@ import ts from 'typescript'
 import { toDateValue, toLocalDateKey } from '../lib/dates.ts'
 import { createCardBillingLookup, expenseAmountForDate } from '../lib/installments.ts'
 import { budgetScopedMonthFilter } from '../lib/budgets.ts'
+import { isReservedBudgetName } from '../schemas.ts'
 
 const goalsPath = fileURLToPath(new URL('./Goals.vue', import.meta.url))
 const goalsView = readFileSync(goalsPath, 'utf8')
@@ -84,6 +85,7 @@ test('S7: handleSaveOperatingBudget accepts numeric v-model values from number i
     budgetLinkedAccountIds: { value: [] as string[] },
     linkableOperatingBudgets: { value: [] as unknown[] },
     openMoveSheet: (budgetId: string) => { offeredMoves.push(budgetId) },
+    isReservedBudgetName,
     goalsStore: {
       operatingBudgets: [] as unknown[],
       async createOperatingBudget(draft: Record<string, unknown>) {
@@ -105,7 +107,8 @@ test('S7: handleSaveOperatingBudget accepts numeric v-model values from number i
       editingOperatingBudget, budgetNameInput, budgetKindInput, budgetCapCurrencyInput,
       budgetTotalLimitInput, budgetStartDateInput, budgetEndDateInput, budgetCategoryCapInputs,
       budgetManagementError, savingOperatingBudget, showBudgetModal, goalsStore,
-      budgetLinkConflicts, budgetLinkedAccountIds, linkableOperatingBudgets, openMoveSheet
+      budgetLinkConflicts, budgetLinkedAccountIds, linkableOperatingBudgets, openMoveSheet,
+      isReservedBudgetName
     } = ctx;
     ${transpiled}
     return handleSaveOperatingBudget();`
@@ -254,6 +257,7 @@ test('saving a budget that takes a linked account removes the link from its prev
     budgetLinkConflicts: { value: [{ accountId: 'cash-casa', budgetId: 'ventas', budgetName: 'Ventas Casa' }] },
     linkableOperatingBudgets: { value: [{ id: 'ventas', name: 'Ventas Casa', archived: false, linkedAccountIds: ['cash-casa', 'cash-ventas'] }] },
     openMoveSheet: () => undefined,
+    isReservedBudgetName,
     goalsStore: {
       operatingBudgets: [] as unknown[],
       async createOperatingBudget(draft: Record<string, unknown>, options: unknown) { created.push([draft, options]); return { id: 'toro', ...draft, archived: false } },
@@ -265,7 +269,8 @@ test('saving a budget that takes a linked account removes the link from its prev
     editingOperatingBudget, budgetNameInput, budgetKindInput, budgetCapCurrencyInput,
     budgetTotalLimitInput, budgetStartDateInput, budgetEndDateInput, budgetCategoryCapInputs,
     budgetManagementError, savingOperatingBudget, showBudgetModal, goalsStore,
-    budgetLinkConflicts, budgetLinkedAccountIds, linkableOperatingBudgets, openMoveSheet
+    budgetLinkConflicts, budgetLinkedAccountIds, linkableOperatingBudgets, openMoveSheet,
+    isReservedBudgetName
   } = ctx;
   ${transpiled}
   return handleSaveOperatingBudget();`)
@@ -278,6 +283,58 @@ test('saving a budget that takes a linked account removes the link from its prev
   // The previous budget is released in the same batch, not by a second write.
   assert.deepEqual(updates, [])
   assert.equal(ctx.showBudgetModal.value, false)
+})
+
+test('the budget form rejects the name reserved for the default monthly budget, but keeps a stored one on edit', async () => {
+  const blockMatch = goalsView.match(/const isValidCurrencyCode[\s\S]*?const handleArchiveBudget/)
+  assert.ok(blockMatch)
+  const transpiled = ts.transpileModule(blockMatch[0].replace(/\nconst handleArchiveBudget$/, ''), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext }
+  }).outputText
+  const save = async (name: string, editing: unknown = null) => {
+    const writes: string[] = []
+    const ctx = {
+      editingOperatingBudget: { value: editing },
+      budgetNameInput: { value: name }, budgetKindInput: { value: 'monthly' },
+      budgetCapCurrencyInput: { value: 'COP' }, budgetTotalLimitInput: { value: '' },
+      budgetStartDateInput: { value: '' }, budgetEndDateInput: { value: '' },
+      budgetCategoryCapInputs: {}, budgetManagementError: { value: '' },
+      savingOperatingBudget: { value: false }, showBudgetModal: { value: true },
+      budgetLinkedAccountIds: { value: [] }, budgetLinkConflicts: { value: [] },
+      linkableOperatingBudgets: { value: [] }, openMoveSheet: () => undefined,
+      isReservedBudgetName,
+      goalsStore: {
+        operatingBudgets: [] as unknown[],
+        async createOperatingBudget(draft: { name: string }) { writes.push(`create:${draft.name}`); return { id: 'b', ...draft, archived: false } },
+        async updateOperatingBudget(id: string, patch: { name: string }) { writes.push(`update:${patch.name}`); return { id } },
+        async saveOperatingBudgetCategoryCaps() {}
+      }
+    }
+    await new Function('ctx', `const {
+      editingOperatingBudget, budgetNameInput, budgetKindInput, budgetCapCurrencyInput,
+      budgetTotalLimitInput, budgetStartDateInput, budgetEndDateInput, budgetCategoryCapInputs,
+      budgetManagementError, savingOperatingBudget, showBudgetModal, goalsStore,
+      budgetLinkConflicts, budgetLinkedAccountIds, linkableOperatingBudgets, openMoveSheet,
+      isReservedBudgetName
+    } = ctx;
+    ${transpiled}
+    return handleSaveOperatingBudget();`)(ctx)
+    return { error: ctx.budgetManagementError.value, writes }
+  }
+  const reserved = 'Ese nombre está reservado para el presupuesto mensual predeterminado.'
+  for (const name of ['Presupuesto mensual', '  presupuesto MENSUAL ', 'Presupuésto mensual']) {
+    assert.deepEqual(await save(name), { error: reserved, writes: [] })
+  }
+  const other = { budget: { id: 'hogar', kind: 'monthly', name: 'Hogar', linkedAccountIds: [] }, categoryCaps: {} }
+  assert.deepEqual(await save('Presupuesto mensual', other), { error: reserved, writes: [] })
+  assert.deepEqual(await save('Presupuesto mensual hogar'), { error: '', writes: ['create:Presupuesto mensual hogar'] })
+  // A budget already stored with that name can still be edited without renaming it.
+  const legacy = { budget: { id: 'legacy', kind: 'monthly', name: 'Presupuesto mensual', linkedAccountIds: [] }, categoryCaps: {} }
+  assert.deepEqual(await save('Presupuesto mensual', legacy), { error: '', writes: ['update:Presupuesto mensual'] })
+})
+
+test('a budget card explains funds overdrawn by transfers out', () => {
+  assert.match(goalsView, /data-testid="budget-card-funds"[\s\S]*?v-if="card\.overdrawn"[^>]*>\s*Salió más plata de la que entró a este presupuesto\.\s*</)
 })
 
 test('budget cards show available funds and the cap with accessible progress bars', () => {

@@ -5,7 +5,7 @@ import {
   LinkedBudgetLookup,
   monthlyExpenseTotal,
   monthlyIncomeTotal,
-  scopeFundsTotal,
+  scopeFunding,
   scopeTotalSpend,
   selfFundedBudgetIds,
   SpendOptions
@@ -341,11 +341,30 @@ export interface SummaryBudget {
   linkedAccountIds?: unknown;
 }
 
+/**
+ * Extra reads byBudget needs beyond the period's rows: all-time rows of active event budgets (their
+ * figures are all-time), assigned income of archived event budgets (it still makes them self-funded,
+ * so their spending leaves the month's, like the client and the alert trigger), and the workspace's
+ * transfers only when an active event budget links accounts.
+ */
+export function budgetBreakdownQueries(budgets: SummaryBudget[]): { eventIds: string[]; archivedEventIds: string[]; transfers: boolean } {
+  const events = budgets.filter(budget => budget.kind === "event");
+  const active = events.filter(budget => budget.archived === false);
+  return {
+    eventIds: active.map(budget => budget.id),
+    archivedEventIds: events.filter(budget => budget.archived !== false).map(budget => budget.id),
+    transfers: active.some(budget => Array.isArray(budget.linkedAccountIds) && budget.linkedAccountIds.length > 0)
+  };
+}
+
 export interface BudgetBreakdownRow {
   id: string;
   name: string;
   kind: AlertScope["kind"];
-  /** Assigned income plus transfers into its linked accounts minus out; null when a manual rate is missing. */
+  /**
+   * Assigned income plus transfers into its linked accounts minus out (negative when more left than
+   * came in); null without any funding inflow in the period, or when a manual rate is missing.
+   */
   funds: number | null;
   spent: number | null;
   available: number | null;
@@ -624,13 +643,19 @@ function budgetBreakdown(
     selfFundedBudgetIds(funding, month, { timeZone }, kindOf, linkedBudgetOf))));
 
   const budgets: BudgetBreakdownRow[] = [];
+  let fundsRateMissing = false;
   for (const budget of active) {
     const scope: AlertScope = { id: budget.id, kind: budget.kind };
     // Event figures ignore the month, so one evaluation is the all-time figure.
     const evaluated = scope.kind === "event" ? months.slice(0, 1) : months;
-    const funds = sumKnown(evaluated.map(month => scopeFundsTotal(funding, scope, month, spendOptions, linkedBudgetOf)));
+    // Without a funding inflow in the period the budget has no funds (null), even if money went
+    // out, like the client's budget cards; with one, outflows above it give negative funds.
+    const fundingByMonth = evaluated.map(month => scopeFunding(funding, scope, month, spendOptions, linkedBudgetOf));
+    const funded = fundingByMonth.some(entry => entry.inflows > 0);
+    const funds = funded ? sumKnown(fundingByMonth.map(entry => entry.total)) : null;
+    if (funded && funds === null) fundsRateMissing = true;
     const spent = sumKnown(evaluated.map(month => scopeTotalSpend(movements, scope, month, spendOptions)));
-    if (funds === 0 && spent === 0) continue;
+    if (!funded && spent === 0) continue;
     budgets.push({
       id: budget.id,
       name: typeof budget.name === "string" && budget.name.trim() ? budget.name.trim() : budget.id,
@@ -641,8 +666,8 @@ function budgetBreakdown(
     });
   }
 
-  const incomplete = monthlyIncome === null || monthlyExpense === null ||
-    budgets.some(budget => budget.funds === null || budget.spent === null);
+  const incomplete = monthlyIncome === null || monthlyExpense === null || fundsRateMissing ||
+    budgets.some(budget => budget.spent === null);
   const notes = [
     "byBudget: ingresos del periodo sin los asignados a un presupuesto (son fondos de ese presupuesto) y gastos sin los de presupuestos que se financian con sus propios fondos; los presupuestos de evento suman todo su histórico y los mensuales solo el periodo."
   ];
