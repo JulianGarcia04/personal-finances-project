@@ -172,7 +172,10 @@ test('the planner counts card statements due this month instead of this month\'s
   )(
     (getter: () => unknown) => ({ get value() { return getter() } }),
     { transactions },
-    { convertToPrimary: (amount: number) => amount },
+    {
+      convertToPrimary: (amount: number) => amount,
+      operatingBudgets: [{ budget: { id: 'ventas-casa', kind: 'event' } }, { budget: { id: 'hogar', kind: 'monthly' } }]
+    },
     { value: 'COP' },
     expenseAmountForDate,
     cardBillingFor,

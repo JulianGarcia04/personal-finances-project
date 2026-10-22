@@ -51,16 +51,32 @@ export function resolveAlertBudgetId(budgetId: unknown): string {
 }
 
 /**
- * Budgets with at least one assigned income: their spending is paid by that income,
- * so it does not count against the month's income.
+ * Budgets paid by their own income in the evaluated period, so their spending does not count
+ * against the month's income: an event budget with any assigned income, a monthly budget with
+ * assigned income in that month. Unknown budgets (kindOf returns undefined) never qualify.
  */
-export function selfFundedBudgetIds(incomes: Iterable<Record<string, any>>): Set<string> {
+export function selfFundedBudgetIds(
+  incomes: Iterable<Record<string, any>>,
+  month: YearMonth,
+  options: { timeZone: string },
+  kindOf: (budgetId: string) => AlertScope["kind"] | undefined
+): Set<string> {
   const funded = new Set<string>();
   for (const tx of incomes) {
     const budgetId = resolveAlertBudgetId(tx.budgetId);
-    if (tx.type === "income" && budgetId !== DEFAULT_MONTHLY_BUDGET_ID) funded.add(budgetId);
+    if (tx.type !== "income" || budgetId === DEFAULT_MONTHLY_BUDGET_ID || funded.has(budgetId)) continue;
+    const kind = kindOf(budgetId);
+    if (kind === "event" || (kind === "monthly" && inYearMonth(tx.date, month, options.timeZone))) funded.add(budgetId);
   }
   return funded;
+}
+
+/** Whether a stored date falls in the given local month; malformed dates never do. */
+function inYearMonth(value: unknown, month: YearMonth, timeZone: string): boolean {
+  const date = storedDateValue(value, timeZone);
+  if (Number.isNaN(date.getTime())) return false;
+  const local = zonedYearMonth(date, timeZone);
+  return local.year === month.year && local.month === month.month;
 }
 
 /** Manual source -> reporting rate (port of budgetReporting.ts lookupRate); null when missing/invalid. */
@@ -314,34 +330,36 @@ function timeOf(value: any): number | null {
 
 /** True when a write may change category spend (so edits to description/notes/receipt are skipped). */
 /**
- * What an income write can push over a threshold: the month's income vs spending when it
- * lowers the current month's unassigned income, and a budget's funds alert when it lowers the
- * income assigned to that budget. Null when the write cannot newly cross any threshold.
+ * What an income write (create, edit or delete) can push over a threshold:
+ * - the month's spending vs income, when the current month's unassigned income drops or a budget
+ *   loses income (it may stop being self-funded, so its spending counts again);
+ * - the funds alert of each budget whose assigned income changed (a first income can already be
+ *   exceeded by the budget's spending).
+ * Null when the write cannot newly cross any threshold.
  */
 export function incomeChangeAlertScope(
   before: Record<string, any> | undefined,
   after: Record<string, any> | undefined,
   month: YearMonth,
   options: { timeZone: string }
-): { monthlyIncome: boolean; fundsBudgetId: string | null } | null {
-  if (before?.type !== "income") return null;
-  const amountOf = (tx: Record<string, any> | undefined) => tx?.type === "income" ? Math.abs(Number(tx.amount) || 0) : 0;
-  const inMonth = (tx: Record<string, any> | undefined) => {
-    if (!tx) return false;
-    const date = storedDateValue(tx.date, options.timeZone);
-    if (Number.isNaN(date.getTime())) return false;
-    const local = zonedYearMonth(date, options.timeZone);
-    return local.year === month.year && local.month === month.month;
-  };
-  const beforeBudgetId = resolveAlertBudgetId(before.budgetId);
-  const afterBudgetId = after?.type === "income" ? resolveAlertBudgetId(after.budgetId) : null;
-  const monthlyShare = (tx: Record<string, any> | undefined, budgetId: string | null) =>
-    budgetId === DEFAULT_MONTHLY_BUDGET_ID && inMonth(tx) ? amountOf(tx) : 0;
-  const monthlyIncome = monthlyShare(after, afterBudgetId) < monthlyShare(before, beforeBudgetId);
-  const fundsLost = beforeBudgetId !== DEFAULT_MONTHLY_BUDGET_ID &&
-    (afterBudgetId !== beforeBudgetId || amountOf(after) < amountOf(before));
-  if (!monthlyIncome && !fundsLost) return null;
-  return { monthlyIncome, fundsBudgetId: fundsLost ? beforeBudgetId : null };
+): { monthlyIncome: boolean; fundsBudgetIds: string[] } | null {
+  const incomeBefore = before?.type === "income" ? before : undefined;
+  const incomeAfter = after?.type === "income" ? after : undefined;
+  if (!incomeBefore && !incomeAfter) return null;
+  const amountOf = (tx: Record<string, any> | undefined) => tx ? Math.abs(Number(tx.amount) || 0) : 0;
+  const budgetOf = (tx: Record<string, any> | undefined) => tx ? resolveAlertBudgetId(tx.budgetId) : null;
+  const monthlyShare = (tx: Record<string, any> | undefined) =>
+    tx && budgetOf(tx) === DEFAULT_MONTHLY_BUDGET_ID && inYearMonth(tx.date, month, options.timeZone) ? amountOf(tx) : 0;
+  const beforeBudgetId = budgetOf(incomeBefore);
+  const afterBudgetId = budgetOf(incomeAfter);
+  const assigned = (budgetId: string | null): budgetId is string => budgetId !== null && budgetId !== DEFAULT_MONTHLY_BUDGET_ID;
+
+  const fundsBudgetIds: string[] = [];
+  if (assigned(beforeBudgetId)) fundsBudgetIds.push(beforeBudgetId);
+  if (assigned(afterBudgetId) && afterBudgetId !== beforeBudgetId) fundsBudgetIds.push(afterBudgetId);
+  const monthlyIncome = monthlyShare(incomeAfter) < monthlyShare(incomeBefore) || assigned(beforeBudgetId);
+  if (!monthlyIncome && fundsBudgetIds.length === 0) return null;
+  return { monthlyIncome, fundsBudgetIds };
 }
 
 export function spendFieldsChanged(before: Record<string, any> | undefined, after: Record<string, any> | undefined): boolean {

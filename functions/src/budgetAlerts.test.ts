@@ -320,7 +320,7 @@ test("monthly expense total skips budgets funded by their own income", () => {
     expense(50, { budgetId: "hogar", categoryId: undefined }),
     expense(700, { budgetId: "ventas-casa" })
   ];
-  const funded = selfFundedBudgetIds([income(5_000, { budgetId: "ventas-casa" }), income(1_000), income(10, { budgetId: "default-monthly" })]);
+  const funded = selfFundedBudgetIds([income(5_000, { budgetId: "ventas-casa" }), income(1_000), income(10, { budgetId: "default-monthly" })], OCTOBER, COP_OPTIONS, () => "event");
   assert.deepEqual([...funded], ["ventas-casa"]);
   assert.equal(monthlyExpenseTotal(txs, OCTOBER, COP_OPTIONS, funded), 150);
   assert.equal(monthlyExpenseTotal(txs, OCTOBER, COP_OPTIONS), 850);
@@ -363,19 +363,36 @@ test("budget funds are its assigned income: all of it for an event, the month's 
 
 test("an income change re-checks the alerts it can push over a threshold", () => {
   const options = { timeZone: BOGOTA };
+  const scope = (before?: Record<string, unknown>, after?: Record<string, unknown>) =>
+    incomeChangeAlertScope(before, after, OCTOBER, options);
   // Monthly income drops: deleted, moved to a budget, lowered, or moved out of the month.
-  assert.deepEqual(incomeChangeAlertScope(income(1_000), undefined, OCTOBER, options), { monthlyIncome: true, fundsBudgetId: null });
-  assert.deepEqual(incomeChangeAlertScope(income(1_000), income(1_000, { budgetId: "casa" }), OCTOBER, options), { monthlyIncome: true, fundsBudgetId: null });
-  assert.deepEqual(incomeChangeAlertScope(income(1_000), income(400), OCTOBER, options), { monthlyIncome: true, fundsBudgetId: null });
-  assert.deepEqual(incomeChangeAlertScope(income(1_000), income(1_000, { date: new Date("2026-11-02T17:00:00.000Z") }), OCTOBER, options), { monthlyIncome: true, fundsBudgetId: null });
-  // A budget's funds drop: deleted, lowered, or moved to another budget.
-  assert.deepEqual(incomeChangeAlertScope(income(1_000, { budgetId: "casa" }), undefined, OCTOBER, options), { monthlyIncome: false, fundsBudgetId: "casa" });
-  assert.deepEqual(incomeChangeAlertScope(income(1_000, { budgetId: "casa" }), income(1_000), OCTOBER, options), { monthlyIncome: false, fundsBudgetId: "casa" });
-  assert.deepEqual(incomeChangeAlertScope(income(1_000, { budgetId: "casa" }), income(900, { budgetId: "casa" }), OCTOBER, options), { monthlyIncome: false, fundsBudgetId: "casa" });
-  // Raising income, a new income, an income of another month or an expense never re-checks.
-  assert.equal(incomeChangeAlertScope(undefined, income(1_000), OCTOBER, options), null);
-  assert.equal(incomeChangeAlertScope(income(1_000), income(2_000), OCTOBER, options), null);
-  assert.equal(incomeChangeAlertScope(income(1_000, { date: new Date("2026-09-02T17:00:00.000Z") }), undefined, OCTOBER, options), null);
-  assert.equal(incomeChangeAlertScope(income(1_000), income(1_000, { description: "renamed" }), OCTOBER, options), null);
-  assert.equal(incomeChangeAlertScope(expense(10), undefined, OCTOBER, options), null);
+  assert.deepEqual(scope(income(1_000), undefined), { monthlyIncome: true, fundsBudgetIds: [] });
+  assert.deepEqual(scope(income(1_000), income(1_000, { budgetId: "casa" })), { monthlyIncome: true, fundsBudgetIds: ["casa"] });
+  assert.deepEqual(scope(income(1_000), income(400)), { monthlyIncome: true, fundsBudgetIds: [] });
+  assert.deepEqual(scope(income(1_000), income(1_000, { date: new Date("2026-11-02T17:00:00.000Z") })), { monthlyIncome: true, fundsBudgetIds: [] });
+  // A budget losing income can lose its own funding, so its spending returns to the month's.
+  assert.deepEqual(scope(income(1_000, { budgetId: "casa" }), undefined), { monthlyIncome: true, fundsBudgetIds: ["casa"] });
+  assert.deepEqual(scope(income(1_000, { budgetId: "casa" }), income(1_000)), { monthlyIncome: true, fundsBudgetIds: ["casa"] });
+  assert.deepEqual(scope(income(1_000, { budgetId: "casa" }), income(900, { budgetId: "casa" })), { monthlyIncome: true, fundsBudgetIds: ["casa"] });
+  assert.deepEqual(scope(income(1_000, { budgetId: "casa" }), income(1_000, { budgetId: "viaje" })), { monthlyIncome: true, fundsBudgetIds: ["casa", "viaje"] });
+  // A budget's first income can find its spending already over the new funds.
+  assert.deepEqual(scope(undefined, income(1_000, { budgetId: "casa" })), { monthlyIncome: false, fundsBudgetIds: ["casa"] });
+  // Raising unassigned income, a new unassigned income, another month's income or an expense never re-checks.
+  assert.equal(scope(undefined, income(1_000)), null);
+  assert.equal(scope(income(1_000), income(2_000)), null);
+  assert.equal(scope(income(1_000, { date: new Date("2026-09-02T17:00:00.000Z") }), undefined), null);
+  assert.equal(scope(income(1_000), income(1_000, { description: "renamed" })), null);
+  assert.equal(scope(expense(10), undefined), null);
 });
+
+test("a monthly budget is self-funded only in months with assigned income; an event budget always", () => {
+  const kinds: Record<string, "monthly" | "event"> = { hogar: "monthly", viaje: "event" };
+  const kindOf = (budgetId: string) => kinds[budgetId];
+  const september = new Date("2026-09-10T17:00:00.000Z");
+  const funded = (incomes: Record<string, unknown>[]) => [...selfFundedBudgetIds(incomes, OCTOBER, COP_OPTIONS, kindOf)].sort();
+  assert.deepEqual(funded([income(1, { budgetId: "hogar", date: september }), income(1, { budgetId: "viaje", date: september })]), ["viaje"]);
+  assert.deepEqual(funded([income(1, { budgetId: "hogar" })]), ["hogar"]);
+  // A budget the workspace no longer has (or an unknown kind) never hides spending.
+  assert.deepEqual(funded([income(1, { budgetId: "gone" })]), []);
+});
+

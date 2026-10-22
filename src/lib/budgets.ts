@@ -1,4 +1,5 @@
 import { expenseAmountForMonth, type CardBillingLookup, type InstallmentTransaction } from './installments.ts'
+import type { OperatingBudgetKind } from '../types.ts'
 
 export const DEFAULT_MONTHLY_BUDGET_ID = 'default-monthly'
 
@@ -59,16 +60,21 @@ export const linkedAccountConflicts = (
 }
 
 /**
- * Budgets with at least one assigned income: their spending is paid by that income,
- * so it does not count against the month's income.
+ * Budgets paid by their own income in the period, so their spending does not count against the
+ * month's income: an event budget with any assigned income, a monthly budget with assigned income
+ * in that month. Unknown budgets (kindOf returns undefined) never qualify.
  */
 export const selfFundedBudgetIds = (
-  transactions: Iterable<{ type: string; budgetId?: string | null }>
+  transactions: Iterable<{ type: string; budgetId?: string | null; date: Date }>,
+  period: { year: number; month: number; kindOf: (budgetId: string) => OperatingBudgetKind | undefined }
 ): Set<string> => {
   const funded = new Set<string>()
   for (const t of transactions) {
     const budgetId = resolveBudgetId(t.budgetId)
-    if (t.type === 'income' && budgetId !== DEFAULT_MONTHLY_BUDGET_ID) funded.add(budgetId)
+    if (t.type !== 'income' || budgetId === DEFAULT_MONTHLY_BUDGET_ID || funded.has(budgetId)) continue
+    const kind = period.kindOf(budgetId)
+    const inPeriod = t.date.getFullYear() === period.year && t.date.getMonth() === period.month
+    if (kind === 'event' || (kind === 'monthly' && inPeriod)) funded.add(budgetId)
   }
   return funded
 }

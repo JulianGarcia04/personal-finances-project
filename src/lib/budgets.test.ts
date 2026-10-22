@@ -245,14 +245,21 @@ test('a movement saved under the default budget stores no explicit reference', (
   assert.equal(budgetIdToPersist('expense', ''), null)
 })
 
-test('a budget is self-funded once any income is assigned to it', () => {
+test('a monthly budget is self-funded only in months with assigned income; an event budget always', () => {
+  const kinds: Record<string, 'monthly' | 'event'> = { hogar: 'monthly', 'ventas-casa': 'event' }
+  const kindOf = (budgetId: string) => kinds[budgetId]
+  const september = new Date(2026, 8, 10, 12)
+  const october = new Date(2026, 9, 10, 12)
   const funded = selfFundedBudgetIds([
-    { type: 'income', budgetId: 'ventas-casa' },
-    { type: 'income', budgetId: DEFAULT_MONTHLY_BUDGET_ID },
-    { type: 'income' },
-    { type: 'expense', budgetId: 'hogar' }
-  ])
+    { type: 'income', budgetId: 'ventas-casa', date: september },
+    { type: 'income', budgetId: 'hogar', date: september },
+    { type: 'income', budgetId: DEFAULT_MONTHLY_BUDGET_ID, date: october },
+    { type: 'income', date: october },
+    { type: 'income', budgetId: 'gone', date: october },
+    { type: 'expense', budgetId: 'hogar', date: october }
+  ], { year: 2026, month: 9, kindOf })
   assert.deepEqual([...funded], ['ventas-casa'])
+  assert.deepEqual([...selfFundedBudgetIds([{ type: 'income', budgetId: 'hogar', date: october }], { year: 2026, month: 9, kindOf })], ['hogar'])
 })
 
 test('a movement of a linked account can only go to that account\'s budget', () => {

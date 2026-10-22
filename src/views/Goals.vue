@@ -1085,7 +1085,10 @@ const baselineBudgetReport = computed(() => {
 const realMonthTotals = computed(() => {
   const now = new Date()
   let income = 0, expense = 0
-  const selfFunded = selfFundedBudgetIds(transactionsStore.transactions)
+  const kinds = new Map(goalsStore.operatingBudgets.map(({ budget }) => [budget.id, budget.kind]))
+  const selfFunded = selfFundedBudgetIds(transactionsStore.transactions, {
+    year: now.getFullYear(), month: now.getMonth(), kindOf: budgetId => kinds.get(budgetId)
+  })
   transactionsStore.transactions.forEach(t => {
     if (t.type === 'income') {
       // Income assigned to another budget funds only that budget, so it is not monthly income.

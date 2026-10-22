@@ -352,8 +352,7 @@ export const notifyBudgetThreshold = onDocumentWritten(
     // An expense write can raise spending. An income write (edit or delete) can lower the month's
     // income or a budget's funds. Deleting an expense can never newly cross a threshold.
     const expense = after?.type === "expense" ? after : undefined;
-    const incomeWrite = before?.type === "income";
-    const written = expense ?? (incomeWrite ? before : undefined);
+    const written = expense ?? (before?.type === "income" ? before : after?.type === "income" ? after : undefined);
     if (!written || typeof written.workspaceId !== "string" || !written.workspaceId) return;
     if (!spendFieldsChanged(before, after)) return;
 
@@ -362,7 +361,8 @@ export const notifyBudgetThreshold = onDocumentWritten(
     const workspace = workspaceSnap.data();
     if (!workspace || workspace.budgetAlertsEnabled === false) return;
     // Null for archived/foreign budgets: their category and overall caps never alert, but the
-    // expense still counts toward the month's spending vs income.
+    // expense still counts toward the month's spending vs income unless its budget is self-funded
+    // in the month (selfFundedBudgetIds).
     const budgetScope = expense ? await loadBudgetScope(workspaceId, workspace, resolveAlertBudgetId(expense.budgetId)) : null;
 
     const ownerSnap = typeof workspace.ownerId === "string" && workspace.ownerId
@@ -390,16 +390,17 @@ export const notifyBudgetThreshold = onDocumentWritten(
       countsTowardScopeTotal(expense, budgetScope.scope, month, { timeZone, billingFor });
     const incomeChange = incomeChangeAlertScope(before, after, month, { timeZone });
     const incomeApplies = countsTowardMonthlySpend(expense, month, { timeZone, billingFor }) || incomeChange?.monthlyIncome === true;
-    // An additional budget's spending vs the income assigned to it (its funds): the expense's
-    // budget, or the budget an income write took funds from.
-    const fundsScope = budgetScope !== null && budgetScope.scope.id !== DEFAULT_MONTHLY_BUDGET_ID &&
-      countsTowardScopeTotal(expense, budgetScope.scope, month, { timeZone, billingFor })
-      ? budgetScope
-      : incomeChange?.fundsBudgetId
-        ? await loadBudgetScope(workspaceId, workspace, incomeChange.fundsBudgetId)
-        : null;
-    const fundsApplies = fundsScope !== null && fundsScope.scope.id !== DEFAULT_MONTHLY_BUDGET_ID;
-    if (categoryCap === 0 && !scopeTotalApplies && !incomeApplies && !fundsApplies) return;
+    // Additional budgets' spending vs the income assigned to them (their funds): the expense's
+    // budget, and every budget whose assigned income an income write changed.
+    const fundsScopes: BudgetScopeInfo[] = [];
+    if (budgetScope !== null && budgetScope.scope.id !== DEFAULT_MONTHLY_BUDGET_ID &&
+      countsTowardScopeTotal(expense, budgetScope.scope, month, { timeZone, billingFor })) fundsScopes.push(budgetScope);
+    for (const budgetId of incomeChange?.fundsBudgetIds ?? []) {
+      if (fundsScopes.some((entry) => entry.scope.id === budgetId)) continue;
+      const scope = await loadBudgetScope(workspaceId, workspace, budgetId);
+      if (scope) fundsScopes.push(scope);
+    }
+    if (categoryCap === 0 && !scopeTotalApplies && !incomeApplies && fundsScopes.length === 0) return;
 
     const smtp = smtpConfigFromEnvironment();
     const memberUids = memberUidsOf(workspace.members);
@@ -435,7 +436,7 @@ export const notifyBudgetThreshold = onDocumentWritten(
       }
     }
     const incomes = incomeSnap.docs.map((d) => d.data());
-    if (fundsScope && fundsApplies) {
+    for (const fundsScope of fundsScopes) {
       const funds = scopeFundsTotal(incomes, fundsScope.scope, month, spendOptions);
       const spent = scopeTotalSpend(transactions, fundsScope.scope, month, spendOptions);
       if (funds === null || spent === null) {
@@ -447,7 +448,15 @@ export const notifyBudgetThreshold = onDocumentWritten(
     if (incomeApplies) {
       const realIncome = monthlyIncomeTotal(incomes, month, spendOptions);
       const budget = incomeReference(workspace.budgetIncome, realIncome);
-      const spent = monthlyExpenseTotal(transactions, month, spendOptions, selfFundedBudgetIds(incomes));
+      // Kinds of every budget of the workspace (archived included): a monthly budget is only
+      // self-funded in months with assigned income.
+      const budgetsSnap = await db.collection("budgets").where("workspaceId", "==", workspaceId).get();
+      const kinds = new Map(budgetsSnap.docs.map((d) => [d.id, d.get("kind")]));
+      const kindOf = (budgetId: string) => {
+        const kind = kinds.get(budgetId);
+        return kind === "monthly" || kind === "event" ? kind : undefined;
+      };
+      const spent = monthlyExpenseTotal(transactions, month, spendOptions, selfFundedBudgetIds(incomes, month, { timeZone }, kindOf));
       if (budget === null || spent === null) {
         console.warn(`Income alert for workspace ${workspaceId} skipped: no income to compare or manual rate missing.`);
       } else {
