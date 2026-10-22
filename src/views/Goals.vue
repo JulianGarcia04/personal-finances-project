@@ -350,7 +350,7 @@
                   Gastado: {{ formatCurrency(card.spent, card.currency) }}{{ entry.budget.totalLimit === undefined ? ' · Sin límite total' : '' }}
                 </p>
                 <p v-if="card.funds === null" class="text-[10px] text-text-secondary">
-                  ¿Esta plata viene de un ingreso propio? Regístralo con este presupuesto y verás cuánto te queda disponible.
+                  ¿Esta plata tiene su propio origen? Registra el ingreso con este presupuesto, o transfiérela a una de sus cuentas ligadas, y verás cuánto te queda disponible.
                 </p>
               </template>
             </div>
@@ -1015,11 +1015,17 @@ const expenseCategories = computed(() =>
 const activeOperatingBudgets = computed(() =>
   goalsStore.operatingBudgets.filter(entry => !entry.budget.archived)
 )
-// Card view of each active budget: spending vs its funds (assigned income) and vs its total cap.
+// Budget each account is linked to: transfers into or out of linked accounts move funds.
+const linkedBudgetOfAccount = (accountId: string) =>
+  linkedBudgetForAccount(linkableOperatingBudgets.value, accountId)?.id ?? null
+
+// Card view of each active budget: spending vs its funds (assigned income and transfers into its
+// linked accounts) and vs its total cap.
 const budgetCards = computed(() => {
   const now = new Date()
   return new Map(activeOperatingBudgets.value.map(entry => {
     const report = reportBudgetScope({
+      linkedBudgetOf: linkedBudgetOfAccount,
       scope: {
         id: entry.budget.id,
         kind: entry.budget.kind,
@@ -1091,7 +1097,8 @@ const realMonthTotals = computed(() => {
   let income = 0, expense = 0
   const kinds = new Map(goalsStore.operatingBudgets.map(({ budget }) => [budget.id, budget.kind]))
   const selfFunded = selfFundedBudgetIds(transactionsStore.transactions, {
-    year: now.getFullYear(), month: now.getMonth(), kindOf: budgetId => kinds.get(budgetId)
+    year: now.getFullYear(), month: now.getMonth(), kindOf: budgetId => kinds.get(budgetId),
+    linkedBudgetOf: linkedBudgetOfAccount
   })
   transactionsStore.transactions.forEach(t => {
     if (t.type === 'income') {

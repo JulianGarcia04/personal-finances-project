@@ -60,18 +60,27 @@ export const linkedAccountConflicts = (
 }
 
 /**
- * Budgets paid by their own income in the period, so their spending does not count against the
- * month's income: an event budget with any assigned income, a monthly budget with assigned income
- * in that month. Unknown budgets (kindOf returns undefined) never qualify.
+ * Budgets paid by their own funds in the period, so their spending does not count against the
+ * month's income: an event budget with any funding inflow (assigned income or a transfer into a
+ * linked account), a monthly budget with one in that month. Unknown budgets never qualify.
  */
 export const selfFundedBudgetIds = (
-  transactions: Iterable<{ type: string; budgetId?: string | null; date: Date }>,
-  period: { year: number; month: number; kindOf: (budgetId: string) => OperatingBudgetKind | undefined }
+  transactions: Iterable<Pick<BudgetExpenseTransaction, 'type' | 'amount' | 'budgetId' | 'date' | 'accountId' | 'toAccountId'>>,
+  period: {
+    year: number
+    month: number
+    kindOf: (budgetId: string) => OperatingBudgetKind | undefined
+    linkedBudgetOf?: LinkedBudgetLookup
+  }
 ): Set<string> => {
   const funded = new Set<string>()
   for (const t of transactions) {
-    const budgetId = resolveBudgetId(t.budgetId)
-    if (t.type !== 'income' || budgetId === DEFAULT_MONTHLY_BUDGET_ID || funded.has(budgetId)) continue
+    // Funding inflows: assigned income, or a transfer into a budget's linked account.
+    const linkedTo = t.type === 'transfer' && t.toAccountId && period.linkedBudgetOf ? period.linkedBudgetOf(t.toAccountId) : null
+    const budgetId = t.type === 'income' ? resolveBudgetId(t.budgetId)
+      : linkedTo && transferFundsDelta(t, linkedTo, period.linkedBudgetOf!) > 0 ? linkedTo
+      : DEFAULT_MONTHLY_BUDGET_ID
+    if (budgetId === DEFAULT_MONTHLY_BUDGET_ID || funded.has(budgetId)) continue
     const kind = period.kindOf(budgetId)
     const inPeriod = t.date.getFullYear() === period.year && t.date.getMonth() === period.month
     if (kind === 'event' || (kind === 'monthly' && inPeriod)) funded.add(budgetId)
@@ -119,6 +128,30 @@ export interface BudgetExpenseTransaction extends InstallmentTransaction {
   budgetId?: string | null
   categoryId?: string | null
   currency: string
+  toAccountId?: string | null
+}
+
+/** Active budget each account is linked to, or null. */
+export type LinkedBudgetLookup = (accountId: string) => string | null
+
+/**
+ * How a transfer moves a budget's funds, by the accounts it touches (never by its stored sign):
+ * into an account linked to the budget adds, out of it subtracts, and between two accounts of the
+ * same budget the money never leaves it.
+ */
+export const transferFundsDelta = (
+  transaction: Pick<BudgetExpenseTransaction, 'type' | 'amount' | 'accountId' | 'toAccountId'>,
+  budgetId: string,
+  linkedBudgetOf: LinkedBudgetLookup
+): number => {
+  if (transaction.type !== 'transfer' || !transaction.accountId || !transaction.toAccountId) return 0
+  const from = linkedBudgetOf(transaction.accountId)
+  const to = linkedBudgetOf(transaction.toAccountId)
+  if (from === to) return 0
+  const amount = Math.abs(transaction.amount)
+  if (to === budgetId) return amount
+  if (from === budgetId) return -amount
+  return 0
 }
 
 export type BudgetCurrencyConverter = (positiveAmount: number, currency: string) => number
@@ -200,20 +233,25 @@ export const budgetFundsAllocation = (
   kind: 'monthly' | 'event',
   year: number,
   month: number,
-  convert?: BudgetCurrencyConverter
+  convert?: BudgetCurrencyConverter,
+  linkedBudgetOf?: LinkedBudgetLookup
 ): { total: number; count: number } => {
   let total = 0
   let count = 0
   if (budgetId === DEFAULT_MONTHLY_BUDGET_ID) return { total, count }
 
   for (const transaction of transactions) {
-    if (transaction.type !== 'income' || transaction.budgetId !== budgetId) continue
+    // Assigned income adds; transfers add or subtract by the linked accounts they touch.
+    const delta = transaction.type === 'income'
+      ? (transaction.budgetId === budgetId ? Math.abs(transaction.amount) : 0)
+      : linkedBudgetOf ? transferFundsDelta(transaction, budgetId, linkedBudgetOf) : 0
+    if (delta === 0) continue
     if (kind === 'monthly') {
       const date = transaction.date instanceof Date ? transaction.date : new Date(transaction.date)
       if (Number.isNaN(date.getTime()) || date.getFullYear() !== year || date.getMonth() !== month) continue
     }
-    const amount = Math.abs(transaction.amount)
-    total += convert ? convert(amount, transaction.currency) : amount
+    const converted = convert ? convert(Math.abs(delta), transaction.currency) : Math.abs(delta)
+    total += delta > 0 ? converted : -converted
     count += 1
   }
 

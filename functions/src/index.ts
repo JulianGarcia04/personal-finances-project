@@ -349,10 +349,12 @@ export const notifyBudgetThreshold = onDocumentWritten(
     }
     const before = event.data?.before?.exists ? event.data.before.data() : undefined;
     const after = event.data?.after?.exists ? event.data.after.data() : undefined;
-    // An expense write can raise spending. An income write (edit or delete) can lower the month's
-    // income or a budget's funds. Deleting an expense can never newly cross a threshold.
+    // An expense write can raise spending. An income or transfer write (create, edit or delete) can
+    // lower the month's income or a budget's funds. Deleting an expense can never newly cross a
+    // threshold.
     const expense = after?.type === "expense" ? after : undefined;
-    const written = expense ?? (before?.type === "income" ? before : after?.type === "income" ? after : undefined);
+    const funding = (tx: Record<string, any> | undefined) => tx?.type === "income" || tx?.type === "transfer" ? tx : undefined;
+    const written = expense ?? funding(before) ?? funding(after);
     if (!written || typeof written.workspaceId !== "string" || !written.workspaceId) return;
     if (!spendFieldsChanged(before, after)) return;
 
@@ -360,6 +362,21 @@ export const notifyBudgetThreshold = onDocumentWritten(
     const workspaceSnap = await db.collection("workspaces").doc(workspaceId).get();
     const workspace = workspaceSnap.data();
     if (!workspace || workspace.budgetAlertsEnabled === false) return;
+    // Every budget of the workspace (archived included): kinds decide per-period self-funding,
+    // and active budgets' linked accounts decide which transfers move funds.
+    const budgetsSnap = await db.collection("budgets").where("workspaceId", "==", workspaceId).get();
+    const kinds = new Map(budgetsSnap.docs.map((d) => [d.id, d.get("kind")]));
+    const kindOf = (budgetId: string) => {
+      const kind = kinds.get(budgetId);
+      return kind === "monthly" || kind === "event" ? kind : undefined;
+    };
+    const links = new Map<string, string>();
+    for (const d of budgetsSnap.docs) {
+      const linked = d.get("linkedAccountIds");
+      if (d.get("archived") !== false || !Array.isArray(linked)) continue;
+      for (const accountId of linked) if (typeof accountId === "string" && !links.has(accountId)) links.set(accountId, d.id);
+    }
+    const linkedBudgetOf = (accountId: string) => links.get(accountId) ?? null;
     // Null for archived/foreign budgets: their category and overall caps never alert, but the
     // expense still counts toward the month's spending vs income unless its budget is self-funded
     // in the month (selfFundedBudgetIds).
@@ -388,7 +405,7 @@ export const notifyBudgetThreshold = onDocumentWritten(
       : 0;
     const scopeTotalApplies = budgetScope !== null && budgetScope.totalLimit !== null &&
       countsTowardScopeTotal(expense, budgetScope.scope, month, { timeZone, billingFor });
-    const incomeChange = incomeChangeAlertScope(before, after, month, { timeZone });
+    const incomeChange = incomeChangeAlertScope(before, after, month, { timeZone }, linkedBudgetOf);
     const incomeApplies = countsTowardMonthlySpend(expense, month, { timeZone, billingFor }) || incomeChange?.monthlyIncome === true;
     // Additional budgets' spending vs the income assigned to them (their funds): the expense's
     // budget, and every budget whose assigned income an income write changed.
@@ -409,7 +426,7 @@ export const notifyBudgetThreshold = onDocumentWritten(
     if (!smtp) console.warn("SMTP_USER / SMTP_PASS are not configured; budget alert email skipped.");
     if (!delivery.claim) return;
 
-    const [txSnap, incomeSnap] = await Promise.all(["expense", "income"].map((type) => db.collection("transactions")
+    const [txSnap, incomeSnap, transferSnap] = await Promise.all(["expense", "income", "transfer"].map((type) => db.collection("transactions")
       .where("workspaceId", "==", workspaceId)
       .where("type", "==", type)
       .get()));
@@ -436,8 +453,9 @@ export const notifyBudgetThreshold = onDocumentWritten(
       }
     }
     const incomes = incomeSnap.docs.map((d) => d.data());
+    const fundingMovements = [...incomes, ...transferSnap.docs.map((d) => d.data())];
     for (const fundsScope of fundsScopes) {
-      const funds = scopeFundsTotal(incomes, fundsScope.scope, month, spendOptions);
+      const funds = scopeFundsTotal(fundingMovements, fundsScope.scope, month, spendOptions, linkedBudgetOf);
       const spent = scopeTotalSpend(transactions, fundsScope.scope, month, spendOptions);
       if (funds === null || spent === null) {
         console.warn(`Funds alert for workspace ${workspaceId} skipped: manual rate missing.`);
@@ -448,15 +466,8 @@ export const notifyBudgetThreshold = onDocumentWritten(
     if (incomeApplies) {
       const realIncome = monthlyIncomeTotal(incomes, month, spendOptions);
       const budget = incomeReference(workspace.budgetIncome, realIncome);
-      // Kinds of every budget of the workspace (archived included): a monthly budget is only
-      // self-funded in months with assigned income.
-      const budgetsSnap = await db.collection("budgets").where("workspaceId", "==", workspaceId).get();
-      const kinds = new Map(budgetsSnap.docs.map((d) => [d.id, d.get("kind")]));
-      const kindOf = (budgetId: string) => {
-        const kind = kinds.get(budgetId);
-        return kind === "monthly" || kind === "event" ? kind : undefined;
-      };
-      const spent = monthlyExpenseTotal(transactions, month, spendOptions, selfFundedBudgetIds(incomes, month, { timeZone }, kindOf));
+      const spent = monthlyExpenseTotal(transactions, month, spendOptions,
+        selfFundedBudgetIds(fundingMovements, month, { timeZone }, kindOf, linkedBudgetOf));
       if (budget === null || spent === null) {
         console.warn(`Income alert for workspace ${workspaceId} skipped: no income to compare or manual rate missing.`);
       } else {

@@ -167,7 +167,7 @@ test('the planner counts card statements due this month instead of this month\'s
   ]
   const realMonthTotals = new Function(
     'computed', 'transactionsStore', 'goalsStore', 'userCurrency', 'expenseAmountForDate', 'cardBillingFor',
-    'resolveBudgetId', 'DEFAULT_MONTHLY_BUDGET_ID', 'selfFundedBudgetIds',
+    'resolveBudgetId', 'DEFAULT_MONTHLY_BUDGET_ID', 'selfFundedBudgetIds', 'linkedBudgetOfAccount',
     `${javascript}\nreturn realMonthTotals`
   )(
     (getter: () => unknown) => ({ get value() { return getter() } }),
@@ -181,7 +181,8 @@ test('the planner counts card statements due this month instead of this month\'s
     cardBillingFor,
     resolveBudgetId,
     DEFAULT_MONTHLY_BUDGET_ID,
-    selfFundedBudgetIds
+    selfFundedBudgetIds,
+    () => null
   ) as { value: { income: number; expense: number } }
 
   assert.deepEqual(realMonthTotals.value, { income: 425, expense: 65 })
@@ -281,7 +282,7 @@ test('budget cards show available funds and the cap with accessible progress bar
   assert.match(goalsView, /data-testid="budget-card-funds"/)
   assert.match(goalsView, /data-testid="budget-card-limit"/)
   assert.match(goalsView, /role="progressbar"[\s\S]{0,200}:aria-label="`Gastado el \$\{card\.fundsPercent\} % de los fondos`"/)
-  assert.match(goalsView, /Regístralo con este presupuesto y verás cuánto te queda disponible\./)
+  assert.match(goalsView, /transfiérela a una de sus cuentas ligadas, y verás cuánto te queda disponible\./)
   const helpers = goalsView.match(/const percentOf = [\s\S]*?\nconst progressTone = [^\n]+\n[^\n]+/)?.[0]
   assert.ok(helpers, 'Goals.vue must define percentOf and progressTone')
   const javascript = ts.transpileModule(helpers, {

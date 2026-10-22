@@ -396,3 +396,40 @@ test("a monthly budget is self-funded only in months with assigned income; an ev
   assert.deepEqual(funded([income(1, { budgetId: "gone" })]), []);
 });
 
+test("transfers move a budget's funds by the linked accounts they touch", () => {
+  const links: Record<string, string> = { "cash-casa": "casa", "cash-viaje": "viaje" };
+  const linkedBudgetOf = (accountId: string) => links[accountId] ?? null;
+  const transfer = (accountId: string, toAccountId: string, amount: number, extra: Record<string, unknown> = {}) => ({
+    type: "transfer", accountId, toAccountId, amount, currency: "COP", date: new Date("2026-10-12T17:00:00.000Z"), ...extra
+  });
+  const funding = [
+    transfer("bank", "cash-casa", 1_000),
+    transfer("cash-casa", "bank", 200),
+    transfer("cash-casa", "cash-viaje", 300),
+    transfer("bank", "cash-casa", 5_000, { date: new Date("2026-08-12T17:00:00.000Z") }),
+    income(50, { budgetId: "casa" })
+  ];
+  assert.equal(scopeFundsTotal(funding, { id: "casa", kind: "monthly" }, OCTOBER, COP_OPTIONS, linkedBudgetOf), 550);
+  assert.equal(scopeFundsTotal(funding, { id: "casa", kind: "event" }, OCTOBER, COP_OPTIONS, linkedBudgetOf), 5_550);
+  assert.equal(scopeFundsTotal(funding, { id: "viaje", kind: "event" }, OCTOBER, COP_OPTIONS, linkedBudgetOf), 300);
+  // Without links only assigned income counts, as before.
+  assert.equal(scopeFundsTotal(funding, { id: "casa", kind: "event" }, OCTOBER, COP_OPTIONS), 50);
+  const kindOf = () => "monthly" as const;
+  assert.deepEqual([...selfFundedBudgetIds([transfer("bank", "cash-viaje", 10)], OCTOBER, COP_OPTIONS, kindOf, linkedBudgetOf)], ["viaje"]);
+  assert.deepEqual([...selfFundedBudgetIds([transfer("cash-viaje", "bank", 10)], OCTOBER, COP_OPTIONS, kindOf, linkedBudgetOf)], []);
+
+  // A transfer write re-checks the budgets it touches.
+  const scope = (before?: Record<string, unknown>, after?: Record<string, unknown>) =>
+    incomeChangeAlertScope(before, after, OCTOBER, { timeZone: BOGOTA }, linkedBudgetOf);
+  assert.deepEqual(scope(undefined, transfer("cash-casa", "bank", 10)), { monthlyIncome: true, fundsBudgetIds: ["casa"] });
+  assert.deepEqual(scope(transfer("bank", "cash-casa", 10), undefined), { monthlyIncome: true, fundsBudgetIds: ["casa"] });
+  assert.deepEqual(scope(undefined, transfer("cash-casa", "cash-viaje", 10)), { monthlyIncome: true, fundsBudgetIds: ["casa", "viaje"] });
+  assert.equal(scope(undefined, transfer("bank", "savings", 10)), null);
+});
+
+
+test("changing a transfer's destination counts as a spend field change", () => {
+  const base = { type: "transfer", accountId: "bank", toAccountId: "cash-casa", amount: 10, date: new Date("2026-10-12T17:00:00.000Z") };
+  assert.equal(spendFieldsChanged(base, { ...base, toAccountId: "savings" }), true);
+  assert.equal(spendFieldsChanged(base, { ...base }), false);
+});

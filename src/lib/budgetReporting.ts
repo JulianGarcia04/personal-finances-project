@@ -1,6 +1,7 @@
 import {
   allBudgetsEstimatedMonthlyTotal,
   budgetFundsAllocation,
+  type LinkedBudgetLookup,
   eventBudgetCommittedAllocation,
   monthlyBudgetAllocation,
   resolveBudgetId,
@@ -86,6 +87,8 @@ export interface BudgetScopeReportInput {
   exchangeRates: Readonly<Record<string, number>>
   /** Card billing days by account; billed card installments count in their payment month. */
   cardBilling?: CardBillingLookup
+  /** Budget each account is linked to: transfers into or out of those accounts move funds. */
+  linkedBudgetOf?: LinkedBudgetLookup
 }
 
 export interface AllBudgetsEstimateInput {
@@ -251,7 +254,8 @@ export const reportBudgetScope = (input: BudgetScopeReportInput): BudgetScopeRep
     scope.kind,
     period.year,
     period.month,
-    (amount, currency) => convertOrZero(amount, currency, reportingCurrency, exchangeRates, fundsDiagnostics)
+    (amount, currency) => convertOrZero(amount, currency, reportingCurrency, exchangeRates, fundsDiagnostics),
+    input.linkedBudgetOf
   )
   const funds = fundsSummary.count === 0
     ? null
