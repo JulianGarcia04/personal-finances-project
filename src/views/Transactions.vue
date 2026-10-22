@@ -202,30 +202,6 @@
                   <span>{{ getCategory(tx.categoryId)?.name }}</span>
                 </span>
                 <span v-else class="text-text-muted text-xs">-</span>
-                <div v-if="canCarryBudget(tx.type)" class="mt-2 max-w-48">
-                  <label class="sr-only" :for="`budget-assignment-row-${tx.id}`">Presupuesto asignado</label>
-                  <select
-                    v-if="budgetSettingsReady"
-                    data-testid="budget-assignment-row"
-                    :id="`budget-assignment-row-${tx.id}`"
-                    :value="resolveBudgetId(tx.budgetId)"
-                    :disabled="isBudgetAssignmentPending(tx.id) || isBudgetLockedFor(tx)"
-                    :title="budgetLockTitle(tx)"
-                    :aria-describedby="budgetLockTitle(tx) ? `budget-lock-row-${tx.id}` : undefined"
-                    @change="handleBudgetAssignmentChange(tx, $event)"
-                    class="w-full px-2 py-1.5 rounded-lg bg-slate-900/50 border border-border text-[10px] text-text-primary focus:outline-none focus:border-accent-emerald disabled:opacity-50"
-                  >
-                    <option
-                      v-for="option in budgetOptionsForExpense(tx.budgetId, tx.accountId)"
-                      :key="option.id"
-                      :value="option.id"
-                      :disabled="option.archived"
-                    >
-                      {{ option.label }}{{ option.archived ? ' · Archivado' : '' }}
-                    </option>
-                  </select>
-                  <span v-if="budgetLockTitle(tx)" :id="`budget-lock-row-${tx.id}`" class="sr-only">{{ budgetLockTitle(tx) }}: este movimiento pertenece a ese presupuesto.</span>
-                </div>
               </td>
               <!-- Date -->
               <td class="py-4 px-3 text-text-secondary whitespace-nowrap">
@@ -402,30 +378,6 @@
             >
               <TrashIcon class="w-4 h-4" />
             </button>
-          </div>
-          <div v-if="canCarryBudget(tx.type)" class="w-full pt-1.5">
-            <label class="sr-only" :for="`budget-assignment-card-${tx.id}`">Presupuesto asignado</label>
-            <select
-              v-if="budgetSettingsReady"
-              data-testid="budget-assignment-card"
-              :id="`budget-assignment-card-${tx.id}`"
-              :value="resolveBudgetId(tx.budgetId)"
-              :disabled="isBudgetAssignmentPending(tx.id) || isBudgetLockedFor(tx)"
-              :title="budgetLockTitle(tx)"
-              :aria-describedby="budgetLockTitle(tx) ? `budget-lock-card-${tx.id}` : undefined"
-              @change="handleBudgetAssignmentChange(tx, $event)"
-              class="field text-base sm:text-xs disabled:opacity-50"
-            >
-              <option
-                v-for="option in budgetOptionsForExpense(tx.budgetId, tx.accountId)"
-                :key="option.id"
-                :value="option.id"
-                :disabled="option.archived"
-              >
-                {{ option.label }}{{ option.archived ? ' · Archivado' : '' }}
-              </option>
-            </select>
-            <span v-if="budgetLockTitle(tx)" :id="`budget-lock-card-${tx.id}`" class="sr-only">{{ budgetLockTitle(tx) }}: este movimiento pertenece a ese presupuesto.</span>
           </div>
         </div>
       </div>
@@ -1330,16 +1282,6 @@ const budgetOptionsForExpense = (currentBudgetId?: string | null, accountId = ''
   ].filter(option => allowed(option.id))
 }
 
-/** Locked when the movement already sits in its linked account's budget. */
-const isBudgetLockedFor = (transaction: any) => {
-  const linked = linkedBudgetForAccount(linkableBudgets.value, transaction.accountId)
-  return !!linked && linked.id === resolveBudgetId(transaction.budgetId)
-}
-const budgetLockTitle = (transaction: any) => {
-  const linked = linkedBudgetForAccount(linkableBudgets.value, transaction.accountId)
-  return linked ? `La cuenta está ligada a «${linked.name}»` : undefined
-}
-
 const isBudgetAssignmentPending = (transactionId: string) =>
   assigningBudgetIds.value.has(transactionId)
 
@@ -1360,15 +1302,6 @@ const assignBudgetToExpense = async (transaction: any, budgetId: string): Promis
   } finally {
     assigningBudgetIds.value.delete(transaction.id)
   }
-}
-
-const handleBudgetAssignmentChange = async (transaction: any, event: Event) => {
-  const select = event.target as HTMLSelectElement | null
-  if (!select) return
-
-  const previousBudgetId = resolveBudgetId(transaction.budgetId)
-  const saved = await assignBudgetToExpense(transaction, select.value)
-  if (!saved) select.value = previousBudgetId
 }
 
 const applyEditBudgetAssignment = async () => {

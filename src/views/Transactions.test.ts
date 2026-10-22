@@ -52,22 +52,16 @@ const assignmentOptions = (
   }
 )(currentBudgetId, accountId)
 
-test('renders reassignment only for existing expenses and income on desktop rows, mobile cards, and the edit modal', () => {
+test('reassigns a budget only from the edit modal, never inline on list rows or cards', () => {
   const markers = [...template.matchAll(/data-testid="budget-assignment-(row|card|edit)"/g)]
     .map(match => match[1])
     .sort()
-  assert.deepEqual(markers, ['card', 'edit', 'row'])
-  assert.match(template, /v-if="canCarryBudget\(tx\.type\)"[\s\S]{0,500}data-testid="budget-assignment-row"/)
-  assert.match(template, /v-if="canCarryBudget\(tx\.type\)"[\s\S]{0,500}data-testid="budget-assignment-card"/)
+  assert.deepEqual(markers, ['edit'])
+  assert.doesNotMatch(template, /handleBudgetAssignmentChange/)
   assert.equal(/v-if="canCarryBudget\(editingOriginalType\) && editTx\.type === editingOriginalType"[\s\S]{0,500}data-testid="budget-assignment-edit"/.test(template), true, 'edit budget selector must require a persisted expense or income with an unchanged draft type')
   assert.equal(/editingOriginalType\.value = tx\.type/.test(script), true, 'openEditModal must record the persisted transaction type')
-  assert.match(template, /data-testid="budget-assignment-row"[\s\S]{0,500}@change="handleBudgetAssignmentChange\(tx, \$event\)"/)
-  assert.match(template, /data-testid="budget-assignment-card"[\s\S]{0,500}@change="handleBudgetAssignmentChange\(tx, \$event\)"/)
   assert.match(template, /data-testid="budget-assignment-edit"[\s\S]{0,500}v-model="editBudgetId"/)
   assert.match(template, /data-testid="budget-assignment-apply"[\s\S]{0,200}@click="applyEditBudgetAssignment"/)
-  assert.equal(/<label class="sr-only">\s*Presupuesto asignado\s*<select/.test(template), false, 'inline budget selectors must not be clipped by sr-only labels')
-  assert.equal(/<label class="sr-only" :for="`budget-assignment-row-\$\{tx\.id\}`">Presupuesto asignado<\/label>\s*<select[\s\S]{0,160}:id="`budget-assignment-row-\$\{tx\.id\}`"/.test(template), true, 'row budget selector must have a separate associated label')
-  assert.equal(/<label class="sr-only" :for="`budget-assignment-card-\$\{tx\.id\}`">Presupuesto asignado<\/label>\s*<select[\s\S]{0,160}:id="`budget-assignment-card-\$\{tx\.id\}`"/.test(template), true, 'card budget selector must have a separate associated label')
 
   const addModalStart = template.indexOf(':open="showAddModal"')
   const editModalStart = template.indexOf('<!-- Edit Transaction Modal -->')
@@ -145,7 +139,6 @@ test('a linked account\'s movements only offer that account\'s budget', () => {
   assert.deepEqual(assignmentOptions(operatingBudgets, null, 'cash-casa').map(option => option.id), ['default-monthly', 'casa'])
   assert.deepEqual(assignmentOptions(operatingBudgets, 'casa', 'cash-casa').map(option => option.id), ['casa'])
   assert.deepEqual(assignmentOptions(operatingBudgets, null, 'bank').map(option => option.id), ['default-monthly', 'casa', 'viaje'])
-  assert.match(template, /:disabled="isBudgetAssignmentPending\(tx\.id\) \|\| isBudgetLockedFor\(tx\)"/)
   assert.match(template, /data-testid="budget-assignment-edit-locked"/)
 })
 
@@ -284,9 +277,6 @@ test('an edit decides its budget in the same write and tells the user beforehand
 })
 
 test('locked budget selectors expose the lock reason to assistive technology', () => {
-  assert.match(template, /:aria-describedby="budgetLockTitle\(tx\) \? `budget-lock-row-\$\{tx\.id\}` : undefined"/)
-  assert.match(template, /:id="`budget-lock-row-\$\{tx\.id\}`" class="sr-only"/)
-  assert.match(template, /:aria-describedby="budgetLockTitle\(tx\) \? `budget-lock-card-\$\{tx\.id\}` : undefined"/)
   assert.match(template, /:aria-describedby="newTxLinkedBudget \? 'new-tx-budget-lock' : undefined"/)
   assert.match(template, /id="new-tx-budget-lock"/)
   assert.match(template, /:aria-describedby="editingLinkedBudget \? 'edit-budget-lock' : undefined"/)
