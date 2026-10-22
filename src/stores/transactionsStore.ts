@@ -157,6 +157,8 @@ async function commitPocketMovement(options: {
   workspaceId: string
   userId: string
   next?: PocketMovementTransaction
+  // Budget decided by an edit, written in the same update (a value, or deleteField()).
+  budgetPatch?: { budgetId: unknown }
 }): Promise<{ id: string; data: any; deltas: Record<string, number> }> {
   const transactionRef = options.transactionId
     ? doc(db, 'transactions', options.transactionId)
@@ -269,10 +271,16 @@ async function commitPocketMovement(options: {
     }
     if (!options.next) throw new Error('Faltan los datos del movimiento.')
     if (options.kind === 'created') transaction.set(transactionRef, { ...options.next })
-    else transaction.update(transactionRef, { ...options.next })
+    else transaction.update(transactionRef, { ...options.next, ...(options.budgetPatch ?? {}) })
     return { id, data: options.next, deltas }
   })
 }
+
+// Firestore patch for an edit's budget decision, or undefined when the budget stays.
+const budgetPatchFor = (change: EditBudgetChange): { budgetId: unknown } | undefined =>
+  change.action === 'set' ? { budgetId: change.budgetId }
+    : change.action === 'clear' ? { budgetId: deleteField() }
+      : undefined
 
 // Applies an edit's budget decision to the local copy of a movement.
 const withBudgetChange = (transaction: Transaction, change: EditBudgetChange): Transaction => {
@@ -1474,16 +1482,10 @@ export const useTransactionsStore = defineStore('transactions', {
             currency: account.currency || 'USD',
             createdAt: oldTx.createdAt
           }
-          // Pocket writes cannot carry budgetId, so its change goes first as a budget-only write.
-          const storedBudgetId = oldTx.budgetId ?? null
-          const budgetOnly = budgetChange.action === 'set' ? budgetChange.budgetId
-            : budgetChange.action === 'clear' ? null
-              : storedBudgetId
-          if (budgetOnly !== storedBudgetId) {
-            await updateDoc(doc(db, 'transactions', transactionId), { budgetId: budgetOnly })
-          }
+          // The budget follows the edit in the same write as the pocket movement.
           const result = await commitPocketMovement({
-            kind: 'updated', transactionId, workspaceId, userId: user.uid, next
+            kind: 'updated', transactionId, workspaceId, userId: user.uid, next,
+            budgetPatch: budgetPatchFor(budgetChange)
           })
           const updatedTx = withBudgetChange({ ...oldTx, ...next, date: transactionDate }, budgetChange)
           publishPocketDeltas(accountsStore, result.deltas, workspaceId, user.uid)
@@ -1558,9 +1560,7 @@ export const useTransactionsStore = defineStore('transactions', {
           currency: account.currency || 'USD',
         }
         // The budget follows the edit in the same write (linked account, type rules).
-        const budgetField = budgetChange.action === 'set' ? { budgetId: budgetChange.budgetId }
-          : budgetChange.action === 'clear' ? { budgetId: deleteField() }
-            : {}
+        const budgetField = budgetPatchFor(budgetChange) ?? {}
 
         // 4. Actualizar en Firestore
         const docRef = doc(db, 'transactions', transactionId)

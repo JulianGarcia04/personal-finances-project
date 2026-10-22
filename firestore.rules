@@ -378,7 +378,7 @@ service cloud.firestore {
         beforeData.createdAt == afterData.createdAt &&
         afterData.diff(beforeData).affectedKeys().hasOnly([
           'accountId', 'amount', 'description', 'categoryId', 'date', 'type', 'toAccountId',
-          'receiptUrl', 'notes', 'installments', 'userId', 'currency', 'statementImportId'
+          'receiptUrl', 'notes', 'installments', 'userId', 'currency', 'statementImportId', 'budgetId'
         ]) &&
         validExistingPocketMovement(beforeData) &&
         (noDeltaChange ||
@@ -578,13 +578,10 @@ service cloud.firestore {
       return !('budgetId' in data) || data.budgetId == null;
     }
 
-    // Active budget the account is linked to, or null. Only an account that stores a link costs a
-    // budget lookup (pockets never do), and the post-state path dedupes with the reference check.
-    function linkedBudgetIdOfAccount(accountId, workspaceId) {
+    // Budget id an account stores as its link, or null (missing account or no link).
+    function storedAccountLink(accountId) {
       let account = get(accountPath(accountId));
-      let budgetId = account == null ? null : account.data.get('linkedBudgetId', null);
-      return budgetId is string && budgetId.matches('^[^/]+$') &&
-        isActiveBudgetOfWorkspaceAfter(budgetId, workspaceId) ? budgetId : null;
+      return account == null ? null : account.data.get('linkedBudgetId', null);
     }
 
     function isActiveBudgetOfWorkspaceAfter(budgetId, workspaceId) {
@@ -595,32 +592,49 @@ service cloud.firestore {
     }
 
     // An expense or income of an account linked to an active budget belongs to that budget (S2);
-    // a stored literal default or a missing reference counts as no budget.
+    // a stored literal default or a missing reference counts as no budget. The account read
+    // dedupes with the reference checks, and only a stored link costs a budget lookup (pockets
+    // never have one). Kept lean: the pocket update path runs close to the expression limit.
     function satisfiesAccountBudgetLink(data) {
       return !(data.get('type', null) in ['expense', 'income']) || !(data.get('accountId', null) is string) ||
-        linkedBudgetIdOfAccount(data.accountId, data.workspaceId) == null ||
-        (!hasNoTransactionBudget(data) && data.budgetId == linkedBudgetIdOfAccount(data.accountId, data.workspaceId));
+        isLinkSatisfied(data, storedAccountLink(data.accountId));
+    }
+
+    function isLinkSatisfied(data, link) {
+      return link == null || data.get('budgetId', null) == link ||
+        !(link is string && link.matches('^[^/]+$') && isActiveBudgetOfWorkspaceAfter(link, data.workspaceId));
     }
 
     // A budget change may accompany a financial edit only when the edit decides it: the movement
-    // takes its account's linked budget, it becomes a type without budget, or it switches between
-    // expense and income and leaves its budget.
+    // becomes a type without budget, switches between expense and income and leaves its budget,
+    // or takes its account's linked budget (isValidTransactionBudget then requires it active).
     function isBudgetChangeDecidedByEdit(before, after) {
-      return (hasNoTransactionBudget(after) && !(after.get('type', null) in ['expense', 'income'])) ||
-        (hasNoTransactionBudget(after) && after.get('type', null) in ['expense', 'income'] &&
-          before.get('type', null) in ['expense', 'income'] && after.type != before.type) ||
-        (after.get('type', null) in ['expense', 'income'] && after.get('accountId', null) is string &&
-          !hasNoTransactionBudget(after) &&
-          after.budgetId == linkedBudgetIdOfAccount(after.accountId, after.workspaceId));
+      return hasNoTransactionBudget(after)
+        ? !(after.get('type', null) in ['expense', 'income']) ||
+          (before.get('type', null) in ['expense', 'income'] && after.type != before.type)
+        : after.get('type', null) in ['expense', 'income'] && after.get('accountId', null) is string &&
+          after.budgetId == storedAccountLink(after.accountId);
     }
 
-    function isValidTransactionBudgetUpdate() {
-      let changed = request.resource.data.diff(resource.data).affectedKeys();
+    // budgetId may change next to other fields only as decided here (budget-only writes or
+    // isBudgetChangeDecidedByEdit), which also bounds the pocket path's 'budgetId' allowance.
+    function isValidTransactionBudgetUpdate(changed) {
       return !changed.hasAny(['workspaceId']) &&
         (!changed.hasAny(['budgetId']) || changed.hasOnly(['budgetId']) ||
           isBudgetChangeDecidedByEdit(resource.data, request.resource.data)) &&
         isValidTransactionBudget(request.resource.data, !changed.hasAny(['budgetId'])) &&
         (!changed.hasAny(['budgetId', 'accountId', 'type']) || satisfiesAccountBudgetLink(request.resource.data));
+    }
+
+    // workspaceId is immutable (isValidTransactionBudgetUpdate), so one membership check covers both
+    // states. The pocket path runs close to the 1000-expression limit, so it is tried before the
+    // ordinary-reference branch it can never satisfy (same outcome: the branches are alternatives).
+    function isValidTransactionUpdate(transactionId, changed) {
+      return isValidTransactionBudgetUpdate(changed) &&
+        (changed.hasOnly(['budgetId']) ||
+         validPocketMovementUpdate(transactionId, resource.data, request.resource.data) ||
+         (safeExistingTransactionReferencesNoPocket(resource.data) &&
+          safeExistingTransactionReferencesNoPocket(request.resource.data)));
     }
 
     match /transactions/{transactionId} {
@@ -632,12 +646,7 @@ service cloud.firestore {
          validPocketMovementCreate(transactionId, request.resource.data) ||
          validPocketOpeningTransaction(transactionId));
       allow update: if isWorkspaceMember(resource.data.workspaceId) &&
-        isWorkspaceMember(request.resource.data.workspaceId) &&
-        isValidTransactionBudgetUpdate() &&
-        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['budgetId']) ||
-         (safeExistingTransactionReferencesNoPocket(resource.data) &&
-          safeExistingTransactionReferencesNoPocket(request.resource.data)) ||
-         validPocketMovementUpdate(transactionId, resource.data, request.resource.data));
+        isValidTransactionUpdate(transactionId, request.resource.data.diff(resource.data).affectedKeys());
       allow delete: if isWorkspaceMember(resource.data.workspaceId) &&
         (safeExistingTransactionReferencesNoPocket(resource.data) ||
          validPocketMovementDelete(transactionId, resource.data));
