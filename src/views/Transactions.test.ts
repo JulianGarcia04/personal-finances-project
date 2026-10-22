@@ -242,7 +242,7 @@ test('the new-movement form can create a missing category inline and selects it'
 
 test('the new-movement form offers a budget for expenses and income, inherited from the linked account', () => {
   assert.match(template, /v-if="showNewTxBudget"[\s\S]{0,200}data-testid="new-tx-budget"/)
-  assert.match(template, /id="new-tx-budget"[\s\S]{0,120}v-model="newTx\.budgetId"[\s\S]{0,120}:disabled="!!newTxLinkedBudget"[\s\S]{0,80}@change="newTxBudgetTouched = true"/)
+  assert.match(template, /id="new-tx-budget"[\s\S]{0,120}v-model="newTx\.budgetId"[\s\S]{0,120}:disabled="!!newTxLinkedBudget"[\s\S]{0,200}@change="newTxBudgetTouched = true"/)
   assert.match(template, /Esta cuenta está ligada a «\{\{ newTxLinkedBudget\.name \}\}»: todos sus movimientos van a ese presupuesto\./)
   assert.match(template, /Los movimientos entran a este presupuesto cuando se lo asignas o cuando salen de una cuenta ligada\./)
   assert.match(script, /canCarryBudget\(newTx\.value\.type\)/)
@@ -275,4 +275,13 @@ test('changing a budgeted movement into a transfer or loan first takes it out of
   assert.equal(calls.length, 3)
   assert.match(script, /await releaseBudgetBeforeTypeChange\(\)\s+await transactionsStore\.updateTransaction\(editingTxId\.value/)
   assert.match(template, /data-testid="edit-budget-released"/)
+})
+
+test('locked budget selectors expose the lock reason to assistive technology', () => {
+  assert.match(template, /:aria-describedby="budgetLockTitle\(tx\) \? `budget-lock-row-\$\{tx\.id\}` : undefined"/)
+  assert.match(template, /:id="`budget-lock-row-\$\{tx\.id\}`" class="sr-only"/)
+  assert.match(template, /:aria-describedby="budgetLockTitle\(tx\) \? `budget-lock-card-\$\{tx\.id\}` : undefined"/)
+  assert.match(template, /:aria-describedby="newTxLinkedBudget \? 'new-tx-budget-lock' : undefined"/)
+  assert.match(template, /id="new-tx-budget-lock"/)
+  assert.match(template, /:aria-describedby="editingLinkedBudget \? 'edit-budget-lock' : undefined"/)
 })

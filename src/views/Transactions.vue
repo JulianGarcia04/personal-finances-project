@@ -211,6 +211,7 @@
                     :value="resolveBudgetId(tx.budgetId)"
                     :disabled="isBudgetAssignmentPending(tx.id) || isBudgetLockedFor(tx)"
                     :title="budgetLockTitle(tx)"
+                    :aria-describedby="budgetLockTitle(tx) ? `budget-lock-row-${tx.id}` : undefined"
                     @change="handleBudgetAssignmentChange(tx, $event)"
                     class="w-full px-2 py-1.5 rounded-lg bg-slate-900/50 border border-border text-[10px] text-text-primary focus:outline-none focus:border-accent-emerald disabled:opacity-50"
                   >
@@ -223,6 +224,7 @@
                       {{ option.label }}{{ option.archived ? ' · Archivado' : '' }}
                     </option>
                   </select>
+                  <span v-if="budgetLockTitle(tx)" :id="`budget-lock-row-${tx.id}`" class="sr-only">{{ budgetLockTitle(tx) }}: este movimiento pertenece a ese presupuesto.</span>
                 </div>
               </td>
               <!-- Date -->
@@ -410,6 +412,7 @@
               :value="resolveBudgetId(tx.budgetId)"
               :disabled="isBudgetAssignmentPending(tx.id) || isBudgetLockedFor(tx)"
               :title="budgetLockTitle(tx)"
+              :aria-describedby="budgetLockTitle(tx) ? `budget-lock-card-${tx.id}` : undefined"
               @change="handleBudgetAssignmentChange(tx, $event)"
               class="field text-base sm:text-xs disabled:opacity-50"
             >
@@ -422,6 +425,7 @@
                 {{ option.label }}{{ option.archived ? ' · Archivado' : '' }}
               </option>
             </select>
+            <span v-if="budgetLockTitle(tx)" :id="`budget-lock-card-${tx.id}`" class="sr-only">{{ budgetLockTitle(tx) }}: este movimiento pertenece a ese presupuesto.</span>
           </div>
         </div>
       </div>
@@ -572,6 +576,7 @@
               v-model="newTx.budgetId"
               class="field disabled:opacity-70"
               :disabled="!!newTxLinkedBudget"
+              :aria-describedby="newTxLinkedBudget ? 'new-tx-budget-lock' : undefined"
               @change="newTxBudgetTouched = true"
             >
               <option
@@ -583,14 +588,14 @@
                 {{ option.label }}
               </option>
             </select>
-            <p v-if="newTxLinkedBudget" class="flex items-start gap-1 text-[10px] text-accent-emerald">
+            <p v-if="newTxLinkedBudget" id="new-tx-budget-lock" class="flex items-start gap-1 text-[10px] text-accent-emerald">
               <LinkIcon class="w-3 h-3 mt-px shrink-0" />
               <span>Esta cuenta está ligada a «{{ newTxLinkedBudget.name }}»: todos sus movimientos van a ese presupuesto. Para usar otro, elige otra cuenta o desliga esta en Presupuestos.</span>
             </p>
-            <p v-else-if="newTx.type === 'income' && newTx.budgetId !== DEFAULT_MONTHLY_BUDGET_ID" class="text-[10px] text-text-muted">
+            <p v-else-if="newTx.type === 'income' && newTx.budgetId !== DEFAULT_MONTHLY_BUDGET_ID" class="text-[10px] text-text-secondary">
               Este ingreso financia solo este presupuesto y no se suma al ingreso del mes.
             </p>
-            <p v-else class="text-[10px] text-text-muted">
+            <p v-else class="text-[10px] text-text-secondary">
               Los movimientos entran a este presupuesto cuando se lo asignas o cuando salen de una cuenta ligada.
             </p>
           </div>
@@ -901,6 +906,7 @@
                 data-testid="budget-assignment-edit"
                 v-model="editBudgetId"
                 :disabled="isBudgetAssignmentPending(editingTxId) || !!editingLinkedBudget"
+                :aria-describedby="editingLinkedBudget ? 'edit-budget-lock' : undefined"
                 class="mt-1 field disabled:opacity-70"
               >
                 <option
@@ -913,7 +919,7 @@
                 </option>
               </select>
             </label>
-            <p v-if="editingLinkedBudget" class="flex items-start gap-1 text-[10px] text-accent-emerald" data-testid="budget-assignment-edit-locked">
+            <p v-if="editingLinkedBudget" id="edit-budget-lock" class="flex items-start gap-1 text-[10px] text-accent-emerald" data-testid="budget-assignment-edit-locked">
               <LinkIcon class="w-3 h-3 mt-px shrink-0" />
               <span>Este movimiento sale de una cuenta ligada a «{{ editingLinkedBudget.name }}», así que pertenece a ese presupuesto.</span>
             </p>

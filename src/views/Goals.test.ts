@@ -321,11 +321,14 @@ test('moving existing movements uses budget-only updates and keeps failures sele
     movingMovements: ref(false),
     moveError: ref(''),
     moveProgress: ref(0),
-    moveTotal: ref(0)
+    moveTotal: ref(0),
+    frozenMoveCandidates: ref<unknown>(null),
+    // tx-0 is income: it must move after every expense.
+    moveSheetCandidates: ref(Array.from({ length: 12 }, (_, index) => ({ id: `tx-${index}`, type: index === 0 ? 'income' : 'expense' })))
   }
   const apply = new Function(
     'moveSheetBudgetId', 'moveSelectedIds', 'movingMovements', 'moveError', 'moveProgress', 'moveTotal',
-    'transactionsStore', 'closeMoveSheet', 'MOVE_BATCH_SIZE',
+    'transactionsStore', 'closeMoveSheet', 'MOVE_BATCH_SIZE', 'frozenMoveCandidates', 'moveSheetCandidates',
     `${javascript}\nreturn applyMoveSelection`
   )(
     state.moveSheetBudgetId, state.moveSelectedIds, state.movingMovements, state.moveError, state.moveProgress, state.moveTotal,
@@ -336,12 +339,16 @@ test('moving existing movements uses budget-only updates and keeps failures sele
       }
     },
     () => { closed += 1 },
-    10
+    10,
+    state.frozenMoveCandidates,
+    state.moveSheetCandidates
   ) as () => Promise<void>
 
   await apply()
   assert.equal(calls.length, 12)
   assert.ok(calls.every(([, budgetId]) => budgetId === 'casa'))
+  assert.equal(calls.at(-1)?.[0], 'tx-0', 'income moves after every expense')
+  assert.equal(state.frozenMoveCandidates.value, null, 'the list unfreezes after moving')
   assert.deepEqual([...state.moveSelectedIds.value], ['tx-11'])
   assert.equal(state.moveError.value, 'Se movieron 11 de 12. Los que quedaron marcados no se pudieron mover; inténtalo de nuevo.')
   assert.equal(state.moveProgress.value, 12)
@@ -353,4 +360,11 @@ test('moving existing movements uses budget-only updates and keeps failures sele
   await apply()
   assert.deepEqual(calls, [['tx-1', 'casa']])
   assert.equal(closed, 1)
+})
+
+test('bridge and pocket accounts cannot be linked, and the contribution lock is announced', () => {
+  assert.match(goalsView, /v-for="acc in linkableAccounts"/)
+  assert.match(goalsView, /accountsStore\.accounts\.filter\(account => !account\.mirror && !isPocketRelatedAccount\(account\)\)/)
+  assert.match(goalsView, /:aria-describedby="contributeLinkedBudget \? 'contribute-budget-lock' : undefined"/)
+  assert.match(goalsView, /id="contribute-budget-lock"/)
 })

@@ -89,14 +89,15 @@ export interface BudgetMoveCandidate {
 
 /**
  * Default-budget movements an event budget can take over: any expense or income from a linked
- * account and any expense in a capped category, within the budget's dates (end day inclusive).
+ * account and, when the budget has dates, any expense in a capped category, within the budget's
+ * dates (end day inclusive). An undated budget never sweeps a category's whole history.
  */
 export const budgetMoveCandidates = <T extends BudgetMoveCandidate>(
   transactions: readonly T[],
   options: { linkedAccountIds: readonly string[]; categoryIds: readonly string[]; startDate?: Date | null; endDate?: Date | null }
 ): T[] => {
   const linked = new Set(options.linkedAccountIds)
-  const capped = new Set(options.categoryIds)
+  const capped = new Set(options.startDate || options.endDate ? options.categoryIds : [])
   const start = options.startDate?.getTime() ?? -Infinity
   const end = options.endDate
     ? new Date(options.endDate.getFullYear(), options.endDate.getMonth(), options.endDate.getDate() + 1).getTime()

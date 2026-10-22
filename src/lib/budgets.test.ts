@@ -304,4 +304,6 @@ test('existing default-budget movements from linked accounts or capped categorie
   }), ['linked-expense', 'linked-income', 'capped-expense', 'explicit-default', 'on-end-day'])
   assert.deepEqual(ids({ linkedAccountIds: [], categoryIds: [] }), [])
   assert.equal(ids({ linkedAccountIds: ['cash-casa'], categoryIds: [] }).length, 6)
+  // Without dates a capped category would sweep the whole history, so only linked accounts count.
+  assert.deepEqual(ids({ linkedAccountIds: [], categoryIds: ['furniture'] }), [])
 })
