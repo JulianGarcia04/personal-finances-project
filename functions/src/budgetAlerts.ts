@@ -48,6 +48,19 @@ export function resolveAlertBudgetId(budgetId: unknown): string {
   return typeof budgetId === "string" && budgetId ? budgetId : DEFAULT_MONTHLY_BUDGET_ID;
 }
 
+/**
+ * Budgets with at least one assigned income: their spending is paid by that income,
+ * so it does not count against the month's income.
+ */
+export function selfFundedBudgetIds(incomes: Iterable<Record<string, any>>): Set<string> {
+  const funded = new Set<string>();
+  for (const tx of incomes) {
+    const budgetId = resolveAlertBudgetId(tx.budgetId);
+    if (tx.type === "income" && budgetId !== DEFAULT_MONTHLY_BUDGET_ID) funded.add(budgetId);
+  }
+  return funded;
+}
+
 /** Manual source -> reporting rate (port of budgetReporting.ts lookupRate); null when missing/invalid. */
 function manualRate(currency: unknown, reportingCurrency: string, rates: Record<string, number>): number | null {
   if (currency === reportingCurrency) return 1;
@@ -186,15 +199,19 @@ export function countsTowardMonthlySpend(
   return expenseAmountForMonth(tx, month.year, month.month, options.timeZone, options.billingFor?.(tx.accountId) ?? null) > 0;
 }
 
-/** Month share of every expense, converted; null when a manual rate is missing. */
+/**
+ * Month share of every expense paid by the month's income, converted; null when a manual
+ * rate is missing. Expenses of self-funded budgets are skipped.
+ */
 export function monthlyExpenseTotal(
   transactions: Iterable<Record<string, any>>,
   month: YearMonth,
-  options: SpendOptions
+  options: SpendOptions,
+  selfFunded: ReadonlySet<string> = new Set()
 ): number | null {
   let total = 0;
   for (const tx of transactions) {
-    if (tx.type !== "expense") continue;
+    if (tx.type !== "expense" || selfFunded.has(resolveAlertBudgetId(tx.budgetId))) continue;
     const amount = expenseAmountForMonth(tx, month.year, month.month, options.timeZone, options.billingFor?.(tx.accountId) ?? null);
     if (amount === 0) continue;
     const rate = manualRate(tx.currency, options.reportingCurrency, options.exchangeRates);
@@ -204,7 +221,10 @@ export function monthlyExpenseTotal(
   return Math.round(total * 100) / 100;
 }
 
-/** Income registered in the local month, converted; null when a manual rate is missing. */
+/**
+ * Income registered in the local month, converted; null when a manual rate is missing.
+ * Income assigned to another budget funds only that budget, so it is not monthly income.
+ */
 export function monthlyIncomeTotal(
   transactions: Iterable<Record<string, any>>,
   month: YearMonth,
@@ -212,7 +232,7 @@ export function monthlyIncomeTotal(
 ): number | null {
   let total = 0;
   for (const tx of transactions) {
-    if (tx.type !== "income") continue;
+    if (tx.type !== "income" || resolveAlertBudgetId(tx.budgetId) !== DEFAULT_MONTHLY_BUDGET_ID) continue;
     const date = storedDateValue(tx.date, options.timeZone);
     if (Number.isNaN(date.getTime())) continue; // malformed date: skip, like expenseAmountForMonth
     const local = zonedYearMonth(date, options.timeZone);

@@ -56,6 +56,7 @@ import {
   incomeReference,
   monthlyExpenseTotal,
   monthlyIncomeTotal,
+  selfFundedBudgetIds,
   evaluateBudgetThresholds,
   monthKey,
   resolveAlertBudgetId,
@@ -417,9 +418,10 @@ export const notifyBudgetThreshold = onDocumentWritten(
       }
     }
     if (incomeApplies) {
-      const realIncome = monthlyIncomeTotal(incomeSnap.docs.map((d) => d.data()), month, spendOptions);
+      const incomes = incomeSnap.docs.map((d) => d.data());
+      const realIncome = monthlyIncomeTotal(incomes, month, spendOptions);
       const budget = incomeReference(workspace.budgetIncome, realIncome);
-      const spent = monthlyExpenseTotal(transactions, month, spendOptions);
+      const spent = monthlyExpenseTotal(transactions, month, spendOptions, selfFundedBudgetIds(incomes));
       if (budget === null || spent === null) {
         console.warn(`Income alert for workspace ${workspaceId} skipped: no income to compare or manual rate missing.`);
       } else {

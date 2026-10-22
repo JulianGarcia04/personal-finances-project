@@ -9,7 +9,8 @@ import {
   canCarryBudget,
   linkedAccountConflicts,
   monthlyBudgetAllocation,
-  resolveBudgetId
+  resolveBudgetId,
+  selfFundedBudgetIds
 } from './budgets.ts'
 import { createCardBillingLookup } from './installments.ts'
 
@@ -239,4 +240,14 @@ test('a movement saved under the default budget stores no explicit reference', (
   assert.equal(budgetIdToPersist('income', 'casa'), 'casa')
   assert.equal(budgetIdToPersist('transfer', 'casa'), null)
   assert.equal(budgetIdToPersist('expense', ''), null)
+})
+
+test('a budget is self-funded once any income is assigned to it', () => {
+  const funded = selfFundedBudgetIds([
+    { type: 'income', budgetId: 'ventas-casa' },
+    { type: 'income', budgetId: DEFAULT_MONTHLY_BUDGET_ID },
+    { type: 'income' },
+    { type: 'expense', budgetId: 'hogar' }
+  ])
+  assert.deepEqual([...funded], ['ventas-casa'])
 })

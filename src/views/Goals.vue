@@ -292,9 +292,68 @@
                 </button>
               </div>
             </div>
-            <p class="text-sm font-semibold text-text-primary tabular-nums">
-              Límite total: {{ entry.budget.totalLimit === undefined ? 'Sin límite total' : formatCurrency(entry.budget.totalLimit, entry.budget.capCurrency) }}
-            </p>
+            <div v-for="card in [budgetCards.get(entry.budget.id)]" :key="entry.budget.id" class="space-y-3" data-testid="budget-card-progress">
+              <p v-if="!card || card.spent === null" role="status" class="text-[11px] text-accent-amber">
+                Falta una tasa de cambio manual para calcular el gasto de este presupuesto.
+              </p>
+              <template v-else>
+                <div v-if="card.funds !== null" class="space-y-1.5" data-testid="budget-card-funds">
+                  <div class="flex items-baseline justify-between gap-2">
+                    <span class="text-xs text-text-secondary">Disponible</span>
+                    <span
+                      v-if="card.available !== null"
+                      class="font-display font-bold text-lg tabular-nums truncate"
+                      :class="card.available < 0 ? 'text-accent-rose' : 'text-accent-emerald'"
+                      :title="formatCurrency(card.available, card.currency)"
+                    >
+                      {{ formatCurrency(card.available, card.currency) }}
+                    </span>
+                    <span v-else class="text-[11px] text-accent-amber">Falta una tasa de cambio</span>
+                  </div>
+                  <div
+                    v-if="card.fundsPercent !== null"
+                    class="h-2 rounded-full bg-slate-900 overflow-hidden"
+                    role="progressbar"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    :aria-valuenow="Math.min(card.fundsPercent, 100)"
+                    :aria-label="`Gastado el ${card.fundsPercent} % de los fondos`"
+                  >
+                    <div class="h-full rounded-full transition-all" :class="progressTone(card.fundsPercent)" :style="{ width: `${Math.min(card.fundsPercent, 100)}%` }"></div>
+                  </div>
+                  <p v-if="card.fundsAmount !== null" class="text-[10px] text-text-muted tabular-nums">
+                    Gastado {{ formatCurrency(card.spent, card.currency) }} de {{ formatCurrency(card.fundsAmount, card.currency) }} en fondos{{ card.fundsPercent !== null ? ` · ${card.fundsPercent} %` : '' }}
+                  </p>
+                </div>
+
+                <div v-if="card.limitAmount !== null" class="space-y-1.5" data-testid="budget-card-limit">
+                  <div class="flex items-baseline justify-between gap-2 text-xs">
+                    <span class="text-text-secondary">Límite total</span>
+                    <span class="font-semibold text-text-primary tabular-nums">{{ formatCurrency(card.spent, card.currency) }} / {{ formatCurrency(card.limitAmount, card.currency) }}</span>
+                  </div>
+                  <div
+                    class="h-1.5 rounded-full bg-slate-900 overflow-hidden"
+                    role="progressbar"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    :aria-valuenow="Math.min(card.limitPercent, 100)"
+                    :aria-label="`Gastado el ${card.limitPercent} % del límite total`"
+                  >
+                    <div class="h-full rounded-full transition-all" :class="progressTone(card.limitPercent)" :style="{ width: `${Math.min(card.limitPercent, 100)}%` }"></div>
+                  </div>
+                </div>
+                <p v-else-if="entry.budget.totalLimit !== undefined" class="text-[11px] text-text-muted tabular-nums">
+                  Límite total: {{ formatCurrency(entry.budget.totalLimit, entry.budget.capCurrency) }} · falta una tasa de cambio para compararlo
+                </p>
+
+                <p v-if="card.funds === null" class="text-sm font-semibold text-text-primary tabular-nums">
+                  Gastado: {{ formatCurrency(card.spent, card.currency) }}{{ entry.budget.totalLimit === undefined ? ' · Sin límite total' : '' }}
+                </p>
+                <p v-if="card.funds === null" class="text-[10px] text-text-muted">
+                  ¿Esta plata viene de un ingreso propio? Regístralo con este presupuesto y verás cuánto te queda disponible.
+                </p>
+              </template>
+            </div>
           </div>
           <div v-if="budgetCategoryCapEntries(entry).length" class="flex flex-wrap gap-2">
             <span v-for="cap in budgetCategoryCapEntries(entry)" :key="cap.categoryId" class="px-2.5 py-1 rounded-lg bg-slate-950/60 border border-white/5 text-[10px] text-text-secondary tabular-nums">
@@ -781,7 +840,7 @@ import BaseSheet from '@/components/ui/BaseSheet.vue'
 import CategoryPicker from '@/components/CategoryPicker.vue'
 import { suggestCategoriesBySpending, visibleBaselineCategories } from '@/lib/categoryPicker'
 import { getCategoryIconComponent } from '@/lib/categoryIcons'
-import { DEFAULT_MONTHLY_BUDGET_ID, budgetIdForAccount, linkedAccountConflicts } from '@/lib/budgets'
+import { DEFAULT_MONTHLY_BUDGET_ID, budgetIdForAccount, linkedAccountConflicts, resolveBudgetId, selfFundedBudgetIds } from '@/lib/budgets'
 import { reportBudgetScope } from '@/lib/budgetReporting'
 import type { BudgetWorkspaceBudgetSnapshot } from '@/lib/budgetWorkspaceAdapter'
 import { createCardBillingLookup, expenseAmountForDate } from '@/lib/installments'
@@ -890,6 +949,44 @@ const expenseCategories = computed(() =>
 const activeOperatingBudgets = computed(() =>
   goalsStore.operatingBudgets.filter(entry => !entry.budget.archived)
 )
+// Card view of each active budget: spending vs its funds (assigned income) and vs its total cap.
+const budgetCards = computed(() => {
+  const now = new Date()
+  return new Map(activeOperatingBudgets.value.map(entry => {
+    const report = reportBudgetScope({
+      scope: {
+        id: entry.budget.id,
+        kind: entry.budget.kind,
+        capCurrency: entry.budget.capCurrency,
+        totalLimit: entry.budget.totalLimit
+      },
+      categoryCaps: entry.categoryCaps,
+      transactions: transactionsStore.transactions,
+      period: { year: now.getFullYear(), month: now.getMonth() },
+      reportingCurrency: userCurrency.value,
+      exchangeRates: goalsStore.exchangeRates,
+      cardBilling: cardBillingFor.value
+    })
+    const spending = entry.budget.kind === 'event' ? report.eventCommittedPrincipal : report.monthlyAllocation
+    const spent = spending?.amount ?? null
+    const fundsAmount = report.funds?.amount ?? null
+    const limitAmount = report.totalComparison?.limitAmount ?? null
+    return [entry.budget.id, {
+      currency: report.reportingCurrency,
+      spent,
+      funds: report.funds,
+      fundsAmount,
+      available: report.available,
+      fundsPercent: spent !== null && fundsAmount !== null ? percentOf(spent, fundsAmount) : null,
+      limitAmount,
+      limitPercent: spent !== null && limitAmount !== null ? percentOf(spent, limitAmount) : 0
+    }] as const
+  }))
+})
+const percentOf = (part: number, whole: number): number =>
+  whole > 0 ? Math.round((part / whole) * 100) : part > 0 ? 100 : 0
+const progressTone = (percent: number): string =>
+  percent >= 100 ? 'bg-accent-rose' : percent >= 80 ? 'bg-accent-amber' : 'bg-accent-emerald'
 const archivedOperatingBudgets = computed(() =>
   goalsStore.operatingBudgets.filter(entry => entry.budget.archived)
 )
@@ -926,11 +1023,16 @@ const baselineBudgetReport = computed(() => {
 const realMonthTotals = computed(() => {
   const now = new Date()
   let income = 0, expense = 0
+  const selfFunded = selfFundedBudgetIds(transactionsStore.transactions)
   transactionsStore.transactions.forEach(t => {
     if (t.type === 'income') {
+      // Income assigned to another budget funds only that budget, so it is not monthly income.
+      if (resolveBudgetId(t.budgetId) !== DEFAULT_MONTHLY_BUDGET_ID) return
       if (t.date.getMonth() !== now.getMonth() || t.date.getFullYear() !== now.getFullYear()) return
       income += goalsStore.convertToPrimary(Math.abs(t.amount), t.currency, userCurrency.value)
     } else if (t.type === 'expense') {
+      // Spending of a budget with its own income is paid by that income, not by the month's.
+      if (selfFunded.has(resolveBudgetId(t.budgetId))) return
       const amount = expenseAmountForDate(t, now, cardBillingFor.value(t.accountId))
       expense += goalsStore.convertToPrimary(amount, t.currency, userCurrency.value)
     }

@@ -46,6 +46,21 @@ export const linkedAccountConflicts = (
   return conflicts
 }
 
+/**
+ * Budgets with at least one assigned income: their spending is paid by that income,
+ * so it does not count against the month's income.
+ */
+export const selfFundedBudgetIds = (
+  transactions: Iterable<{ type: string; budgetId?: string | null }>
+): Set<string> => {
+  const funded = new Set<string>()
+  for (const t of transactions) {
+    const budgetId = resolveBudgetId(t.budgetId)
+    if (t.type === 'income' && budgetId !== DEFAULT_MONTHLY_BUDGET_ID) funded.add(budgetId)
+  }
+  return funded
+}
+
 /** The default budget is the absence of a reference, so it is stored as null. */
 export const budgetIdToPersist = (type: string, budgetId?: string | null): string | null =>
   canCarryBudget(type) && budgetId && budgetId !== DEFAULT_MONTHLY_BUDGET_ID ? budgetId : null
@@ -122,6 +137,37 @@ export const eventBudgetCommittedAllocation = (
   }
 
   return summary
+}
+
+/**
+ * Funds of a budget: income explicitly assigned to it. Event budgets add every such income;
+ * monthly budgets only the income dated in the given calendar month. The default budget
+ * has no funds, because unassigned income is the monthly income.
+ */
+export const budgetFundsAllocation = (
+  transactions: readonly BudgetExpenseTransaction[],
+  budgetId: string,
+  kind: 'monthly' | 'event',
+  year: number,
+  month: number,
+  convert?: BudgetCurrencyConverter
+): { total: number; count: number } => {
+  let total = 0
+  let count = 0
+  if (budgetId === DEFAULT_MONTHLY_BUDGET_ID) return { total, count }
+
+  for (const transaction of transactions) {
+    if (transaction.type !== 'income' || transaction.budgetId !== budgetId) continue
+    if (kind === 'monthly') {
+      const date = transaction.date instanceof Date ? transaction.date : new Date(transaction.date)
+      if (Number.isNaN(date.getTime()) || date.getFullYear() !== year || date.getMonth() !== month) continue
+    }
+    const amount = Math.abs(transaction.amount)
+    total += convert ? convert(amount, transaction.currency) : amount
+    count += 1
+  }
+
+  return { total, count }
 }
 
 export const allBudgetsEstimatedMonthlyTotal = (

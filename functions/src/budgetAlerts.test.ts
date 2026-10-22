@@ -12,6 +12,7 @@ import {
   monthlyExpenseTotal,
   monthlyIncomeTotal,
   scopeTotalSpend,
+  selfFundedBudgetIds,
   TOTAL_ALERT_SUBJECT,
   evaluateBudgetThresholds,
   monthKey,
@@ -289,6 +290,16 @@ test("monthly income counts only income registered in the local month, converted
   assert.equal(monthlyIncomeTotal(txs, OCTOBER, COP_OPTIONS), null);
 });
 
+test("monthly income excludes income assigned to another budget", () => {
+  const txs = [
+    income(1_000),
+    income(200, { budgetId: null }),
+    income(300, { budgetId: "default-monthly" }),
+    income(5_000_000, { budgetId: "ventas-casa" })
+  ];
+  assert.equal(monthlyIncomeTotal(txs, OCTOBER, COP_OPTIONS), 1_500);
+});
+
 test("monthly expense total counts every budget's month share", () => {
   const txs = [
     expense(100),
@@ -299,6 +310,18 @@ test("monthly expense total counts every budget's month share", () => {
   ];
   assert.equal(monthlyExpenseTotal(txs, OCTOBER, COP_OPTIONS), 220);
   assert.equal(monthlyExpenseTotal([...txs, expense(1, { currency: "USD" })], OCTOBER, COP_OPTIONS), null);
+});
+
+test("monthly expense total skips budgets funded by their own income", () => {
+  const txs = [
+    expense(100),
+    expense(50, { budgetId: "hogar", categoryId: undefined }),
+    expense(700, { budgetId: "ventas-casa" })
+  ];
+  const funded = selfFundedBudgetIds([income(5_000, { budgetId: "ventas-casa" }), income(1_000), income(10, { budgetId: "default-monthly" })]);
+  assert.deepEqual([...funded], ["ventas-casa"]);
+  assert.equal(monthlyExpenseTotal(txs, OCTOBER, COP_OPTIONS, funded), 150);
+  assert.equal(monthlyExpenseTotal(txs, OCTOBER, COP_OPTIONS), 850);
 });
 
 test("income reference is the larger of planner and real income, falling back to either", () => {

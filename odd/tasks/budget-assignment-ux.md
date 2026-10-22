@@ -1,22 +1,23 @@
 # Budget assignment UX
 Objective: let users assign expenses and income to budgets at creation, link accounts to budgets, fund event budgets with income (model B), and move existing movements into a budget.
-Branch: `feat/budget-assignment-ux` · Delivery: ask-on-risk (forecast ~900–1,200 lines → chained PRs) · Runner: `node --test` (`pnpm test`), functions `pnpm test:functions`, rules `pnpm test:budgets:security`.
+Branch: `feat/budget-assignment-ux` · Delivery: single-pr with size exception (user, 2026-10-22: "todo en un solo PR con size-exception") · Runner: `node --test` (`pnpm test`), functions `pnpm test:functions`, rules `pnpm test:budgets:security`.
 
 ## Specs
 - S1: Creating an expense or income (`Transactions.vue` and the goal contribution in `Goals.vue`) shows a "Presupuesto" selector with active budgets plus the default monthly budget; saved through `addTransaction({ …, budgetId })`. User: "pienso que tambien los ingresos deberian estar ligado a un presupuesto".
-- S2: A budget has `linkedAccountIds`. A transaction from a linked account inherits that budget at save time (selector prefilled, user may change it). An account belongs to at most one active budget; linking it to another warns. User: "si yo relaciono la cuenta con el presupuesto, entonces las transacciones que yo haga esa cuenta no se liga a ese presupuesto también (por herencia) ?"
+- S2: A budget has `linkedAccountIds`. A transaction from a linked account belongs to that budget: the selector is locked to it at creation (Transactions and goal contribution), and reassignment only offers that budget. User (2026-10-22): "si una cuenta ya está ligada a un presupuesto, yo no podria registrar un gasto o ingreso a otro presupuesto y que se guarde esa cuenta". An account belongs to at most one active budget; linking it to another warns. User: "si yo relaciono la cuenta con el presupuesto, entonces las transacciones que yo haga esa cuenta no se liga a ese presupuesto también (por herencia) ?"
 - S3: Creating or editing an event budget offers "Mover N movimientos existentes": default-monthly expenses and income from linked accounts or capped categories, within the date range when set; preview with per-row uncheck; applied as budgetId-only updates in batches.
 - S4: Microcopy in the budget form and card: "Los movimientos entran a este presupuesto cuando se lo asignas o cuando salen de una cuenta ligada".
-- S5: Income with a budget is excluded from the monthly income in Budgets ("Ingreso real del mes") and from the alert income reference (`functions/src/budgetAlerts.ts`).
+- S5: Income with a budget is excluded from the monthly income in Budgets ("Ingreso real del mes") and from the alert income reference (`functions/src/budgetAlerts.ts`). Expenses of a self-funded budget (one with any assigned income) are excluded from the month's spending in both places; budgets without assigned income still count. User (2026-10-22): "sí, aplícalo así".
 - S6 (model B): funds = linked income; available = funds − linked expenses; the cap stays optional and independent; budgets without linked income look as today; the card shows funds and cap bars when both exist. User: "sí, vamos con la B".
 - S7: Funds alert at 80 % and 100 % by email and push, reusing the existing threshold ledger.
 - S8: Every new surface must have good UI and UX, consistent with the existing glass/mobile design (BaseSheet, `.field`, `.tap`). User: "A su vez recuerda que uno de los requisitos es que tenga buen UI y buen UX"
 - Out of scope: the AI agent (`chatWithAgent`) does not apply links.
 
 ## Tasks
-- [x] T1 · S1, S2 · inline · rules: income `budgetId`, budget `linkedAccountIds` (list ≤ 20) + rules tests · Risk item 2 · commit: see L4
-- [x] T2 · S1, S2, S4, S8 · inline · assigner allows income; selector at creation; link UI + inheritance; microcopy · commit: see L5 (UI proof pending, L5)
-- [ ] T3 · S5, S6, S8 · inline · reporting funds/available, monthly income exclusion (client + alert), card bars · Risk item 3
+- [x] T1 · S1, S2 · inline · rules: income `budgetId`, budget `linkedAccountIds` (list ≤ 20) + rules tests · Risk item 2 · commit c5aba63
+- [x] T2 · S1, S2, S4, S8 · inline · assigner allows income; selector at creation; link UI + inheritance; microcopy · commit 3eb09d2 (UI proof pending, L5)
+- [ ] T3 · S5, S6, S8 · inline · reporting funds/available, monthly income and self-funded spending exclusion (client + alert), card bars · Risk item 3 · done, uncommitted (L7)
+- [ ] T6 · S2, S8 · inline · lock linked-account movements to their budget (create, contribution, reassignment) · Risk: none · done, uncommitted (L7)
 - [ ] T4 · S7 · inline · funds alert in `budgetAlerts.ts` · Risk item 5
 - [ ] T5 · S3, S8 · inline · preview + bulk move
 
@@ -26,3 +27,6 @@ Branch: `feat/budget-assignment-ux` · Delivery: ask-on-risk (forecast ~900–1,
 - L3: User approved plan "sí, planifícalo con 1, 2 y 3", objections (income budgets, inheritance), link stored on budget ("dejemoslo así"), model B, and "sí, arranca la implementación".
 - L4: Tasks reordered so the rules change (risk item 2) lands alone first. `pnpm test:budgets:security` 78/78 pass. RED not observed first (rules edited before tests).
 - L5: T1 independent verifier PASS (no blockers); advisories applied: decoder drops malformed `linkedAccountIds`, rules regression tests for loans/archived income/archived links (`pnpm test:budgets:security` 79/79). T2: RED observed for helpers and assigner, then GREEN; `pnpm test` 253/253, `vue-tsc` clean. Moving an account link updates the previous budget after saving the new one. Mounted UI proof pending (end of feature).
+- L6: T3 implemented, uncommitted: `reportBudgetScope` returns `funds`/`available` (RED→GREEN, 16/16); Goals and `monthlyIncomeTotal` exclude budget-assigned income (server test written after the change, no RED); budget cards show funds and cap bars. `pnpm test` 259/259, functions 172/172, `vue-tsc` clean. Open product decision: `monthlyExpenseTotal` and Goals `realMonthExpense` still count every budget's expenses against monthly income, so event spending paid from savings still triggers the workspace total alert. Running branch count ~420 lines > 400: chain strategy to ask before next commit.
+- L7 (2026-10-22): User approved excluding self-funded budget spending: "sí, aplícalo así". Objection logged verbatim in S2: linked-account movements must not go to another budget. `selfFundedBudgetIds` (client + server) RED→GREEN; `monthlyExpenseTotal` takes the funded set; Goals `realMonthTotals` skips funded spending. Lock: `linkedBudgetForAccount`/`canAssignBudget` RED→GREEN; selectors disabled with copy "Esta cuenta está ligada a «X»: todos sus movimientos van a ese presupuesto."; movements of a linked account still in another budget can only move to the linked one. Lock is client-side only (rules do not read budgets). `pnpm test` 262/262, functions 173/173, `vue-tsc` clean. Running branch ~950 lines (c5aba63+3eb09d2+uncommitted 546): chain strategy pending before next commit.
+- L8 (2026-10-22): "todo en un solo PR con size-exception". Delivery set to single-pr; T3 and T6 committed separately (T3 names Risk item 3).

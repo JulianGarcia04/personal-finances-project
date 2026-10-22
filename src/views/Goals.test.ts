@@ -5,6 +5,7 @@ import { test } from 'node:test'
 import ts from 'typescript'
 import { toDateValue, toLocalDateKey } from '../lib/dates.ts'
 import { createCardBillingLookup, expenseAmountForDate } from '../lib/installments.ts'
+import { DEFAULT_MONTHLY_BUDGET_ID, resolveBudgetId, selfFundedBudgetIds } from '../lib/budgets.ts'
 
 const goalsPath = fileURLToPath(new URL('./Goals.vue', import.meta.url))
 const goalsView = readFileSync(goalsPath, 'utf8')
@@ -152,10 +153,18 @@ test('the planner counts card statements due this month instead of this month\'s
     { type: 'expense', amount: -50, date: previousMonth, accountId: 'visa', currency: 'COP' },
     { type: 'expense', amount: -1000, date: thisMonth, accountId: 'visa', currency: 'COP' },
     { type: 'expense', amount: -10, date: thisMonth, accountId: 'cash', currency: 'COP' },
-    { type: 'income', amount: 400, date: thisMonth, accountId: 'cash', currency: 'COP' }
+    { type: 'income', amount: 400, date: thisMonth, accountId: 'cash', currency: 'COP' },
+    { type: 'income', amount: 25, date: thisMonth, accountId: 'cash', currency: 'COP', budgetId: 'default-monthly' },
+    // Income assigned to another budget funds only that budget.
+    { type: 'income', amount: 5000, date: thisMonth, accountId: 'cash', currency: 'COP', budgetId: 'ventas-casa' },
+    // Spending of a self-funded budget is paid by its own income, not by the month's income.
+    { type: 'expense', amount: -700, date: thisMonth, accountId: 'cash', currency: 'COP', budgetId: 'ventas-casa' },
+    // A budget without assigned income is paid by the month's income.
+    { type: 'expense', amount: -5, date: thisMonth, accountId: 'cash', currency: 'COP', budgetId: 'hogar' }
   ]
   const realMonthTotals = new Function(
     'computed', 'transactionsStore', 'goalsStore', 'userCurrency', 'expenseAmountForDate', 'cardBillingFor',
+    'resolveBudgetId', 'DEFAULT_MONTHLY_BUDGET_ID', 'selfFundedBudgetIds',
     `${javascript}\nreturn realMonthTotals`
   )(
     (getter: () => unknown) => ({ get value() { return getter() } }),
@@ -163,10 +172,13 @@ test('the planner counts card statements due this month instead of this month\'s
     { convertToPrimary: (amount: number) => amount },
     { value: 'COP' },
     expenseAmountForDate,
-    cardBillingFor
+    cardBillingFor,
+    resolveBudgetId,
+    DEFAULT_MONTHLY_BUDGET_ID,
+    selfFundedBudgetIds
   ) as { value: { income: number; expense: number } }
 
-  assert.deepEqual(realMonthTotals.value, { income: 400, expense: 60 })
+  assert.deepEqual(realMonthTotals.value, { income: 425, expense: 65 })
 })
 
 test('currency fields are selectors prefilled from the configured currency', () => {
@@ -252,4 +264,19 @@ test('saving a budget that takes a linked account removes the link from its prev
   assert.deepEqual(created, [{ kind: 'event', name: 'Casa Toro', capCurrency: 'COP', linkedAccountIds: ['cash-casa', 'cash-new'] }])
   assert.deepEqual(updates, [['ventas', { linkedAccountIds: ['cash-ventas'] }]])
   assert.equal(ctx.showBudgetModal.value, false)
+})
+
+test('budget cards show available funds and the cap with accessible progress bars', () => {
+  assert.match(goalsView, /data-testid="budget-card-funds"/)
+  assert.match(goalsView, /data-testid="budget-card-limit"/)
+  assert.match(goalsView, /role="progressbar"[\s\S]{0,200}:aria-label="`Gastado el \$\{card\.fundsPercent\} % de los fondos`"/)
+  assert.match(goalsView, /Regístralo con este presupuesto y verás cuánto te queda disponible\./)
+  const helpers = goalsView.match(/const percentOf = [\s\S]*?\nconst progressTone = [^\n]+\n[^\n]+/)?.[0]
+  assert.ok(helpers, 'Goals.vue must define percentOf and progressTone')
+  const javascript = ts.transpileModule(helpers, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext }
+  }).outputText
+  const { percentOf, progressTone } = new Function(`${javascript}\nreturn { percentOf, progressTone }`)()
+  assert.deepEqual([percentOf(80, 100), percentOf(150, 100), percentOf(5, 0), percentOf(0, 0)], [80, 150, 100, 0])
+  assert.deepEqual([progressTone(79), progressTone(80), progressTone(100)], ['bg-accent-emerald', 'bg-accent-amber', 'bg-accent-rose'])
 })
