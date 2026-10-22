@@ -610,7 +610,7 @@
                 <LinkIcon class="w-3.5 h-3.5 text-accent-emerald" />
                 Cuentas ligadas (opcional)
               </h4>
-              <p class="text-[10px] text-text-muted mt-1">Los movimientos nuevos de estas cuentas se asignan a este presupuesto automáticamente. Siempre puedes cambiarlo al registrarlos.</p>
+              <p class="text-[10px] text-text-muted mt-1">Todos los movimientos de estas cuentas pertenecen a este presupuesto: al registrarlos se asignan aquí y no se pueden pasar a otro.</p>
             </div>
             <p v-if="accountsStore.accounts.length === 0" class="text-[11px] text-text-muted">Todavía no tienes cuentas.</p>
             <div v-else class="flex flex-wrap gap-2">
@@ -837,10 +837,10 @@
     </BaseSheet>
 
     <!-- Move existing default-budget movements into an event budget -->
-    <BaseSheet :open="!!moveSheetBudget" :title="`Mover movimientos a «${moveSheetBudget?.name ?? ''}»`" :close-on-backdrop="!movingMovements" @close="closeMoveSheet">
+    <BaseSheet :open="!!moveSheetBudget" :title="'Mover movimientos'" :close-on-backdrop="!movingMovements" @close="closeMoveSheet">
       <div class="space-y-3" data-testid="budget-move-sheet">
         <p class="text-[11px] text-text-muted">
-          Estos movimientos están en el presupuesto mensual predeterminado y salen de una cuenta ligada o son de una categoría con tope<span v-if="moveSheetBudget?.startDate || moveSheetBudget?.endDate">, dentro del periodo del presupuesto</span>. Desmarca los que no quieras mover.
+          Elige qué movimientos pasan a <strong class="text-text-primary">«{{ moveSheetBudget?.name }}»</strong>. Están en el presupuesto mensual predeterminado y salen de una cuenta ligada o son de una categoría con tope<span v-if="moveSheetBudget?.startDate || moveSheetBudget?.endDate">, dentro del periodo del presupuesto</span>. Desmarca los que no quieras mover.
         </p>
         <div class="flex items-center justify-between text-[11px]">
           <span class="text-text-secondary tabular-nums">{{ moveSelectedIds.size }} de {{ moveSheetCandidates.length }} seleccionados</span>

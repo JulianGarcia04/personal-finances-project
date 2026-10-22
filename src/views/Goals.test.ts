@@ -289,6 +289,9 @@ test('budget cards show available funds and the cap with accessible progress bar
 test('an event budget offers to move its existing movements, with a per-row preview', () => {
   assert.match(goalsView, /v-if="budgetMoveCandidatesById\.get\(entry\.budget\.id\)\?\.length"[\s\S]{0,200}data-testid="budget-move-open"/)
   assert.match(goalsView, /data-testid="budget-move-sheet"/)
+  assert.match(goalsView, /Elige qué movimientos pasan a <strong[^>]*>«\{\{ moveSheetBudget\?\.name \}\}»<\/strong>/)
+  // Linked accounts are locked to their budget, so the form must not promise otherwise.
+  assert.doesNotMatch(goalsView, /Siempre puedes cambiarlo al registrarlos/)
   assert.match(goalsView, /:checked="moveSelectedIds\.has\(tx\.id\)"[\s\S]{0,120}@change="toggleMoveCandidate\(tx\.id\)"/)
   assert.match(goalsView, /data-testid="budget-move-apply" :disabled="movingMovements \|\| moveSelectedIds\.size === 0"/)
   // Saving a budget offers the move right away.

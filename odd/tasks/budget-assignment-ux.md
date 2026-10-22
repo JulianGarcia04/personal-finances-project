@@ -19,7 +19,7 @@ Branch: `feat/budget-assignment-ux` · Delivery: single-pr with size exception (
 - [x] T3 · S5, S6, S8 · inline · reporting funds/available, monthly income and self-funded spending exclusion (client + alert), card bars · Risk item 3 · commit 0e3e5eb
 - [x] T6 · S2, S8 · inline · lock linked-account movements to their budget (create, contribution, reassignment) · Risk: none · commit a098754
 - [x] T4 · S7 · inline · funds alert in `budgetAlerts.ts` (email + push, ledger slot `__funds`) · Risk item 3 (shared trigger) · commit 2c01e61
-- [x] T5 · S3, S8 · inline · preview + bulk move (card button + sheet offered after saving) · Risk: none · commit in L11
+- [x] T5 · S3, S8 · inline · preview + bulk move (card button + sheet offered after saving) · Risk: none · commit eca8817
 
 ## Log
 - L1 (2026-10-21): "Hay un problema, yo tengo plata ahorrada pero en mis presupuestos se tienen en cuenta toda mi plata ahorrada. Entonces quiero analicemos esa parte"
@@ -33,3 +33,4 @@ Branch: `feat/budget-assignment-ux` · Delivery: single-pr with size exception (
 - L9: T3 committed as 0e3e5eb (260/260, functions 173/173, vue-tsc clean in the T3-only state). T6 committed next on top.
 - L10: T4 `scopeFundsTotal` + funds email/push copy RED→GREEN (TS2305/TS2353 first); trigger adds a `funds` subject when an additional budget with funds > 0 gets spending. functions 176/176, `pnpm test` 262/262. AGENTS.md and README updated. Next: T5 bulk move, then mounted UI proof and one independent verifier at feature end.
 - L11: T5 `budgetMoveCandidates` RED→GREEN; Goals card button "Mover N movimientos existentes" and sheet with per-row checkboxes, select all, progress and partial-failure retry; offered after saving a budget. Moves reuse `assignExpenseBudget` 10 at a time. Candidates skip mirror-account expenses and accounts linked to another budget. `pnpm test` 265/265, `vue-tsc` clean. Next: mounted UI proof (S8) and one independent verifier for the feature.
+- L12: Mounted UI proof (emulators, desktop 1224px and mobile 390px): created linked event budget "Ventas Casa" → move sheet listed 2 default movements of the linked account; after moving, card shows Disponible 700.000 COP, 30 % of 1.000.000 funds; "Gasto real del mes" 0 COP and "Ahorro real del mes" 5.000.000 (salary only); new-movement selector locked with hint; row selectors of linked movements disabled with title; no horizontal scroll at 390px. Fixed from proof: link section copy promised "Siempre puedes cambiarlo" (contradicted S2 lock) and the move sheet title truncated the budget name.
