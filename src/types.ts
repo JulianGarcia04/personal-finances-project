@@ -56,6 +56,9 @@ export interface Account {
   openingAllocationId?: string | null;
   lastPocketMovementId?: string;
   lastPocketMovementType?: 'created' | 'updated' | 'deleted';
+  // Active budget this account is linked to, mirrored from the budget's linkedAccountIds so the
+  // rules can require its expenses and income to carry that budget. Never set on pockets or bridges.
+  linkedBudgetId?: string;
   createdAt: Date;
 }
 

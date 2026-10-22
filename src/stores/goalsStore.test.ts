@@ -20,6 +20,7 @@ import {
 } from '../lib/budgets.ts'
 import { OperatingBudgetPatchSchema } from '../schemas.ts'
 import type { OperatingBudget, OperatingBudgetDraft, OperatingBudgetPatch } from '../types.ts'
+import type { BudgetLinkOptions } from '../lib/budgetPersistence.ts'
 
 const context: BudgetWorkspaceContext = { userId: 'user-a', workspaceId: 'workspace-a' }
 
@@ -68,7 +69,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
   let budgets = [...(options.budgets ?? [])]
   const caps = Object.fromEntries(Object.entries(options.caps ?? {}).map(([id, entries]) => [id, { ...entries }]))
   const writes: Array<{ workspaceId: string; patch: Record<string, unknown> }> = []
-  const persistenceCalls: Array<{ operation: string; workspaceId: string; id?: string }> = []
+  const persistenceCalls: Array<{ operation: string; workspaceId: string; id?: string; releases?: unknown }> = []
   const capCalls: Array<{ operation: string; workspaceId: string; budgetId: string; categoryId: string }> = []
   const transactionPatches: CategoryBudgetCurrencyPatch[] = []
   const history = [{
@@ -77,9 +78,18 @@ const makeHarness = (options: HarnessOptions = {}) => {
   }]
   let nextId = 0
 
+  const applyReleases = (releases: BudgetLinkOptions['releases']) => {
+    for (const release of releases ?? []) {
+      budgets = budgets.map(candidate => candidate.id === release.budgetId
+        ? { ...candidate, linkedAccountIds: [...release.linkedAccountIds] }
+        : candidate)
+    }
+  }
+
   const createBudgetPersistence = (workspaceId: string) => ({
-    create: async (draft: OperatingBudgetDraft) => {
-      persistenceCalls.push({ operation: 'create', workspaceId })
+    create: async (draft: OperatingBudgetDraft, linkOptions: BudgetLinkOptions = {}) => {
+      persistenceCalls.push({ operation: 'create', workspaceId, ...(linkOptions.releases ? { releases: linkOptions.releases } : {}) })
+      applyReleases(linkOptions.releases)
       const now = new Date('2025-02-01T00:00:00.000Z')
       const budget = makeBudget(`created-${++nextId}`, { ...draft, workspaceId, createdAt: now, updatedAt: now })
       budgets = [...budgets, budget]
@@ -91,9 +101,10 @@ const makeHarness = (options: HarnessOptions = {}) => {
       if (!budget) throw new Error('Budget not found')
       return budget
     },
-    patch: async (budgetId: string, patch: Record<string, unknown>) => {
+    patch: async (budgetId: string, patch: Record<string, unknown>, linkOptions: BudgetLinkOptions = {}) => {
       const validatedPatch = OperatingBudgetPatchSchema.parse(patch)
-      persistenceCalls.push({ operation: 'patch', workspaceId, id: budgetId })
+      persistenceCalls.push({ operation: 'patch', workspaceId, id: budgetId, ...(linkOptions.releases ? { releases: linkOptions.releases } : {}) })
+      applyReleases(linkOptions.releases)
       const budget = budgets.find(candidate => candidate.id === budgetId && candidate.workspaceId === workspaceId)
       if (!budget) throw new Error('Budget not found')
       const updated = { ...budget, ...validatedPatch, updatedAt: new Date('2025-02-02T00:00:00.000Z') } as OperatingBudget
@@ -500,4 +511,27 @@ test('workspace changes during an older settings read cannot overwrite the newer
   assert.deepEqual(harness.state.categoryBudgetCurrency, { status: 'confirmed', code: 'USD' })
   assert.equal(harness.state.budgetIncome, 12000)
   assert.equal(harness.state.budgetSettingsContextKey, JSON.stringify(['user-b', 'workspace-b']))
+})
+
+test('moving a linked account releases it from its previous budget in the same save', async () => {
+  const previous = makeBudget('event-a', { kind: 'event', linkedAccountIds: ['cash-1', 'cash-2'] })
+  const harness = makeHarness({ budgets: [previous] })
+  await harness.actions.loadBudgetSettings()
+  const created = await harness.actions.createOperatingBudget(
+    { kind: 'event', name: 'Fiesta', capCurrency: 'USD', linkedAccountIds: ['cash-1'] },
+    { releases: [{ budgetId: 'event-a', linkedAccountIds: ['cash-2'] }] }
+  )
+  assert.deepEqual(harness.persistenceCalls.at(-1), {
+    operation: 'create', workspaceId: context.workspaceId, releases: [{ budgetId: 'event-a', linkedAccountIds: ['cash-2'] }]
+  })
+  const linksOf = (budgetId: string) => harness.state.operatingBudgets.find(entry => entry.budget.id === budgetId)?.budget.linkedAccountIds
+  assert.deepEqual(linksOf('event-a'), ['cash-2'])
+  assert.deepEqual(linksOf(created.id), ['cash-1'])
+
+  await harness.actions.updateOperatingBudget(created.id, { linkedAccountIds: ['cash-1', 'cash-2'] }, {
+    releases: [{ budgetId: 'event-a', linkedAccountIds: [] }]
+  })
+  assert.equal(harness.persistenceCalls.filter(call => call.operation === 'patch').length, 1)
+  assert.equal(linksOf('event-a'), undefined)
+  assert.deepEqual(linksOf(created.id), ['cash-1', 'cash-2'])
 })

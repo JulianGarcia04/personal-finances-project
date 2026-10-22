@@ -38,6 +38,40 @@ export const canAssignBudget = (budgets: readonly LinkableBudget[], accountId: s
   return !linked || linked.id === budgetId
 }
 
+export type EditBudgetChange =
+  | { action: 'keep' }
+  | { action: 'clear' }
+  | { action: 'set'; budgetId: string }
+
+/**
+ * Budget an edited movement carries, decided in the same write as the financial edit (the rules
+ * accept a budget change next to other fields only in these cases): transfers and loans carry
+ * none, a movement of a linked account takes that account's budget, and switching between
+ * expense and income leaves the old budget.
+ */
+export const budgetChangeForEdit = (edit: {
+  fromType: string
+  toType: string
+  linkedBudgetId: string | null
+}): EditBudgetChange => {
+  if (!canCarryBudget(edit.toType)) return { action: 'clear' }
+  if (edit.linkedBudgetId) return { action: 'set', budgetId: edit.linkedBudgetId }
+  if (canCarryBudget(edit.fromType) && edit.fromType !== edit.toType) return { action: 'clear' }
+  return { action: 'keep' }
+}
+
+/** Accounts that join and leave a budget when its links change; order alone is no change. */
+export const linkedAccountsChange = (
+  before: readonly string[] | undefined,
+  after: readonly string[]
+): { changed: boolean; added: string[]; removed: string[] } => {
+  const previous = new Set(before ?? [])
+  const next = new Set(after)
+  const added = [...next].filter(id => !previous.has(id))
+  const removed = [...previous].filter(id => !next.has(id))
+  return { changed: added.length > 0 || removed.length > 0, added, removed }
+}
+
 export interface LinkedAccountConflict {
   accountId: string
   budgetId: string

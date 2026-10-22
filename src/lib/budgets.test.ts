@@ -7,10 +7,12 @@ import {
   budgetIdForAccount,
   budgetFundsAllocation,
   budgetIdToPersist,
+  budgetChangeForEdit,
   budgetMoveCandidates,
   canAssignBudget,
   canCarryBudget,
   linkedAccountConflicts,
+  linkedAccountsChange,
   linkedBudgetForAccount,
   monthlyBudgetAllocation,
   resolveBudgetId,
@@ -350,3 +352,27 @@ test('a transfer into a linked account makes its budget self-funded in that peri
   assert.deepEqual([...selfFundedBudgetIds(out, { year: 2026, month: 9, kindOf, linkedBudgetOf })], [])
 })
 
+
+test('an edit decides the budget in the same write: linked account first, then type rules', () => {
+  // Transfers and loans never carry a budget, even from a linked account.
+  for (const toType of ['transfer', 'loan', 'loan_payment']) {
+    assert.deepEqual(budgetChangeForEdit({ fromType: 'expense', toType, linkedBudgetId: 'casa' }), { action: 'clear' })
+  }
+  // A movement of a linked account belongs to that budget, whatever its type was.
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'transfer', toType: 'expense', linkedBudgetId: 'casa' }), { action: 'set', budgetId: 'casa' })
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'income', toType: 'expense', linkedBudgetId: 'casa' }), { action: 'set', budgetId: 'casa' })
+  // Switching between expense and income leaves the budget (R3).
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'income', toType: 'expense', linkedBudgetId: null }), { action: 'clear' })
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'expense', toType: 'income', linkedBudgetId: null }), { action: 'clear' })
+  // Otherwise the stored budget stays.
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'expense', toType: 'expense', linkedBudgetId: null }), { action: 'keep' })
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'transfer', toType: 'income', linkedBudgetId: null }), { action: 'keep' })
+})
+
+test('a link change lists the accounts that join and leave a budget, ignoring order', () => {
+  assert.deepEqual(linkedAccountsChange(['a', 'b'], ['b', 'c']), { changed: true, added: ['c'], removed: ['a'] })
+  assert.deepEqual(linkedAccountsChange(undefined, ['a']), { changed: true, added: ['a'], removed: [] })
+  assert.deepEqual(linkedAccountsChange(['a', 'b'], ['b', 'a']), { changed: false, added: [], removed: [] })
+  assert.deepEqual(linkedAccountsChange(['a'], []), { changed: true, added: [], removed: ['a'] })
+  assert.deepEqual(linkedAccountsChange(undefined, []), { changed: false, added: [], removed: [] })
+})

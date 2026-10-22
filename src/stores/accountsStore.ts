@@ -168,6 +168,10 @@ export const useAccountsStore = defineStore('accounts', {
           if (!parentSnap.exists()) throw new Error('La cuenta principal no existe.')
 
           const parentData = parentSnap.data() as Account
+          // Pocket movements cannot carry a budget, so a linked account cannot get pockets.
+          if (parentData.linkedBudgetId) {
+            throw new Error('Esta cuenta está ligada a un presupuesto: quítala del presupuesto antes de crearle bolsillos.')
+          }
           const registeredChildIds = parentData.childAccountIds === undefined ? [] : parentData.childAccountIds
           if (!Array.isArray(registeredChildIds) || registeredChildIds.some(id => typeof id !== 'string')) {
             throw new Error('El registro de bolsillos de la cuenta principal no es válido.')
@@ -342,6 +346,9 @@ export const useAccountsStore = defineStore('accounts', {
           const accountSnap = await transaction.get(accountRef)
           if (!accountSnap.exists()) throw new Error('La cuenta no existe')
 
+          if (mirror !== null && accountSnap.data().linkedBudgetId) {
+            throw new Error('Esta cuenta está ligada a un presupuesto: quítala del presupuesto antes de convertirla en cuenta puente.')
+          }
           if (mirror === null && Number(accountSnap.data().balance) !== 0) {
             throw new Error('No puedes quitar el espejo mientras la cuenta tenga saldo distinto de cero. Liquida la deuda antes de quitarlo.')
           }

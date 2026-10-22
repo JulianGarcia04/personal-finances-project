@@ -832,9 +832,14 @@
           <p v-if="isEditingOpeningAllocation" class="text-[11px] text-text-muted">
             La asignación inicial conserva sus cuentas y tipo; puedes editar su monto, fecha y descripción.
           </p>
-          <p v-if="editReleasedBudgetName" class="flex items-start gap-1.5 rounded-lg border border-accent-amber/20 bg-accent-amber/10 px-3 py-2 text-[11px] text-accent-amber" data-testid="edit-budget-released">
+          <p v-if="editBudgetNoticeState && editBudgetNoticeState.kind !== 'linked'" role="status" class="flex items-start gap-1.5 rounded-lg border border-accent-amber/20 bg-accent-amber/10 px-3 py-2 text-[11px] text-accent-amber" data-testid="edit-budget-released">
             <LinkIcon class="w-3.5 h-3.5 mt-px shrink-0" />
-            <span>Las transferencias y los préstamos no pertenecen a un presupuesto: al guardar, este movimiento saldrá de «{{ editReleasedBudgetName }}».</span>
+            <span v-if="editBudgetNoticeState.kind === 'released'">Las transferencias y los préstamos no pertenecen a un presupuesto: al guardar, este movimiento saldrá de «{{ editBudgetNoticeState.budgetName }}».</span>
+            <span v-else>Al cambiar entre gasto e ingreso, este movimiento saldrá de «{{ editBudgetNoticeState.budgetName }}» y quedará en el presupuesto mensual.</span>
+          </p>
+          <p v-else-if="editBudgetNoticeState" role="status" class="flex items-start gap-1.5 rounded-lg border border-accent-emerald/20 bg-accent-emerald/10 px-3 py-2 text-[11px] text-accent-emerald" data-testid="edit-budget-linked">
+            <LinkIcon class="w-3.5 h-3.5 mt-px shrink-0" />
+            <span>Al guardar, este movimiento pasará a «{{ editBudgetNoticeState.budgetName }}» porque la cuenta está ligada a ese presupuesto.</span>
           </p>
 
           <!-- Account select -->
@@ -1079,7 +1084,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useGoalsStore } from '@/stores/goalsStore'
-import { DEFAULT_MONTHLY_BUDGET_ID, canAssignBudget, canCarryBudget, linkedBudgetForAccount, resolveBudgetId } from '@/lib/budgets'
+import { DEFAULT_MONTHLY_BUDGET_ID, budgetChangeForEdit, canAssignBudget, canCarryBudget, linkedBudgetForAccount, resolveBudgetId } from '@/lib/budgets'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useAuthStore } from '@/stores/authStore'
 import type { Category, Transaction, TransactionType } from '@/types'
@@ -1662,21 +1667,26 @@ const closeEditModal = () => {
   clearEditReceipt()
 }
 
-// Transfers and loans never carry a budget, and the rules reject a type change that keeps one.
-const editReleasesBudget = () => canCarryBudget(editingOriginalType.value)
-  && editingOriginalBudgetId.value !== DEFAULT_MONTHLY_BUDGET_ID
-  && !canCarryBudget(editTx.value.type)
-const editReleasedBudgetName = computed(() => editReleasesBudget()
-  ? linkableBudgets.value.find(budget => budget.id === editingOriginalBudgetId.value)?.name ?? 'su presupuesto'
-  : '')
-// A budget-only write first, so the financial edit that follows carries no budget.
-// Checks the stored value: older writes may hold the literal default id, which the rules also reject.
-const releaseBudgetBeforeTypeChange = async () => {
-  if (!canCarryBudget(editingOriginalType.value)
-    || editingTransaction.value?.budgetId == null
-    || canCarryBudget(editTx.value.type)) return
-  await transactionsStore.assignExpenseBudget(editingTxId.value, null)
+// Active budget the edited account is linked to: saving moves the movement into it.
+const editLinkedBudget = computed(() => linkedBudgetForAccount(linkableBudgets.value, editTx.value.accountId))
+// What saving does to the movement's budget (decided in the same write as the edit): transfers and
+// loans leave it, an expense/income switch leaves it, a linked account takes the movement.
+const editBudgetNotice = () => {
+  const change = budgetChangeForEdit({
+    fromType: editingOriginalType.value,
+    toType: editTx.value.type,
+    linkedBudgetId: editLinkedBudget.value?.id ?? null
+  })
+  const nameOf = (budgetId: string) => linkableBudgets.value.find(budget => budget.id === budgetId)?.name ?? 'su presupuesto'
+  if (change.action === 'set') {
+    return change.budgetId === editingOriginalBudgetId.value ? null : { kind: 'linked' as const, budgetName: nameOf(change.budgetId) }
+  }
+  if (change.action === 'clear' && editingOriginalBudgetId.value !== DEFAULT_MONTHLY_BUDGET_ID) {
+    return { kind: canCarryBudget(editTx.value.type) ? 'switched' as const : 'released' as const, budgetName: nameOf(editingOriginalBudgetId.value) }
+  }
+  return null
 }
+const editBudgetNoticeState = computed(editBudgetNotice)
 
 const saveEditedTransaction = async () => {
   const parsedAmount = Number(editTx.value.amount || 0)
@@ -1711,7 +1721,6 @@ const saveEditedTransaction = async () => {
 
   loading.value = true
   try {
-    await releaseBudgetBeforeTypeChange()
     await transactionsStore.updateTransaction(editingTxId.value, {
       accountId: editTx.value.accountId,
       amount: finalAmount,
@@ -1723,7 +1732,8 @@ const saveEditedTransaction = async () => {
       receiptUrl: editUploadedReceiptUrl.value || null,
       notes: editTx.value.notes || null,
       installments,
-      userId: editTx.value.userId || undefined
+      userId: editTx.value.userId || undefined,
+      linkedBudgetId: editLinkedBudget.value?.id ?? null
     })
     closeEditModal()
   } catch (err: any) {

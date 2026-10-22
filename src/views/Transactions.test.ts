@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import ts from 'typescript'
-import { DEFAULT_MONTHLY_BUDGET_ID, canAssignBudget, canCarryBudget, resolveBudgetId } from '../lib/budgets.ts'
+import { DEFAULT_MONTHLY_BUDGET_ID, budgetChangeForEdit, canAssignBudget, canCarryBudget, resolveBudgetId } from '../lib/budgets.ts'
 import { toDateValue, toLocalDateKey } from '../lib/dates.ts'
 
 const componentSource = readFileSync(new URL('./Transactions.vue', import.meta.url), 'utf8')
@@ -251,30 +251,36 @@ test('the new-movement form offers a budget for expenses and income, inherited f
   assert.match(script, /newTxBudgetTouched\.value = false/)
 })
 
-test('changing a budgeted movement into a transfer or loan first takes it out of its budget', async () => {
-  const calls: Array<[string, string | null]> = []
-  const release = (originalType: string, storedBudgetId: string | null, draftType: string) =>
-    evaluateComponentFunction<() => Promise<void>>('releaseBudgetBeforeTypeChange', {
-      transactionsStore: { assignExpenseBudget: async (id: string, budgetId: string | null) => { calls.push([id, budgetId]) } },
-      editingTxId: { value: 'tx-1' },
+test('an edit decides its budget in the same write and tells the user beforehand', () => {
+  const budgets = [
+    { id: 'casa', name: 'Casa', archived: false, linkedAccountIds: ['cash-casa'] },
+    { id: 'viaje', name: 'Viaje', archived: false }
+  ]
+  const notice = (originalType: string, originalBudgetId: string, draftType: string, accountId: string) =>
+    evaluateComponentFunction<() => { kind: string; budgetName: string } | null>('editBudgetNotice', {
       editingOriginalType: { value: originalType },
-      editingTransaction: { value: { budgetId: storedBudgetId } },
-      editTx: { value: { type: draftType } },
+      editingOriginalBudgetId: { value: originalBudgetId },
+      editTx: { value: { type: draftType, accountId } },
+      editLinkedBudget: { value: budgets.find(budget => budget.linkedAccountIds?.includes(accountId)) ?? null },
+      linkableBudgets: { value: budgets },
       DEFAULT_MONTHLY_BUDGET_ID,
+      budgetChangeForEdit,
       canCarryBudget
-    })
+    })()
 
-  await release('income', 'casa', 'transfer')()
-  await release('expense', 'casa', 'loan')()
-  assert.deepEqual(calls, [['tx-1', null], ['tx-1', null]])
-  // A stored literal default id is rejected on a transfer too, so it is released as well.
-  await release('income', DEFAULT_MONTHLY_BUDGET_ID, 'transfer')()
-  assert.equal(calls.length, 3)
-  await release('income', 'casa', 'expense')()
-  await release('income', null, 'transfer')()
-  assert.equal(calls.length, 3)
-  assert.match(script, /await releaseBudgetBeforeTypeChange\(\)\s+await transactionsStore\.updateTransaction\(editingTxId\.value/)
+  assert.deepEqual(notice('income', 'viaje', 'transfer', 'bank'), { kind: 'released', budgetName: 'Viaje' })
+  assert.deepEqual(notice('expense', 'viaje', 'income', 'bank'), { kind: 'switched', budgetName: 'Viaje' })
+  assert.deepEqual(notice('expense', DEFAULT_MONTHLY_BUDGET_ID, 'expense', 'cash-casa'), { kind: 'linked', budgetName: 'Casa' })
+  assert.deepEqual(notice('expense', 'viaje', 'income', 'cash-casa'), { kind: 'linked', budgetName: 'Casa' })
+  assert.equal(notice('expense', 'casa', 'expense', 'cash-casa'), null)
+  assert.equal(notice('expense', 'viaje', 'expense', 'bank'), null)
+  assert.equal(notice('expense', DEFAULT_MONTHLY_BUDGET_ID, 'transfer', 'cash-casa'), null)
+
+  // One write: no budget-only release before the financial edit; the store receives the link.
+  assert.doesNotMatch(script, /releaseBudgetBeforeTypeChange/)
+  assert.match(script, /await transactionsStore\.updateTransaction\(editingTxId\.value, \{[\s\S]{0,700}linkedBudgetId: editLinkedBudget\.value\?\.id \?\? null/)
   assert.match(template, /data-testid="edit-budget-released"/)
+  assert.match(template, /data-testid="edit-budget-linked"[\s\S]{0,300}Al guardar, este movimiento pasará a «\{\{ editBudgetNoticeState\.budgetName \}\}» porque la cuenta está ligada a ese presupuesto\./)
 })
 
 test('locked budget selectors expose the lock reason to assistive technology', () => {

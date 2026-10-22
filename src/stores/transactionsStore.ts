@@ -15,7 +15,7 @@ import {
 import { createCardBillingLookup, expenseAmountForDate, getInstallmentCount } from '@/lib/installments'
 import { parseDateOnly, toDateValue } from '@/lib/dates'
 import { createExpenseBudgetAssigner, selectBudgetExpenses } from '@/lib/transactionClassification'
-import { budgetIdToPersist } from '@/lib/budgets'
+import { budgetChangeForEdit, budgetIdToPersist, type EditBudgetChange } from '@/lib/budgets'
 import { 
   collection, 
   query, 
@@ -30,6 +30,7 @@ import {
   writeBatch,
   runTransaction,
   increment,
+  deleteField,
   Timestamp
 } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
@@ -271,6 +272,13 @@ async function commitPocketMovement(options: {
     else transaction.update(transactionRef, { ...options.next })
     return { id, data: options.next, deltas }
   })
+}
+
+// Applies an edit's budget decision to the local copy of a movement.
+const withBudgetChange = (transaction: Transaction, change: EditBudgetChange): Transaction => {
+  if (change.action === 'keep') return transaction
+  const { budgetId: _previous, ...rest } = transaction
+  return change.action === 'set' ? { ...rest, budgetId: change.budgetId } : rest
 }
 
 const normalizeTransactionAmount = (amount: number, type: TransactionType): number => {
@@ -1234,6 +1242,7 @@ export const useTransactionsStore = defineStore('transactions', {
       const createdAt = new Date()
       let finalBalance: number | null = null
       let usePocketCallable = movementAccountIsPocketRelated(account)
+      let linkedBudgetId: string | null = null
 
       const assertCurrentContext = () => {
         if (!importContextIsCurrent(initiatingUserId, initiatingWorkspaceId)) {
@@ -1254,6 +1263,16 @@ export const useTransactionsStore = defineStore('transactions', {
                 throw new Error('La cuenta cambió de workspace o moneda durante la importación.')
               }
               if (movementAccountIsPocketRelated(storedAccount)) throw new ImportMustUsePocketCallable()
+              // Rows of a linked account belong to its active budget (the rules require it).
+              linkedBudgetId = null
+              if (typeof storedAccount.linkedBudgetId === 'string' && storedAccount.linkedBudgetId) {
+                const budgetSnapshot = await transaction.get(doc(db, 'budgets', storedAccount.linkedBudgetId))
+                const budget = budgetSnapshot.exists() ? budgetSnapshot.data() : null
+                if (budget && budget.workspaceId === initiatingWorkspaceId && budget.archived === false) {
+                  linkedBudgetId = budgetSnapshot.id
+                }
+              }
+              const budgetField = linkedBudgetId ? { budgetId: linkedBudgetId } : {}
               const currentBalance = Number(storedAccount.balance)
               const balanceAfter = currentBalance + totalAmountChange
               if (!Number.isFinite(currentBalance) || !Number.isFinite(balanceAfter)) {
@@ -1271,6 +1290,7 @@ export const useTransactionsStore = defineStore('transactions', {
                 toAccountId: null,
                 currency: expectedCurrency,
                 createdAt,
+                ...budgetField,
                 id: transactionRefs[index].id
               }))
               for (const item of txData) {
@@ -1292,7 +1312,8 @@ export const useTransactionsStore = defineStore('transactions', {
                 type: row.amount > 0 ? 'income' as TransactionType : 'expense' as TransactionType,
                 toAccountId: null,
                 currency: expectedCurrency,
-                createdAt
+                createdAt,
+                ...(linkedBudgetId ? { budgetId: linkedBudgetId } : {})
               }
               addedLocalTxs.push({ id: transactionRefs[index].id, ...txData, date: row.dateValue })
             }
@@ -1400,6 +1421,8 @@ export const useTransactionsStore = defineStore('transactions', {
       notes?: string | null;
       installments?: number | null;
       userId?: string;
+      // Active budget the edited account is linked to, if any (its movements belong to it).
+      linkedBudgetId?: string | null;
     }): Promise<Transaction> {
       const user = auth.currentUser
       if (!user) throw new Error('Usuario no autenticado')
@@ -1419,6 +1442,11 @@ export const useTransactionsStore = defineStore('transactions', {
       const workspaceId = authStore.activeWorkspaceId
       if (!workspaceId) throw new Error('Workspace no inicializado')
       const normalizedAmount = normalizeTransactionAmount(updates.amount, updates.type)
+      const budgetChange = budgetChangeForEdit({
+        fromType: oldTx.type,
+        toType: updates.type,
+        linkedBudgetId: updates.linkedBudgetId ?? null
+      })
 
       if (transactionTouchesPocket(accountsStore, oldTx, updates)) {
         if (!workspaceId || oldTx.workspaceId !== workspaceId) throw new Error('La transacción no pertenece al workspace activo.')
@@ -1446,10 +1474,18 @@ export const useTransactionsStore = defineStore('transactions', {
             currency: account.currency || 'USD',
             createdAt: oldTx.createdAt
           }
+          // Pocket writes cannot carry budgetId, so its change goes first as a budget-only write.
+          const storedBudgetId = oldTx.budgetId ?? null
+          const budgetOnly = budgetChange.action === 'set' ? budgetChange.budgetId
+            : budgetChange.action === 'clear' ? null
+              : storedBudgetId
+          if (budgetOnly !== storedBudgetId) {
+            await updateDoc(doc(db, 'transactions', transactionId), { budgetId: budgetOnly })
+          }
           const result = await commitPocketMovement({
             kind: 'updated', transactionId, workspaceId, userId: user.uid, next
           })
-          const updatedTx: Transaction = { ...oldTx, ...next, date: transactionDate }
+          const updatedTx = withBudgetChange({ ...oldTx, ...next, date: transactionDate }, budgetChange)
           publishPocketDeltas(accountsStore, result.deltas, workspaceId, user.uid)
           if (authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === user.uid) {
             const currentIndex = this.transactions.findIndex(existing => existing.id === transactionId)
@@ -1521,17 +1557,21 @@ export const useTransactionsStore = defineStore('transactions', {
           userId: updates.userId || oldTx.userId,
           currency: account.currency || 'USD',
         }
+        // The budget follows the edit in the same write (linked account, type rules).
+        const budgetField = budgetChange.action === 'set' ? { budgetId: budgetChange.budgetId }
+          : budgetChange.action === 'clear' ? { budgetId: deleteField() }
+            : {}
 
         // 4. Actualizar en Firestore
         const docRef = doc(db, 'transactions', transactionId)
-        await updateDoc(docRef, updatedFields)
+        await updateDoc(docRef, { ...updatedFields, ...budgetField })
 
         // 5. Actualizar en el estado local
-        const updatedTx: Transaction = {
+        const updatedTx = withBudgetChange({
           ...oldTx,
           ...updatedFields,
           date: transactionDate
-        }
+        }, budgetChange)
 
         this.transactions[txIndex] = updatedTx
         this.transactions.sort((a, b) => b.date.getTime() - a.date.getTime())

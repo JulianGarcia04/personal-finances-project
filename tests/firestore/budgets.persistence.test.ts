@@ -124,7 +124,8 @@ test('decoder rejects malformed, spoofed, foreign, and non-chronological records
   assert.throws(() => decodeOperatingBudgetRecord(id('decode'), {
     ...base, startDate: Timestamp.fromMillis(3000), endDate: Timestamp.fromMillis(2000)
   }, ws.member))
-  assert.throws(() => decodeOperatingBudgetRecord(id('decode'), { ...base, unknown: true }, ws.member))
+  // Fields a newer client added are dropped instead of failing the load (08628f9).
+  assert.equal('unknown' in decodeOperatingBudgetRecord(id('decode'), { ...base, unknown: true }, ws.member), false)
 })
 
 test('linked accounts round-trip on create and patch, and malformed stored entries are dropped on read', async () => {
@@ -132,7 +133,9 @@ test('linked accounts round-trip on create and patch, and malformed stored entri
   const created = await service.create({ kind: 'event', name: 'Linked', capCurrency: 'USD', linkedAccountIds: ['cash-a'] })
   assert.deepEqual(created.linkedAccountIds, ['cash-a'])
   assert.deepEqual((await service.patch(created.id, { linkedAccountIds: ['cash-a', 'cash-b'] })).linkedAccountIds, ['cash-a', 'cash-b'])
-  assert.deepEqual((await service.patch(created.id, { linkedAccountIds: [] })).linkedAccountIds, [])
+  // An empty list removes the field instead of storing [].
+  assert.equal((await service.patch(created.id, { linkedAccountIds: [] })).linkedAccountIds, undefined)
+  assert.equal(Object.hasOwn((await getDoc(doc(member, 'budgets', created.id))).data(), 'linkedAccountIds'), false)
   await assert.rejects(service.create({ kind: 'event', name: 'Duplicated', capCurrency: 'USD', linkedAccountIds: ['a', 'a'] }))
 
   const base = {
@@ -144,6 +147,42 @@ test('linked accounts round-trip on create and patch, and malformed stored entri
   }, ws.member)
   assert.deepEqual(decoded.linkedAccountIds, ['cash-a', 'cash-b'])
   assert.deepEqual(decodeOperatingBudgetRecord(id('decode-links'), { ...base, linkedAccountIds: 'cash-a' }, ws.member).linkedAccountIds, [])
+})
+
+test('saving links keeps each account linkedBudgetId in sync in one batch, and archiving frees them', async () => {
+  const service = createBudgetPersistence(member, ws.member)
+  const [a, b] = [id('link-a'), id('link-b')]
+  for (const accountId of [a, b]) {
+    await setDoc(doc(member, 'accounts', accountId), {
+      workspaceId: ws.member, userId: memberId, name: 'Linked fixture', type: 'cash',
+      balance: 0, limit: 0, currency: 'USD', createdAt: serverTimestamp()
+    })
+  }
+  const linkOf = async accountId => (await getDoc(doc(member, 'accounts', accountId))).data().linkedBudgetId
+  const first = await service.create({ kind: 'event', name: 'First', capCurrency: 'USD', linkedAccountIds: [a] })
+  assert.equal(await linkOf(a), first.id)
+
+  // Moving an account takes it out of its previous budget in the same batch.
+  const second = await service.create(
+    { kind: 'event', name: 'Second', capCurrency: 'USD', linkedAccountIds: [a, b] },
+    { releases: [{ budgetId: first.id, linkedAccountIds: [] }] }
+  )
+  assert.deepEqual([await linkOf(a), await linkOf(b)], [second.id, second.id])
+  assert.equal(Object.hasOwn((await getDoc(doc(member, 'budgets', first.id))).data(), 'linkedAccountIds'), false)
+
+  await service.patch(second.id, { linkedAccountIds: [b] })
+  assert.deepEqual([await linkOf(a), await linkOf(b)], [undefined, second.id])
+  await service.patch(first.id, { linkedAccountIds: [a] })
+  assert.equal(await linkOf(a), first.id)
+  // Resending the same links (any order) leaves the stored list untouched.
+  const storedBefore = (await getDoc(doc(member, 'budgets', second.id))).data().linkedAccountIds
+  await service.patch(second.id, { name: 'Second renamed', linkedAccountIds: [b] })
+  assert.deepEqual((await getDoc(doc(member, 'budgets', second.id))).data().linkedAccountIds, storedBefore)
+
+  const archived = await service.archive(second.id)
+  assert.equal(archived.archived, true)
+  assert.deepEqual(archived.linkedAccountIds, [b])
+  assert.deepEqual([await linkOf(a), await linkOf(b)], [first.id, undefined])
 })
 
 test('budget operations leave synthetic settings and ledger records unchanged', async () => {

@@ -237,7 +237,7 @@ test('a goal contribution inherits the budget of its linked account and saves it
   assert.match(source, /!accountsStore\.getAccountById\(contributeAccountId\.value\)\?\.mirror/)
 })
 
-test('saving a budget that takes a linked account removes the link from its previous budget', async () => {
+test('saving a budget that takes a linked account removes the link from its previous budget in the same write', async () => {
   const blockMatch = goalsView.match(/const isValidCurrencyCode[\s\S]*?const handleArchiveBudget/)
   assert.ok(blockMatch)
   const transpiled = ts.transpileModule(blockMatch[0].replace(/\nconst handleArchiveBudget$/, ''), {
@@ -258,7 +258,7 @@ test('saving a budget that takes a linked account removes the link from its prev
     openMoveSheet: () => undefined,
     goalsStore: {
       operatingBudgets: [] as unknown[],
-      async createOperatingBudget(draft: Record<string, unknown>) { created.push(draft); return { id: 'toro', ...draft, archived: false } },
+      async createOperatingBudget(draft: Record<string, unknown>, options: unknown) { created.push([draft, options]); return { id: 'toro', ...draft, archived: false } },
       async updateOperatingBudget(id: string, patch: unknown) { updates.push([id, patch]); return { id } },
       async saveOperatingBudgetCategoryCaps() {}
     }
@@ -273,8 +273,12 @@ test('saving a budget that takes a linked account removes the link from its prev
   return handleSaveOperatingBudget();`)
   await run(ctx)
   assert.equal(ctx.budgetManagementError.value, '')
-  assert.deepEqual(created, [{ kind: 'event', name: 'Casa Toro', capCurrency: 'COP', linkedAccountIds: ['cash-casa', 'cash-new'] }])
-  assert.deepEqual(updates, [['ventas', { linkedAccountIds: ['cash-ventas'] }]])
+  assert.deepEqual(created, [[
+    { kind: 'event', name: 'Casa Toro', capCurrency: 'COP', linkedAccountIds: ['cash-casa', 'cash-new'] },
+    { releases: [{ budgetId: 'ventas', linkedAccountIds: ['cash-ventas'] }] }
+  ]])
+  // The previous budget is released in the same batch, not by a second write.
+  assert.deepEqual(updates, [])
   assert.equal(ctx.showBudgetModal.value, false)
 })
 

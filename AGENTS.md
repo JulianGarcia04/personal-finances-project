@@ -59,7 +59,7 @@ Permite subir archivos de texto (`.txt`, `.csv`) o pegar fragmentos de texto de 
 * **Pantalla de Revisión Interactiva:** Antes de guardar, los movimientos parsed se cargan en una tabla interactiva donde el usuario puede modificar montos, descripciones, reclasificar categorías o desmarcar transacciones específicas antes de guardarlas masivamente.
 
 ### 5. Presupuestos y Objetivos de Ahorro
-Permite establecer metas financieras personalizadas (ej. ahorrar para un carro o un viaje) y asignar fondos de manera atómica descontándolos de cuentas bancarias reales. Incluye un planificador de presupuestos interactivo basado en la regla 50/30/20, soportado por gráficos de distribución en tiempo real con Chart.js.
+Permite establecer metas financieras personalizadas (ej. ahorrar para un carro o un viaje) y asignar fondos de manera atómica descontándolos de cuentas bancarias reales. Incluye un planificador de presupuestos interactivo basado en la regla 50/30/20, soportado por gráficos de distribución en tiempo real con Chart.js. Un presupuesto puede ligar cuentas: cada cuenta ligada guarda `linkedBudgetId` (en el mismo lote que la lista `linkedAccountIds` del presupuesto; al eliminar el presupuesto se libera) y las reglas de Firestore y los escritores del servidor exigen que sus gastos e ingresos lleven ese presupuesto.
 
 ### 6. Asesor Financiero IA (Modo Agente Chatbot)
 Un chatbot integrado e interactivo (pestaña "Asesor IA") impulsado por Genkit y Gemini 2.5 Flash (`gemini-2.5-flash`).

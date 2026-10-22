@@ -88,6 +88,7 @@ service cloud.firestore {
         (!isFunded || data.openingAllocationId is string) &&
         (!('childAccountIds' in data) || (data.childAccountIds is list && data.childAccountIds.size() == 0)) &&
         !('lastPocketMovementId' in data) && !('lastPocketMovementType' in data) &&
+        !('linkedBudgetId' in data) &&
         data.createdAt is timestamp &&
         parent != null && parentAfter != null &&
         parent.data.workspaceId == data.workspaceId &&
@@ -145,6 +146,38 @@ service cloud.firestore {
         child.data.balance == 0 && child.data.pocketActivity == false &&
         child.data.openingAllocationId == null &&
         request.resource.data.balance == resource.data.balance;
+    }
+
+    // A budget link (S2) lives on root accounts that are neither bridges nor pocket-related, and
+    // points to an active budget of the same workspace that lists the account.
+    function isLinkableAccountShape(data) {
+      return (!('mirror' in data) || data.mirror == null) && hasNoParent(data) &&
+        validChildIds(childIds(data)) && childIds(data).size() == 0;
+    }
+
+    function isLinkedBudgetListingAccount(accountId, budgetId, workspaceId) {
+      let budgetPath = /databases/$(database)/documents/budgets/$(budgetId);
+      return existsAfter(budgetPath) &&
+        getAfter(budgetPath).data.workspaceId == workspaceId &&
+        getAfter(budgetPath).data.archived == false &&
+        getAfter(budgetPath).data.get('linkedAccountIds', null) is list &&
+        accountId in getAfter(budgetPath).data.linkedAccountIds;
+    }
+
+    function isValidAccountBudgetLink(accountId, data) {
+      return data.linkedBudgetId is string && data.linkedBudgetId.size() > 0 && data.linkedBudgetId.size() <= 1500 &&
+        data.linkedBudgetId.matches('^[^/]+$') && !(data.linkedBudgetId in ['.', '..', 'default-monthly']) &&
+        isLinkableAccountShape(data) &&
+        isLinkedBudgetListingAccount(accountId, data.linkedBudgetId, data.workspaceId);
+    }
+
+    // Removing a link is always allowed; an unchanged link only keeps the account linkable.
+    function isValidAccountBudgetLinkUpdate(accountId) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return !('linkedBudgetId' in request.resource.data) ||
+        (changed.hasAny(['linkedBudgetId', 'workspaceId'])
+          ? isValidAccountBudgetLink(accountId, request.resource.data)
+          : isLinkableAccountShape(request.resource.data));
     }
 
     function validRootAccountUpdate(accountId) {
@@ -511,10 +544,13 @@ service cloud.firestore {
              !('lastPocketChildId' in request.resource.data) &&
              !('lastPocketChange' in request.resource.data) &&
              !('lastPocketMovementId' in request.resource.data) &&
-             !('lastPocketMovementType' in request.resource.data))
+             !('lastPocketMovementType' in request.resource.data) &&
+             (!('linkedBudgetId' in request.resource.data) || isValidAccountBudgetLink(accountId, request.resource.data)))
           : validPocketCreate(accountId));
       allow update: if isWorkspaceMember(resource.data.workspaceId) &&
-        (hasNoParent(resource.data) ? validRootAccountUpdate(accountId) : validPocketUpdate(accountId));
+        (hasNoParent(resource.data)
+          ? validRootAccountUpdate(accountId) && isValidAccountBudgetLinkUpdate(accountId)
+          : validPocketUpdate(accountId));
       allow delete: if isWorkspaceMember(resource.data.workspaceId) &&
         (hasNoParent(resource.data)
           ? validChildIds(childIds(resource.data)) && childIds(resource.data).size() == 0
@@ -538,17 +574,60 @@ service cloud.firestore {
           (data.budgetId == 'default-monthly' || isTransactionBudgetParentAfter(data, allowArchived)));
     }
 
+    function hasNoTransactionBudget(data) {
+      return !('budgetId' in data) || data.budgetId == null;
+    }
+
+    // Active budget the account is linked to, or null. Only an account that stores a link costs a
+    // budget lookup (pockets never do), and the post-state path dedupes with the reference check.
+    function linkedBudgetIdOfAccount(accountId, workspaceId) {
+      let account = get(accountPath(accountId));
+      let budgetId = account == null ? null : account.data.get('linkedBudgetId', null);
+      return budgetId is string && budgetId.matches('^[^/]+$') &&
+        isActiveBudgetOfWorkspaceAfter(budgetId, workspaceId) ? budgetId : null;
+    }
+
+    function isActiveBudgetOfWorkspaceAfter(budgetId, workspaceId) {
+      let budgetPath = /databases/$(database)/documents/budgets/$(budgetId);
+      return existsAfter(budgetPath) &&
+        getAfter(budgetPath).data.workspaceId == workspaceId &&
+        getAfter(budgetPath).data.archived == false;
+    }
+
+    // An expense or income of an account linked to an active budget belongs to that budget (S2);
+    // a stored literal default or a missing reference counts as no budget.
+    function satisfiesAccountBudgetLink(data) {
+      return !(data.get('type', null) in ['expense', 'income']) || !(data.get('accountId', null) is string) ||
+        linkedBudgetIdOfAccount(data.accountId, data.workspaceId) == null ||
+        (!hasNoTransactionBudget(data) && data.budgetId == linkedBudgetIdOfAccount(data.accountId, data.workspaceId));
+    }
+
+    // A budget change may accompany a financial edit only when the edit decides it: the movement
+    // takes its account's linked budget, it becomes a type without budget, or it switches between
+    // expense and income and leaves its budget.
+    function isBudgetChangeDecidedByEdit(before, after) {
+      return (hasNoTransactionBudget(after) && !(after.get('type', null) in ['expense', 'income'])) ||
+        (hasNoTransactionBudget(after) && after.get('type', null) in ['expense', 'income'] &&
+          before.get('type', null) in ['expense', 'income'] && after.type != before.type) ||
+        (after.get('type', null) in ['expense', 'income'] && after.get('accountId', null) is string &&
+          !hasNoTransactionBudget(after) &&
+          after.budgetId == linkedBudgetIdOfAccount(after.accountId, after.workspaceId));
+    }
+
     function isValidTransactionBudgetUpdate() {
       let changed = request.resource.data.diff(resource.data).affectedKeys();
       return !changed.hasAny(['workspaceId']) &&
-        (!changed.hasAny(['budgetId']) || changed.hasOnly(['budgetId'])) &&
-        isValidTransactionBudget(request.resource.data, !changed.hasAny(['budgetId']));
+        (!changed.hasAny(['budgetId']) || changed.hasOnly(['budgetId']) ||
+          isBudgetChangeDecidedByEdit(resource.data, request.resource.data)) &&
+        isValidTransactionBudget(request.resource.data, !changed.hasAny(['budgetId'])) &&
+        (!changed.hasAny(['budgetId', 'accountId', 'type']) || satisfiesAccountBudgetLink(request.resource.data));
     }
 
     match /transactions/{transactionId} {
       allow read: if isWorkspaceMember(resource.data.workspaceId);
       allow create: if isWorkspaceMember(request.resource.data.workspaceId) &&
         isValidTransactionBudget(request.resource.data, false) &&
+        satisfiesAccountBudgetLink(request.resource.data) &&
         (normalTransactionReferencesRoots(request.resource.data) ||
          validPocketMovementCreate(transactionId, request.resource.data) ||
          validPocketOpeningTransaction(transactionId));

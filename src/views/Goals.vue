@@ -1401,9 +1401,15 @@ const handleSaveOperatingBudget = async () => {
 
   const toDate = (value: string): Date | undefined => value ? new Date(`${value}T00:00:00`) : undefined
   const caps = categoryCapDraft()
-  // Accounts that move here leave their previous budget once this one is saved.
+  // Accounts that move here leave their previous budget in the same write as this one.
   const movedLinks = budgetLinkConflicts.value
   const linkedAccountIds = [...budgetLinkedAccountIds.value]
+  const releases = [...new Set(movedLinks.map(conflict => conflict.budgetId))].flatMap(ownerId => {
+    const owner = linkableOperatingBudgets.value.find(budget => budget.id === ownerId)
+    if (!owner) return []
+    const moved = new Set(movedLinks.filter(conflict => conflict.budgetId === ownerId).map(conflict => conflict.accountId))
+    return [{ budgetId: ownerId, linkedAccountIds: (owner.linkedAccountIds ?? []).filter(accountId => !moved.has(accountId)) }]
+  })
   savingOperatingBudget.value = true
   try {
     let budgetId: string
@@ -1418,7 +1424,7 @@ const handleSaveOperatingBudget = async () => {
         patch.startDate = toDate(budgetStartDateInput.value) ?? null
         patch.endDate = toDate(budgetEndDateInput.value) ?? null
       }
-      const updated = await goalsStore.updateOperatingBudget(existing.id, patch)
+      const updated = await goalsStore.updateOperatingBudget(existing.id, patch, { releases })
       budgetId = updated.id
     } else {
       const draft: OperatingBudgetDraft = {
@@ -1434,20 +1440,12 @@ const handleSaveOperatingBudget = async () => {
         if (startDate) draft.startDate = startDate
         if (endDate) draft.endDate = endDate
       }
-      const created = await goalsStore.createOperatingBudget(draft)
+      const created = await goalsStore.createOperatingBudget(draft, { releases })
       budgetId = created.id
       editingOperatingBudget.value = goalsStore.operatingBudgets.find(entry => entry.budget.id === created.id)
         ?? { budget: created, categoryCaps: {} }
     }
     await goalsStore.saveOperatingBudgetCategoryCaps(budgetId, caps)
-    for (const ownerId of new Set(movedLinks.map(conflict => conflict.budgetId))) {
-      const owner = linkableOperatingBudgets.value.find(budget => budget.id === ownerId)
-      if (!owner) continue
-      const moved = new Set(movedLinks.filter(conflict => conflict.budgetId === ownerId).map(conflict => conflict.accountId))
-      await goalsStore.updateOperatingBudget(ownerId, {
-        linkedAccountIds: (owner.linkedAccountIds ?? []).filter(accountId => !moved.has(accountId))
-      })
-    }
     showBudgetModal.value = false
     // Offer to bring in the movements that already belong here.
     openMoveSheet(budgetId)
