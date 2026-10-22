@@ -181,7 +181,11 @@ test('budget sheet lists only the chosen categories and adds or creates more inl
   assertContains(/:aria-label="`Quitar \$\{categoryName\(categoryId\)\}`"/, 'each chosen category needs a remove control')
 })
 
-test('baseline monthly budget can create a missing category without leaving the page', () => {
-  assertContains(/<CategoryQuickCreate[\s\S]*?@created="handleBaselineCategoryCreated"/, 'the baseline list must offer inline category creation')
-  assertContains(/:id="`base-cap-\$\{cat\.id\}`"/, 'baseline inputs need ids so a new category can receive focus')
+test('baseline monthly budget lists only used categories and adds or creates more inline', () => {
+  assertContains(/v-for="cat in baselineCategories"/, 'the baseline must render only categories with a limit or spending')
+  assertNotContains(/v-for="cat in expenseCategories"/, 'the baseline must not render every expense category')
+  assertContains(/visibleBaselineCategories\(/, 'baseline visibility must come from the shared helper')
+  assertContains(/<CategoryPicker[\s\S]*?:selected-ids="baselineCategoryIds"[\s\S]*?:suggestions="baselineSuggestedCategories"[\s\S]*?@select="addBaselineCategory"/, 'the baseline must add or create categories with the inline picker')
+  assertContains(/:aria-label="`Quitar límite de \$\{cat\.name\}`"/, 'each baseline row needs a control to remove its limit')
+  assertContains(/:id="`base-cap-\$\{cat\.id\}`"/, 'baseline inputs need ids so an added category can receive focus')
 })

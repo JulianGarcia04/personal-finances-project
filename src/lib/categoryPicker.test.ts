@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { Category, Transaction } from '../types.ts'
-import { filterCategories, findCategoryByName, suggestCategoriesBySpending } from './categoryPicker.ts'
+import { filterCategories, findCategoryByName, suggestCategoriesBySpending, visibleBaselineCategories } from './categoryPicker.ts'
 
 const category = (id: string, name: string, type: Category['type'] = 'expense'): Category => ({
   id, name, type, workspaceId: 'w1', icon: 'HelpCircle', color: '#10b981'
@@ -72,4 +72,31 @@ test('suggestCategoriesBySpending skips selected categories and respects the lim
     categories, transactions, now, excludeIds: ['gym'], limit: 1, amountOf: tx => tx.amount
   })
   assert.deepEqual(result.map(c => c.id), ['food'])
+})
+
+test('baseline shows only categories with a limit, spending this month, or added this session', () => {
+  const categories = [
+    category('capped', 'Mercado'),
+    category('spent', 'Transporte'),
+    category('added', 'Mascotas'),
+    category('zeroCap', 'Regalos'),
+    category('unused', 'Educación')
+  ]
+  const visible = visibleBaselineCategories({
+    categories,
+    limits: { capped: 500, zeroCap: 0 },
+    spentOf: categoryId => (categoryId === 'spent' ? 120 : 0),
+    addedIds: ['added']
+  })
+  assert.deepEqual(visible.map(entry => entry.id), ['capped', 'spent', 'added'])
+})
+
+test('baseline hides every category when none has a limit, spending, or a pending addition', () => {
+  const visible = visibleBaselineCategories({
+    categories: [category('unused', 'Educación')],
+    limits: {},
+    spentOf: () => 0,
+    addedIds: []
+  })
+  assert.deepEqual(visible, [])
 })

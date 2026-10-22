@@ -375,12 +375,12 @@
           Tip: también puedes pedirle al <span class="text-accent-emerald font-semibold">Asesor IA</span> que analice tus gastos y te proponga presupuestos.
         </p>
 
-        <div v-if="expenseCategories.length === 0" class="text-center py-6 text-text-muted text-sm">
-          No hay categorías de gasto creadas.
+        <div v-if="baselineCategories.length === 0" class="text-center py-6 text-text-muted text-sm">
+          Todavía no hay categorías con límite o gasto este mes.
         </div>
 
         <div
-          v-for="cat in expenseCategories"
+          v-for="cat in baselineCategories"
           :key="cat.id"
           class="flex flex-col sm:flex-row sm:items-center gap-3 py-3 border-b border-white/5 last:border-0"
         >
@@ -392,7 +392,16 @@
             >
               <component :is="getCategoryIcon(cat.icon)" class="w-4 h-4" />
             </span>
-            <span class="text-sm font-semibold text-text-primary truncate">{{ cat.name }}</span>
+            <span class="min-w-0 flex-1 text-sm font-semibold text-text-primary truncate">{{ cat.name }}</span>
+            <button
+              v-if="categoryBudgetInputs[cat.id] || baselineAddedCategoryIds.includes(cat.id)"
+              type="button"
+              class="tap shrink-0 flex items-center justify-center rounded-lg text-text-muted hover:text-accent-rose hover:bg-accent-rose/10 transition-all cursor-pointer"
+              :aria-label="`Quitar límite de ${cat.name}`"
+              @click="removeBaselineCategory(cat.id)"
+            >
+              <XIcon class="w-4 h-4" />
+            </button>
           </div>
 
           <!-- Limit input -->
@@ -437,21 +446,12 @@
           </div>
         </div>
 
-        <CategoryQuickCreate
-          v-if="creatingBaselineCategory"
-          type="expense"
-          @created="handleBaselineCategoryCreated"
-          @cancel="creatingBaselineCategory = false"
+        <CategoryPicker
+          :categories="expenseCategories"
+          :selected-ids="baselineCategoryIds"
+          :suggestions="baselineSuggestedCategories"
+          @select="addBaselineCategory"
         />
-        <button
-          v-else
-          type="button"
-          class="w-full min-h-11 inline-flex items-center justify-center gap-2 rounded-xl border border-dashed border-white/15 text-xs font-semibold text-text-secondary hover:text-accent-emerald hover:border-accent-emerald/40 transition-all cursor-pointer"
-          @click="creatingBaselineCategory = true"
-        >
-          <PlusIcon class="w-4 h-4" />
-          Nueva categoría
-        </button>
       </div>
 
       <!-- 50/30/20 vs realidad del mes -->
@@ -731,11 +731,10 @@ import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { SUPPORTED_CURRENCIES, currencyOptionsWith, defaultCurrencyCode } from '@/lib/currencies'
-import type { Category, Goal, OperatingBudgetDraft, OperatingBudgetPatch } from '@/types'
+import type { Goal, OperatingBudgetDraft, OperatingBudgetPatch } from '@/types'
 import BaseSheet from '@/components/ui/BaseSheet.vue'
 import CategoryPicker from '@/components/CategoryPicker.vue'
-import CategoryQuickCreate from '@/components/CategoryQuickCreate.vue'
-import { suggestCategoriesBySpending } from '@/lib/categoryPicker'
+import { suggestCategoriesBySpending, visibleBaselineCategories } from '@/lib/categoryPicker'
 import { getCategoryIconComponent } from '@/lib/categoryIcons'
 import { DEFAULT_MONTHLY_BUDGET_ID } from '@/lib/budgets'
 import { reportBudgetScope } from '@/lib/budgetReporting'
@@ -775,7 +774,7 @@ const budgetEndDateInput = ref('')
 const budgetCategoryCapInputs = reactive<Record<string, number | undefined>>({})
 // Categories shown in the sheet, in the order the user added them.
 const budgetSelectedCategoryIds = ref<string[]>([])
-const creatingBaselineCategory = ref(false)
+const baselineAddedCategoryIds = ref<string[]>([])
 const budgetManagementError = ref('')
 const savingOperatingBudget = ref(false)
 const legacyCategoryBudgetCurrencyInput = ref(defaultCurrencyCode(settingsStore.currency))
@@ -929,6 +928,21 @@ const baselineCategoryReport = (categoryId: string) =>
     : undefined
 const baselineCategoryAmount = (categoryId: string): number =>
   baselineCategoryReport(categoryId)?.monthlyAllocation.amount ?? 0
+// Only categories in use: a limit, spending this month, or just added from the picker.
+const baselineCategories = computed(() => visibleBaselineCategories({
+  categories: expenseCategories.value,
+  limits: categoryBudgetInputs,
+  spentOf: baselineCategoryAmount,
+  addedIds: baselineAddedCategoryIds.value
+}))
+const baselineCategoryIds = computed(() => baselineCategories.value.map(category => category.id))
+const baselineSuggestedCategories = computed(() => suggestCategoriesBySpending({
+  categories: expenseCategories.value,
+  transactions: transactionsStore.transactions,
+  now: new Date(),
+  excludeIds: baselineCategoryIds.value,
+  amountOf: tx => goalsStore.convertToPrimary(Math.abs(tx.amount), tx.currency, userCurrency.value)
+}))
 const findExpenseCategory = (categoryId: string) =>
   expenseCategories.value.find(category => category.id === categoryId)
 const categoryName = (categoryId: string) => findExpenseCategory(categoryId)?.name ?? categoryId
@@ -975,9 +989,16 @@ const removeBudgetCategory = (categoryId: string) => {
   delete budgetCategoryCapInputs[categoryId]
 }
 
-const handleBaselineCategoryCreated = (category: Category) => {
-  creatingBaselineCategory.value = false
-  void focusField(`base-cap-${category.id}`)
+const addBaselineCategory = (categoryId: string) => {
+  if (!baselineAddedCategoryIds.value.includes(categoryId)) {
+    baselineAddedCategoryIds.value = [...baselineAddedCategoryIds.value, categoryId]
+  }
+  void focusField(`base-cap-${categoryId}`)
+}
+
+const removeBaselineCategory = (categoryId: string) => {
+  baselineAddedCategoryIds.value = baselineAddedCategoryIds.value.filter(id => id !== categoryId)
+  if (categoryBudgetInputs[categoryId]) void saveCategoryBudget(categoryId, '')
 }
 
 const updateBudgetCategoryCapInput = (categoryId: string, rawValue: string) => {
