@@ -17,8 +17,8 @@ Branch: `feat/budget-assignment-ux` · Delivery: single-pr with size exception (
 - [x] T1 · S1, S2 · inline · rules: income `budgetId`, budget `linkedAccountIds` (list ≤ 20) + rules tests · Risk item 2 · commit c5aba63
 - [x] T2 · S1, S2, S4, S8 · inline · assigner allows income; selector at creation; link UI + inheritance; microcopy · commit 3eb09d2 (UI proof pending, L5)
 - [x] T3 · S5, S6, S8 · inline · reporting funds/available, monthly income and self-funded spending exclusion (client + alert), card bars · Risk item 3 · commit 0e3e5eb
-- [x] T6 · S2, S8 · inline · lock linked-account movements to their budget (create, contribution, reassignment) · Risk: none · commit in L9
-- [ ] T4 · S7 · inline · funds alert in `budgetAlerts.ts` · Risk item 5
+- [x] T6 · S2, S8 · inline · lock linked-account movements to their budget (create, contribution, reassignment) · Risk: none · commit a098754
+- [x] T4 · S7 · inline · funds alert in `budgetAlerts.ts` (email + push, ledger slot `__funds`) · Risk item 3 (shared trigger) · commit in L10
 - [ ] T5 · S3, S8 · inline · preview + bulk move
 
 ## Log
@@ -31,3 +31,4 @@ Branch: `feat/budget-assignment-ux` · Delivery: single-pr with size exception (
 - L7 (2026-10-22): User approved excluding self-funded budget spending: "sí, aplícalo así". Objection logged verbatim in S2: linked-account movements must not go to another budget. `selfFundedBudgetIds` (client + server) RED→GREEN; `monthlyExpenseTotal` takes the funded set; Goals `realMonthTotals` skips funded spending. Lock: `linkedBudgetForAccount`/`canAssignBudget` RED→GREEN; selectors disabled with copy "Esta cuenta está ligada a «X»: todos sus movimientos van a ese presupuesto."; movements of a linked account still in another budget can only move to the linked one. Lock is client-side only (rules do not read budgets). `pnpm test` 262/262, functions 173/173, `vue-tsc` clean. Running branch ~950 lines (c5aba63+3eb09d2+uncommitted 546): chain strategy pending before next commit.
 - L8 (2026-10-22): "todo en un solo PR con size-exception". Delivery set to single-pr; T3 and T6 committed separately (T3 names Risk item 3).
 - L9: T3 committed as 0e3e5eb (260/260, functions 173/173, vue-tsc clean in the T3-only state). T6 committed next on top.
+- L10: T4 `scopeFundsTotal` + funds email/push copy RED→GREEN (TS2305/TS2353 first); trigger adds a `funds` subject when an additional budget with funds > 0 gets spending. functions 176/176, `pnpm test` 262/262. AGENTS.md and README updated. Next: T5 bulk move, then mounted UI proof and one independent verifier at feature end.

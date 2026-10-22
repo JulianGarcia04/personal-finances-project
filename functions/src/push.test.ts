@@ -198,3 +198,9 @@ test("delivery plan: tokens without SMTP -> claim and push only", () => {
 test("delivery plan: neither SMTP nor tokens -> no claim", () => {
   assert.deepEqual(planBudgetAlertDelivery({ smtpConfigured: false, pushTokenCount: 0 }), { claim: false, email: false, push: false });
 });
+
+test("funds push names the budget's funds", () => {
+  const push = buildBudgetAlertPush({ ...baseInput, threshold: 80, fundsBudget: true, budgetId: "ventas-casa", budgetName: "Ventas Casa" });
+  assert.match(push.notification!.title!, /Ya usaste el 85 % de los fondos de «Ventas Casa»/);
+  assert.equal(push.data!.budgetId, "ventas-casa");
+});

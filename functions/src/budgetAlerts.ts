@@ -27,6 +27,8 @@ export const BUDGET_ALERT_THRESHOLDS = [80, 100] as const;
 export type BudgetThreshold = (typeof BUDGET_ALERT_THRESHOLDS)[number];
 /** Ledger slot (in place of a category id) for alerts on a budget's overall cap. */
 export const TOTAL_ALERT_SUBJECT = "__total";
+/** Ledger slot of a budget's spending vs the income assigned to it. */
+export const FUNDS_ALERT_SUBJECT = "__funds";
 
 export type BillingLookup = (accountId?: string | null) => CardBilling | null;
 
@@ -237,6 +239,34 @@ export function monthlyIncomeTotal(
     if (Number.isNaN(date.getTime())) continue; // malformed date: skip, like expenseAmountForMonth
     const local = zonedYearMonth(date, options.timeZone);
     if (local.year !== month.year || local.month !== month.month) continue;
+    const amount = Math.abs(Number(tx.amount) || 0);
+    if (amount === 0) continue;
+    const rate = manualRate(tx.currency, options.reportingCurrency, options.exchangeRates);
+    if (rate === null) return null;
+    total += amount * rate;
+  }
+  return Math.round(total * 100) / 100;
+}
+
+/**
+ * Funds of an operating budget: the income assigned to it, all of it for an event budget and
+ * the month's for a monthly one (like budgetReporting.ts funds). Null when a manual rate is missing.
+ */
+export function scopeFundsTotal(
+  incomes: Iterable<Record<string, any>>,
+  scope: AlertScope,
+  month: YearMonth,
+  options: SpendOptions
+): number | null {
+  let total = 0;
+  for (const tx of incomes) {
+    if (tx.type !== "income" || resolveAlertBudgetId(tx.budgetId) !== scope.id) continue;
+    if (scope.kind === "monthly") {
+      const date = storedDateValue(tx.date, options.timeZone);
+      if (Number.isNaN(date.getTime())) continue;
+      const local = zonedYearMonth(date, options.timeZone);
+      if (local.year !== month.year || local.month !== month.month) continue;
+    }
     const amount = Math.abs(Number(tx.amount) || 0);
     if (amount === 0) continue;
     const rate = manualRate(tx.currency, options.reportingCurrency, options.exchangeRates);

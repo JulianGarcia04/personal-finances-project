@@ -62,7 +62,9 @@ import {
   resolveAlertBudgetId,
   scopeTotalSpend,
   spendFieldsChanged,
-  TOTAL_ALERT_SUBJECT
+  TOTAL_ALERT_SUBJECT,
+  FUNDS_ALERT_SUBJECT,
+  scopeFundsTotal
 } from "./budgetAlerts";
 import { cardBillingByAccount } from "./agentQueries";
 import { DEFAULT_MONTHLY_BUDGET_ID, parseLegacyCategoryBudgetCurrency } from "./legacyCategoryBudgets";
@@ -382,7 +384,10 @@ export const notifyBudgetThreshold = onDocumentWritten(
     const scopeTotalApplies = budgetScope !== null && budgetScope.totalLimit !== null &&
       countsTowardScopeTotal(after, budgetScope.scope, month, { timeZone, billingFor });
     const incomeApplies = countsTowardMonthlySpend(after, month, { timeZone, billingFor });
-    if (categoryCap === 0 && !scopeTotalApplies && !incomeApplies) return;
+    // An additional budget's spending vs the income assigned to it (its funds).
+    const fundsApplies = budgetScope !== null && budgetScope.scope.id !== DEFAULT_MONTHLY_BUDGET_ID &&
+      countsTowardScopeTotal(after, budgetScope.scope, month, { timeZone, billingFor });
+    if (categoryCap === 0 && !scopeTotalApplies && !incomeApplies && !fundsApplies) return;
 
     const smtp = smtpConfigFromEnvironment();
     const memberUids = memberUidsOf(workspace.members);
@@ -417,8 +422,17 @@ export const notifyBudgetThreshold = onDocumentWritten(
         subjects.push({ kind: "total", subjectId: TOTAL_ALERT_SUBJECT, spent, budget, scope: budgetScope.scope, budgetName: budgetScope.budgetName });
       }
     }
+    const incomes = incomeSnap.docs.map((d) => d.data());
+    if (budgetScope && fundsApplies) {
+      const funds = scopeFundsTotal(incomes, budgetScope.scope, month, spendOptions);
+      const spent = scopeTotalSpend(transactions, budgetScope.scope, month, spendOptions);
+      if (funds === null || spent === null) {
+        console.warn(`Funds alert for workspace ${workspaceId} skipped: manual rate missing.`);
+      } else if (funds > 0) {
+        subjects.push({ kind: "funds", subjectId: FUNDS_ALERT_SUBJECT, spent, budget: funds, scope: budgetScope.scope, budgetName: budgetScope.budgetName });
+      }
+    }
     if (incomeApplies) {
-      const incomes = incomeSnap.docs.map((d) => d.data());
       const realIncome = monthlyIncomeTotal(incomes, month, spendOptions);
       const budget = incomeReference(workspace.budgetIncome, realIncome);
       const spent = monthlyExpenseTotal(transactions, month, spendOptions, selfFundedBudgetIds(incomes));
@@ -460,7 +474,7 @@ interface BudgetScopeInfo {
  * spending vs income (ledger slot TOTAL_ALERT_SUBJECT of the default budget).
  */
 interface BudgetAlertSubject {
-  kind: "category" | "total" | "income";
+  kind: "category" | "total" | "income" | "funds";
   subjectId: string;
   spent: number;
   budget: number;
@@ -571,7 +585,8 @@ async function deliverBudgetAlert(ctx: BudgetAlertContext, subject: BudgetAlertS
       }),
       ...(subject.budgetName ? { budgetName: subject.budgetName } : {}),
       ...(kind === "total" ? { totalBudget: true } : {}),
-      ...(kind === "income" ? { incomeBudget: true } : {})
+      ...(kind === "income" ? { incomeBudget: true } : {}),
+      ...(kind === "funds" ? { fundsBudget: true } : {})
     };
     if (smtp) {
       const recipients = await resolveMemberEmails(memberUids);

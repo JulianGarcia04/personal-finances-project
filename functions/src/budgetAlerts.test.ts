@@ -11,6 +11,7 @@ import {
   incomeReference,
   monthlyExpenseTotal,
   monthlyIncomeTotal,
+  scopeFundsTotal,
   scopeTotalSpend,
   selfFundedBudgetIds,
   TOTAL_ALERT_SUBJECT,
@@ -344,4 +345,17 @@ test("countsTowardMonthlySpend accepts any budget's expense with a share in the 
 test("monthly income skips income with a missing or unparseable date instead of throwing", () => {
   const txs = [income(1_000), income(999, { date: undefined }), income(999, { date: "garbage" })];
   assert.equal(monthlyIncomeTotal(txs, OCTOBER, COP_OPTIONS), 1_000);
+});
+
+test("budget funds are its assigned income: all of it for an event, the month's for a monthly budget", () => {
+  const incomes = [
+    income(3_000, { budgetId: "ventas-casa" }),
+    income(2_000, { budgetId: "ventas-casa", date: new Date("2026-08-10T17:00:00.000Z") }),
+    income(9_999, { budgetId: "otro" }),
+    income(9_999)
+  ];
+  assert.equal(scopeFundsTotal(incomes, { id: "ventas-casa", kind: "event" }, OCTOBER, COP_OPTIONS), 5_000);
+  assert.equal(scopeFundsTotal(incomes, { id: "ventas-casa", kind: "monthly" }, OCTOBER, COP_OPTIONS), 3_000);
+  assert.equal(scopeFundsTotal(incomes, { id: "sin-fondos", kind: "event" }, OCTOBER, COP_OPTIONS), 0);
+  assert.equal(scopeFundsTotal([income(1, { budgetId: "ventas-casa", currency: "USD" })], { id: "ventas-casa", kind: "event" }, OCTOBER, COP_OPTIONS), null);
 });

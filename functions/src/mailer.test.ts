@@ -124,3 +124,14 @@ test("income alert compares the month's spending with the month's income", () =>
   assert.match(reached.subject, /Tus gastos del mes ya alcanzaron tus ingresos/);
   assert.match(reached.text, /Te pasaste por: /);
 });
+
+test("funds alert compares a budget's spending with the income assigned to it", () => {
+  const near = renderBudgetAlertEmail({ ...baseAlert, threshold: 80, fundsBudget: true, budgetName: "Ventas Casa", eventBudget: true, monthLabel: undefined });
+  assert.match(near.subject, /Ya usaste el 85 % de los fondos de «Ventas Casa»/);
+  assert.match(near.text, /Fondos: /);
+  assert.match(near.text, /la plata que le asignaste/);
+  assert.doesNotMatch(near.text, /esta categoría|Ingresos del mes/);
+  const reached = renderBudgetAlertEmail({ ...baseAlert, threshold: 100, fundsBudget: true, budgetName: "Ventas Casa", spent: 1_200_000 });
+  assert.match(reached.subject, /Ya usaste todos los fondos de «Ventas Casa»/);
+  assert.match(reached.text, /Te pasaste por: /);
+});
