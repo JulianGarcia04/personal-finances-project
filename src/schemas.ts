@@ -168,7 +168,7 @@ export const OperatingBudgetDraftSchema = z.object({
 }).strict().superRefine(validateOperatingBudgetPlanning)
 
 // id is injected from the root document ID by the reader; createdAt/updatedAt must already be decoded Dates.
-export const OperatingBudgetRecordSchema = z.object({
+const operatingBudgetRecordFields = {
   id: additionalOperatingBudgetIdSchema,
   workspaceId: operatingBudgetIdSchema,
   kind: OperatingBudgetKindSchema,
@@ -180,7 +180,12 @@ export const OperatingBudgetRecordSchema = z.object({
   updatedAt: operatingBudgetDateSchema,
   linkedAccountIds: operatingBudgetLinkedAccountsSchema.optional(),
   ...operatingBudgetPlanningFields
-}).strict().superRefine(validateOperatingBudgetPlanning)
+}
+export const OperatingBudgetRecordSchema = z.object(operatingBudgetRecordFields)
+  .strict().superRefine(validateOperatingBudgetPlanning)
+// Stored documents may carry fields a newer client added; drop them instead of failing every load.
+export const StoredOperatingBudgetRecordSchema = z.object(operatingBudgetRecordFields)
+  .strip().superRefine(validateOperatingBudgetPlanning)
 
 // B2P must merge a patch with the stored record and validate the full post-state (kind/date chronology included).
 export const OperatingBudgetPatchSchema = z.object({

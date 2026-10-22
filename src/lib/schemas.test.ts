@@ -5,6 +5,7 @@ import {
   OperatingBudgetDraftSchema,
   OperatingBudgetPatchSchema,
   OperatingBudgetRecordSchema,
+  StoredOperatingBudgetRecordSchema,
   TransactionSchema
 } from '../schemas.ts'
 
@@ -118,4 +119,17 @@ test('Operating budget patches use null to clear optional limits and event dates
   const unchanged = OperatingBudgetPatchSchema.safeParse({ name: 'Renamed' })
   assert.equal(unchanged.success, true)
   if (unchanged.success) assert.equal(Object.hasOwn(unchanged.data, 'totalLimit'), false)
+})
+
+test('stored budget records drop fields a newer client added instead of failing the load', () => {
+  const stored = {
+    id: 'viaje', workspaceId: 'ws1', kind: 'event', name: 'Viaje', capCurrency: 'COP', archived: false,
+    createdAt: new Date('2026-10-01T12:00:00'), updatedAt: new Date('2026-10-01T12:00:00'),
+    fieldFromTheFuture: true
+  }
+  const parsed = StoredOperatingBudgetRecordSchema.parse(stored)
+  assert.equal('fieldFromTheFuture' in parsed, false)
+  assert.equal(parsed.name, 'Viaje')
+  // Writes stay strict.
+  assert.throws(() => OperatingBudgetRecordSchema.parse(stored))
 })

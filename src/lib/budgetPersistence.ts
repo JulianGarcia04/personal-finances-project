@@ -1,4 +1,4 @@
-import { OperatingBudgetRecordSchema, OperatingBudgetDraftSchema, OperatingBudgetPatchSchema } from '../schemas.ts'
+import { OperatingBudgetRecordSchema, OperatingBudgetDraftSchema, OperatingBudgetPatchSchema, StoredOperatingBudgetRecordSchema } from '../schemas.ts'
 import type { OperatingBudget, OperatingBudgetDraft, OperatingBudgetPatch } from '../types.ts'
 import { DEFAULT_MONTHLY_BUDGET_ID } from './budgets.ts'
 import {
@@ -61,7 +61,7 @@ export const decodeOperatingBudgetRecord = (
     decoded.linkedAccountIds = [...new Set(ids.filter((id): id is string =>
       typeof id === 'string' && id.trim().length > 0 && !id.includes('/') && id !== '.' && id !== '..'))]
   }
-  return OperatingBudgetRecordSchema.parse(decoded)
+  return StoredOperatingBudgetRecordSchema.parse(decoded)
 }
 
 const planningTimestamp = (date: Date) => Timestamp.fromDate(date)
