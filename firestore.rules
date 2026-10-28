@@ -185,7 +185,8 @@ service cloud.firestore {
       let oldIds = childIds(resource.data);
       let newIds = childIds(request.resource.data);
       let registryChanged = changed.hasAny(['childAccountIds', 'lastPocketChildId', 'lastPocketChange']);
-      let movementChanged = changed.hasAny(['lastPocketMovementId', 'lastPocketMovementType']);
+      let movementChanged = changed.hasAny(['lastPocketMovementId', 'lastPocketMovementType']) ||
+        (oldIds.size() > 0 && request.resource.data.balance != resource.data.balance);
       return hasNoParent(resource.data) && hasNoParent(request.resource.data) &&
         !changed.hasAny(['parentAccountId']) &&
         !('pocketActivity' in request.resource.data) &&
@@ -299,7 +300,7 @@ service cloud.firestore {
         data.currency == source.data.currency &&
         (data.type == 'transfer'
           ? validPocketTransferShape(data, workspaceId, source)
-          : validCashflow && source.data.type != 'credit') &&
+          : validCashflow) &&
         data.description is string && data.description.size() > 0 && data.description.size() <= 500 &&
         data.categoryId is string && data.date is timestamp && data.createdAt is timestamp &&
         (!('mirrorOf' in data) || data.mirrorOf == null);

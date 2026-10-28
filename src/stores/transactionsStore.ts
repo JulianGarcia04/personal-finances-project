@@ -220,8 +220,8 @@ async function commitPocketMovement(options: {
       const recordedCurrency = isNewMovement ? options.next?.currency : before?.currency
       if (recordedCurrency !== source.currency) throw new Error('La moneda del movimiento debe coincidir con su cuenta.')
       const target = movement.toAccountId ? accounts.get(movement.toAccountId) : undefined
-      if ((source.type === 'credit' || target?.type === 'credit') &&
-          (movement.type !== 'transfer' || isPocketAccount(source) || (target && isPocketAccount(target)))) {
+      if (movement.type === 'transfer' && (source.type === 'credit' || target?.type === 'credit') &&
+          (isPocketAccount(source) || (target && isPocketAccount(target)))) {
         throw new Error('Las transferencias con tarjetas requieren cuentas principales, no bolsillos.')
       }
       if (movement.type === 'transfer') {

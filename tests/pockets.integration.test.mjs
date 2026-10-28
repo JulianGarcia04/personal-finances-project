@@ -404,6 +404,7 @@ test('editing a normal transaction into and out of a pocket applies combined del
   const parent = await accountsStore.addAccount({ name: 'Cross-boundary parent', type: 'checking', balance: 500, currency: 'COP' })
   const pocket = await accountsStore.addAccount({ name: 'Cross-boundary pocket', type: 'savings', balance: 100, currency: 'COP', parentAccountId: parent.id })
   const ordinary = await accountsStore.addAccount({ name: 'Cross-boundary ordinary', type: 'checking', balance: 100, currency: 'COP' })
+  const card = await accountsStore.addAccount({ name: 'Cross-boundary card', type: 'credit', balance: -200, limit: 1_000, currency: 'COP' })
   const date = new Date()
 
   const ordinaryIncome = await transactionsStore.addTransaction({
@@ -414,7 +415,7 @@ test('editing a normal transaction into and out of a pocket applies combined del
   })
   assert.equal((await adminDb.collection('accounts').doc(ordinary.id).get()).data().balance, 100)
   assert.equal((await adminDb.collection('accounts').doc(pocket.id).get()).data().balance, 130)
-  assert.equal(accountsStore.netWorthByCurrency.COP, totalBefore + 630)
+  assert.equal(accountsStore.netWorthByCurrency.COP, totalBefore + 430)
   await transactionsStore.deleteTransaction(ordinaryIncome.id)
   assert.equal((await adminDb.collection('accounts').doc(pocket.id).get()).data().balance, 100)
 
@@ -426,10 +427,31 @@ test('editing a normal transaction into and out of a pocket applies combined del
   })
   assert.equal((await adminDb.collection('accounts').doc(pocket.id).get()).data().balance, 100)
   assert.equal((await adminDb.collection('accounts').doc(ordinary.id).get()).data().balance, 115)
-  assert.equal(accountsStore.netWorthByCurrency.COP, totalBefore + 615)
+  assert.equal(accountsStore.netWorthByCurrency.COP, totalBefore + 415)
   await transactionsStore.deleteTransaction(pocketIncome.id)
   assert.equal((await adminDb.collection('accounts').doc(ordinary.id).get()).data().balance, 100)
-  assert.equal(accountsStore.netWorthByCurrency.COP, totalBefore + 600)
+  assert.equal(accountsStore.netWorthByCurrency.COP, totalBefore + 400)
+
+  const parentExpense = await transactionsStore.addTransaction({
+    accountId: parent.id, amount: -48, description: 'Gasolina de la moto', categoryId: 'fuel', date, type: 'expense'
+  })
+  assert.equal((await adminDb.collection('accounts').doc(parent.id).get()).data().balance, 352)
+  await transactionsStore.updateTransaction(parentExpense.id, {
+    accountId: card.id, amount: -48, installments: 3, description: 'Gasolina de la moto', categoryId: 'fuel', date, type: 'expense'
+  })
+  assert.equal((await adminDb.collection('accounts').doc(parent.id).get()).data().balance, 400)
+  assert.equal((await adminDb.collection('accounts').doc(card.id).get()).data().balance, -248)
+  assert.equal((await adminDb.collection('transactions').doc(parentExpense.id).get()).data().installments, 3)
+
+  await transactionsStore.updateTransaction(parentExpense.id, {
+    accountId: parent.id, amount: -40, installments: 3, description: 'Gasolina de la moto', categoryId: 'fuel', date, type: 'expense'
+  })
+  assert.equal((await adminDb.collection('accounts').doc(card.id).get()).data().balance, -200)
+  assert.equal((await adminDb.collection('accounts').doc(parent.id).get()).data().balance, 360)
+  assert.equal((await adminDb.collection('transactions').doc(parentExpense.id).get()).data().installments, 1)
+  await transactionsStore.deleteTransaction(parentExpense.id)
+  assert.equal((await adminDb.collection('accounts').doc(parent.id).get()).data().balance, 400)
+  assert.equal(accountsStore.netWorthByCurrency.COP, totalBefore + 400)
 })
 
 test('funded opening allocations retain transfer identity through edits and clear their link on reversal', async () => {

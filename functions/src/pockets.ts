@@ -282,8 +282,8 @@ function assertSupportedPocketMovement(
     throw new Error('El monto y la moneda del movimiento no son válidos.')
   }
   if (data.mirrorOf) throw new Error('Los movimientos espejo no se pueden combinar con bolsillos.')
-  if ((source.type === 'credit' || destination?.type === 'credit') &&
-      (movement.type !== 'transfer' || source.parentAccountId != null || destination?.parentAccountId != null)) {
+  if (movement.type === 'transfer' && (source.type === 'credit' || destination?.type === 'credit') &&
+      (source.parentAccountId != null || destination?.parentAccountId != null)) {
     throw new Error('Las transferencias con tarjetas requieren cuentas principales, no bolsillos.')
   }
   if (movement.type === 'transfer') {

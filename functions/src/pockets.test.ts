@@ -105,3 +105,47 @@ test("an agent-side edit into a type without budget drops the stored budget", as
   assert.equal(read("transactions/t1")?.type, "transfer");
   assert.equal("budgetId" in (read("transactions/t1") ?? {}), false);
 });
+
+test("editing an expense between a pocket-related account and a credit card updates both balances and installments", async () => {
+  const { db, read } = fakeDb({
+    ...fixtures(null, {}),
+    "accounts/bank": { workspaceId: "ws", type: "savings", balance: 500, currency: "USD", childAccountIds: ["pocket"] },
+    "accounts/pocket": {
+      workspaceId: "ws", type: "savings", balance: 100, currency: "USD",
+      parentAccountId: "bank", childAccountIds: [], pocketActivity: true
+    },
+    "accounts/card": { workspaceId: "ws", type: "credit", balance: -200, limit: 1000, currency: "USD" }
+  });
+  const { id } = await mutateWorkspaceTransaction(db, {
+    kind: "created", userId: "u1", workspaceId: "ws",
+    movement: { accountId: "bank", type: "expense", amount: -48, categoryId: "fuel", description: "Gasolina", date: new Date("2026-10-26T12:00:00Z") } as never
+  });
+  assert.equal(read("accounts/bank")?.balance, 452);
+
+  await mutateWorkspaceTransaction(db, {
+    kind: "updated", userId: "u1", workspaceId: "ws", transactionId: id,
+    movement: { accountId: "card", type: "expense", amount: -48, installments: 3, categoryId: "fuel", description: "Gasolina", date: new Date("2026-10-26T12:00:00Z") } as never
+  });
+  assert.equal(read("accounts/bank")?.balance, 500);
+  assert.equal(read("accounts/card")?.balance, -248);
+  assert.equal(read(`transactions/${id}`)?.accountId, "card");
+  assert.equal(read(`transactions/${id}`)?.installments, 3);
+
+  await mutateWorkspaceTransaction(db, {
+    kind: "updated", userId: "u1", workspaceId: "ws", transactionId: id,
+    movement: { accountId: "pocket", type: "expense", amount: -30, installments: 3, categoryId: "fuel", description: "Gasolina", date: new Date("2026-10-26T12:00:00Z") } as never
+  });
+  assert.equal(read("accounts/card")?.balance, -200);
+  assert.equal(read("accounts/pocket")?.balance, 70);
+  assert.equal(read(`transactions/${id}`)?.accountId, "pocket");
+  assert.equal(read(`transactions/${id}`)?.installments, 1);
+
+  await assert.rejects(
+    mutateWorkspaceTransaction(db, {
+      kind: "updated", userId: "u1", workspaceId: "ws", transactionId: id,
+      movement: { accountId: "pocket", toAccountId: "card", type: "transfer", amount: 30, description: "Invalid pocket card transfer", date: new Date("2026-10-26T12:00:00Z") } as never
+    }),
+    /Las transferencias con tarjetas requieren cuentas principales, no bolsillos/
+  );
+});
+
