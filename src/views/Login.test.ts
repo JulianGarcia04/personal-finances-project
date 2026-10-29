@@ -27,8 +27,10 @@ test('login offers password recovery with a neutral confirmation', () => {
   assert.match(handler, /PASSWORD_RESET_NOTICE/)
 })
 
-test('login maps every auth failure through the shared messages', () => {
-  assert.match(login, /authErrorMessage\(error\)/)
+test('login maps every auth failure through the shared messages of its flow', () => {
+  assert.match(block(login, /const handleSubmit = async/), /authErrorMessage\(error, 'email'\)/)
+  assert.match(block(login, /const handleGoogle = async/), /authErrorMessage\(error, 'google'\)/)
+  assert.match(block(login, /const handleReset = async/), /authErrorMessage\(error, 'reset'\)/)
   assert.doesNotMatch(login, /err\.code === /)
 })
 

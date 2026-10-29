@@ -215,7 +215,7 @@ const handleSubmit = async () => {
     router.push({ name: 'Dashboard' })
   } catch (error) {
     console.error('Auth Error:', error)
-    errorMessage.value = authErrorMessage(error)
+    errorMessage.value = authErrorMessage(error, 'email')
   } finally {
     loading.value = false
   }
@@ -231,7 +231,7 @@ const handleGoogle = async () => {
     router.push({ name: 'Dashboard' })
   } catch (error) {
     console.error('Google Auth Error:', error)
-    errorMessage.value = authErrorMessage(error)
+    errorMessage.value = authErrorMessage(error, 'google')
   } finally {
     loading.value = false
   }
@@ -247,7 +247,7 @@ const handleReset = async () => {
     noticeMessage.value = PASSWORD_RESET_NOTICE
   } catch (error) {
     console.error('Password Reset Error:', error)
-    errorMessage.value = authErrorMessage(error)
+    errorMessage.value = authErrorMessage(error, 'reset')
   } finally {
     loading.value = false
   }

@@ -43,23 +43,33 @@ test('display name falls back to the email prefix, then to Usuario', () => {
 })
 
 test('existing auth error messages are unchanged', () => {
-  assert.equal(authErrorMessage({ code: 'auth/invalid-credential' }), 'Correo o contraseña incorrectos.')
-  assert.equal(authErrorMessage({ code: 'auth/email-already-in-use' }), 'El correo electrónico ya está registrado.')
-  assert.equal(authErrorMessage({ code: 'auth/weak-password' }), 'La contraseña debe tener al menos 6 caracteres.')
-  assert.equal(authErrorMessage({ code: 'auth/other', message: 'Boom' }), 'Boom')
-  assert.equal(authErrorMessage({}), 'Ocurrió un error inesperado.')
+  for (const flow of ['email', 'google', 'reset'] as const) {
+    assert.equal(authErrorMessage({ code: 'auth/invalid-credential' }, flow), 'Correo o contraseña incorrectos.')
+    assert.equal(authErrorMessage({ code: 'auth/email-already-in-use' }, flow), 'El correo electrónico ya está registrado.')
+    assert.equal(authErrorMessage({ code: 'auth/weak-password' }, flow), 'La contraseña debe tener al menos 6 caracteres.')
+    assert.equal(authErrorMessage({ code: 'auth/other', message: 'Boom' }, flow), 'Boom')
+    assert.equal(authErrorMessage({}, flow), 'Ocurrió un error inesperado.')
+  }
+})
+
+test('email sign-in keeps the original Firebase text for codes it never translated', () => {
+  for (const code of ['auth/too-many-requests', 'auth/invalid-email']) {
+    const message = `Firebase: Error (${code}).`
+    assert.equal(authErrorMessage({ code, message }, 'email'), message)
+  }
 })
 
 test('closing or replacing the Google popup is not an error', () => {
-  assert.equal(authErrorMessage({ code: 'auth/popup-closed-by-user' }), '')
-  assert.equal(authErrorMessage({ code: 'auth/cancelled-popup-request' }), '')
+  assert.equal(authErrorMessage({ code: 'auth/popup-closed-by-user' }, 'google'), '')
+  assert.equal(authErrorMessage({ code: 'auth/cancelled-popup-request' }, 'google'), '')
 })
 
 test('Google and recovery failures get actionable messages', () => {
-  assert.match(authErrorMessage({ code: 'auth/popup-blocked' }), /ventana/)
-  assert.match(authErrorMessage({ code: 'auth/account-exists-with-different-credential' }), /contraseña/)
-  assert.equal(authErrorMessage({ code: 'auth/invalid-email' }), 'El correo electrónico no es válido.')
-  assert.match(authErrorMessage({ code: 'auth/too-many-requests' }), /Demasiados intentos/)
+  assert.match(authErrorMessage({ code: 'auth/popup-blocked' }, 'google'), /ventana/)
+  assert.match(authErrorMessage({ code: 'auth/account-exists-with-different-credential' }, 'google'), /contraseña/)
+  assert.equal(authErrorMessage({ code: 'auth/invalid-email' }, 'reset'), 'El correo electrónico no es válido.')
+  assert.match(authErrorMessage({ code: 'auth/too-many-requests' }, 'reset'), /Demasiados intentos/)
+  assert.match(authErrorMessage({ code: 'auth/too-many-requests' }, 'google'), /Demasiados intentos/)
 })
 
 test('password reset notice does not reveal whether the email exists', () => {
