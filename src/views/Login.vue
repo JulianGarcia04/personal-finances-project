@@ -8,9 +8,7 @@
     <div class="w-full max-w-md glass-panel rounded-3xl p-6 sm:p-8 md:p-10 relative z-10 shadow-2xl border border-white/5">
       <!-- Title & Branding -->
       <div class="flex flex-col items-center mb-8 text-center">
-        <div class="w-12 h-12 rounded-2xl bg-gradient-to-tr from-accent-emerald to-accent-violet flex items-center justify-center shadow-glow-emerald mb-4">
-          <span class="font-display font-extrabold text-background text-xl">V</span>
-        </div>
+        <LynorLogo layout="mark" mark-class="w-12 h-12" class="mb-4" />
         <h2 class="font-display font-bold text-2xl sm:text-3xl tracking-wide text-text-primary">
           {{ isReset ? 'Recupera tu contraseña' : isRegister ? 'Crear una Cuenta' : 'Bienvenido a Lynor Finanzas' }}
         </h2>
@@ -169,6 +167,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import LynorLogo from '@/components/LynorLogo.vue'
 import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { PASSWORD_RESET_NOTICE, authErrorMessage } from '@/lib/authProfile'

@@ -5,12 +5,7 @@
       v-if="authStore.isAuthenticated"
       class="lg:hidden fixed top-0 left-0 right-0 h-[calc(4rem+env(safe-area-inset-top))] pt-safe glass-panel border-b border-white/5 z-30 flex items-center px-4 backdrop-blur-md bg-background/80"
     >
-      <div class="flex items-center space-x-3">
-        <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-accent-emerald to-accent-violet flex items-center justify-center shadow-glow-emerald">
-          <span class="font-display font-extrabold text-background text-sm">V</span>
-        </div>
-        <span class="font-display font-bold text-lg tracking-wider text-text-primary">LYNOR FINANZAS</span>
-      </div>
+      <LynorLogo mark-class="w-7 h-7" class="text-lg" />
     </header>
 
     <!-- Overlay when mobile menu open -->
@@ -35,13 +30,9 @@
       <!-- Top Section: Brand Logo -->
       <div>
         <div class="flex items-center space-x-3 mb-6 px-2 py-4">
-          <div class="shrink-0 w-9 h-9 rounded-xl bg-gradient-to-tr from-accent-emerald to-accent-violet flex items-center justify-center shadow-glow-emerald">
-            <span class="font-display font-extrabold text-background text-lg">V</span>
-          </div>
-          <div>
-            <h1 class="font-display font-bold text-xl tracking-wider text-text-primary">LYNOR</h1>
-            <p class="text-[10px] tracking-widest text-accent-emerald font-semibold uppercase">Finanzas IA</p>
-          </div>
+          <h1 class="min-w-0">
+            <LynorLogo layout="stacked" mark-class="w-10 h-10" class="text-lg" />
+          </h1>
           <button
             type="button"
             @click="isOpen = false"
@@ -196,6 +187,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useBodyScrollLock } from '@/components/ui/useBodyScrollLock'
+import LynorLogo from '@/components/LynorLogo.vue'
 import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useWorkspacesStore } from '@/stores/workspacesStore'

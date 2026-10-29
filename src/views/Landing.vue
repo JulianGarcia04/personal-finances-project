@@ -5,12 +5,7 @@
 
     <!-- Header -->
     <header class="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 pt-[calc(1rem+env(safe-area-inset-top))] flex items-center justify-between">
-      <div class="flex items-center gap-2">
-        <span class="w-9 h-9 rounded-xl bg-gradient-to-tr from-accent-emerald to-accent-violet flex items-center justify-center shadow-glow-emerald">
-          <span class="font-display font-extrabold text-background">V</span>
-        </span>
-        <span class="font-display font-bold text-lg text-text-primary">Lynor Finanzas</span>
-      </div>
+      <LynorLogo class="text-lg" />
       <a
         :href="loginHref"
         class="min-h-11 px-4 flex items-center text-sm font-semibold text-text-secondary hover:text-text-primary transition-colors"
@@ -103,6 +98,7 @@
 
 <script setup lang="ts">
 import { Users, CreditCard, Sparkles, PiggyBank, MessageCircle, Download } from 'lucide-vue-next'
+import LynorLogo from '@/components/LynorLogo.vue'
 
 // Plain links, no router: the static landing site renders this same component,
 // with `appUrl` pointing at the app's origin ('' inside the app itself).

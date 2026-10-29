@@ -78,6 +78,24 @@ test('every page calls the product Lynor Finanzas, never Vault', () => {
   assert.equal(JSON.parse(jsonLd).name, 'Lynor Finanzas')
 })
 
+test('the landing shows the Lynor symbol with its descriptor and loads Sora', async () => {
+  const { LYNOR_MARK_PATHS } = await import('../../src/lib/brand.ts')
+  const html = page('index.html')
+  for (const d of LYNOR_MARK_PATHS) assert.ok(html.includes(`d="${d}"`))
+  assert.match(html, />Lynor<\/span>\s*<span[^>]*>Finanzas<\/span>/)
+  assert.doesNotMatch(html, />V<\/span>/)
+  assert.match(html, /family=Sora:wght@/)
+  assert.doesNotMatch(html, /Outfit/)
+})
+
+test('Tailwind scans every component the landing renders, so their classes ship', () => {
+  const source = (path) => readFileSync(new URL(`../../src/${path}`, import.meta.url), 'utf8')
+  const css = readFileSync(new URL('../src/styles/global.css', import.meta.url), 'utf8')
+  const components = [...source('views/Landing.vue').matchAll(/from '@\/(components\/\w+\.vue)'/g)].map((match) => match[1])
+  assert.ok(components.length > 0)
+  for (const component of components) assert.ok(css.includes(`@source "../../../src/${component}";`), component)
+})
+
 test('sitemap and robots.txt point crawlers at every page', () => {
   assert.ok(existsSync(new URL('../dist/sitemap-index.xml', import.meta.url)))
   const sitemap = page('sitemap-0.xml')
