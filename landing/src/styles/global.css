@@ -1,0 +1,5 @@
+@import "../../../src/style.css";
+
+/* The shared app components this site renders live outside its root. */
+@source "../../../src/views/Landing.vue";
+@source "../../../src/components/LegalDocument.vue";

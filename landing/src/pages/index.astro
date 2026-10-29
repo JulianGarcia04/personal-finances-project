@@ -1,0 +1,22 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro'
+import Landing from '@/views/Landing.vue'
+
+const description =
+  'Cuentas, bolsillos, tarjetas con cuotas y gastos compartidos con tu pareja, en un solo lugar. Gratis durante la beta.'
+
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: 'Vault',
+  applicationCategory: 'FinanceApplication',
+  operatingSystem: 'Web',
+  inLanguage: 'es',
+  description,
+  offers: { '@type': 'Offer', price: '0', priceCurrency: 'COP' }
+}
+---
+
+<BaseLayout title="Vault | Finanzas personales y de pareja" description={description} jsonLd={jsonLd}>
+  <Landing appUrl={import.meta.env.PUBLIC_APP_URL ?? ''} />
+</BaseLayout>

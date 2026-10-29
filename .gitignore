@@ -29,3 +29,6 @@ dist-ssr
 .env.local
 # Local Pi runtime state
 .atl/
+
+# Astro generated types
+.astro

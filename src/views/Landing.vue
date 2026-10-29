@@ -11,12 +11,12 @@
         </span>
         <span class="font-display font-bold text-lg text-text-primary">Vault</span>
       </div>
-      <router-link
-        :to="{ name: 'Login' }"
+      <a
+        :href="loginHref"
         class="min-h-11 px-4 flex items-center text-sm font-semibold text-text-secondary hover:text-text-primary transition-colors"
       >
         Iniciar sesión
-      </router-link>
+      </a>
     </header>
 
     <main class="relative z-10 max-w-6xl mx-auto px-4 sm:px-6">
@@ -32,12 +32,12 @@
           Registra cuentas, bolsillos y tarjetas con cuotas. Comparte los gastos de la casa con tu pareja y sepan siempre quién le debe a quién, sin hojas de cálculo.
         </p>
         <div class="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
-          <router-link
-            :to="{ name: 'Login', query: { modo: 'registro' } }"
+          <a
+            :href="signupHref"
             class="min-h-11 px-6 py-3.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald transition-colors flex items-center justify-center"
           >
             Crear cuenta gratis
-          </router-link>
+          </a>
           <a
             href="#como-funciona"
             class="min-h-11 px-6 py-3.5 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-text-primary font-semibold text-sm transition-colors flex items-center justify-center"
@@ -81,12 +81,12 @@
           <p class="mt-3 text-sm sm:text-base text-text-secondary max-w-xl mx-auto leading-relaxed">
             Vault está en beta y es gratis. Tus datos son tuyos: puedes exportarlos cuando quieras.
           </p>
-          <router-link
-            :to="{ name: 'Login', query: { modo: 'registro' } }"
+          <a
+            :href="signupHref"
             class="mt-6 inline-flex min-h-11 px-6 py-3.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald transition-colors items-center justify-center"
           >
             Crear cuenta gratis
-          </router-link>
+          </a>
         </div>
       </section>
     </main>
@@ -94,8 +94,8 @@
     <footer class="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] flex flex-col sm:flex-row gap-2 sm:gap-6 items-center justify-between text-xs text-text-muted">
       <span>© 2026 Vault</span>
       <nav class="flex gap-4">
-        <router-link to="/terminos" class="min-h-11 flex items-center hover:text-text-secondary">Términos</router-link>
-        <router-link to="/privacidad" class="min-h-11 flex items-center hover:text-text-secondary">Privacidad</router-link>
+        <a href="/terminos" class="min-h-11 flex items-center hover:text-text-secondary">Términos</a>
+        <a href="/privacidad" class="min-h-11 flex items-center hover:text-text-secondary">Privacidad</a>
       </nav>
     </footer>
   </div>
@@ -103,6 +103,12 @@
 
 <script setup lang="ts">
 import { Users, CreditCard, Sparkles, PiggyBank, MessageCircle, Download } from 'lucide-vue-next'
+
+// Plain links, no router: the static landing site renders this same component,
+// with `appUrl` pointing at the app's origin ('' inside the app itself).
+const props = withDefaults(defineProps<{ appUrl?: string }>(), { appUrl: '' })
+const signupHref = `${props.appUrl}/login?modo=registro`
+const loginHref = `${props.appUrl}/login`
 
 const features = [
   {

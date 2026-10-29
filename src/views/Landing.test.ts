@@ -16,10 +16,17 @@ test('landing speaks to couples and individuals and says the beta is free', () =
 })
 
 test('landing links to signup, login and both legal documents', () => {
-  assert.match(landing, /:to="\{ name: 'Login', query: \{ modo: 'registro' \} \}"/)
-  assert.match(landing, /:to="\{ name: 'Login' \}"/)
-  assert.match(landing, /to="\/terminos"/)
-  assert.match(landing, /to="\/privacidad"/)
+  assert.match(landing, /:href="signupHref"/)
+  assert.match(landing, /:href="loginHref"/)
+  assert.ok(landing.includes('const signupHref = `${props.appUrl}/login?modo=registro`'))
+  assert.ok(landing.includes('const loginHref = `${props.appUrl}/login`'))
+  assert.match(landing, /href="\/terminos"/)
+  assert.match(landing, /href="\/privacidad"/)
+})
+
+test('landing renders without the app router so the static site can reuse it', () => {
+  assert.doesNotMatch(landing, /router-link|useRouter|useRoute|Store\(/)
+  assert.match(landing, /withDefaults\(defineProps<\{ appUrl\?: string \}>\(\), \{ appUrl: '' \}\)/)
 })
 
 test('signup link opens the login screen in register mode', () => {
