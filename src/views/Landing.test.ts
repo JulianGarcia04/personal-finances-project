@@ -33,24 +33,14 @@ test('signup link opens the login screen in register mode', () => {
   assert.match(login, /route\.query\.modo === 'registro' \? 'register' : 'login'/)
 })
 
-test('landing is a guest-only route', () => {
-  const from = router.indexOf("path: '/bienvenida'")
-  assert.ok(from >= 0)
-  const route = router.slice(from, from + 200)
-  assert.match(route, /name: 'Landing'/)
-  assert.match(route, /meta: \{ guestOnly: true \}/)
+test('the app no longer serves the landing: the static site on the landing domain does', () => {
+  assert.doesNotMatch(router, /\/bienvenida|name: 'Landing'|isInstalledApp/)
 })
 
-test('signed-out visits to the dashboard show the landing, except in the installed app', () => {
+test('signed-out visits to every protected route open the login', () => {
   const guard = router.slice(router.indexOf('router.beforeEach'))
-  assert.match(guard, /to\.name === 'Dashboard' && !isInstalledApp\(\) \? \{ name: 'Landing' \} : \{ name: 'Login' \}/)
-  assert.match(router, /matchMedia\('\(display-mode: standalone\)'\)/)
-})
-
-test('every other protected route still redirects to the login', () => {
-  const guard = router.slice(router.indexOf('router.beforeEach'))
-  assert.match(guard, /if \(to\.meta\.requiresAuth && !isAuth\)/)
-  for (const name of ['Accounts', 'Transactions', 'Import', 'Settings', 'Agent', 'Goals']) {
+  assert.match(guard, /if \(to\.meta\.requiresAuth && !isAuth\) \{\s*next\(\{ name: 'Login' \}\)/)
+  for (const name of ['Dashboard', 'Accounts', 'Transactions', 'Import', 'Settings', 'Agent', 'Goals']) {
     const from = router.indexOf(`name: '${name}'`)
     assert.match(router.slice(from, from + 160), /meta: \{ requiresAuth: true \}/, name)
   }

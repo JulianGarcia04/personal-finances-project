@@ -1,4 +1,5 @@
 ---
+import { PUBLIC_APP_URL } from 'astro:env/client'
 import BaseLayout from '../layouts/BaseLayout.astro'
 import Landing from '@/views/Landing.vue'
 
@@ -18,5 +19,5 @@ const jsonLd = {
 ---
 
 <BaseLayout title="Vault | Finanzas personales y de pareja" description={description} jsonLd={jsonLd}>
-  <Landing appUrl={import.meta.env.PUBLIC_APP_URL ?? ''} />
+  <Landing appUrl={PUBLIC_APP_URL} />
 </BaseLayout>
