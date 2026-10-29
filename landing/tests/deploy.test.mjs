@@ -48,3 +48,12 @@ test('Firebase Hosting serves the app and the landing as separate targets', () =
   assert.equal(landing.rewrites, undefined, 'missing pages answer 404, not the home page')
   assert.deepEqual(landing.predeploy, ['npm run landing:build'])
 })
+
+test('every hosting target is mapped for the default project, so `pnpm emulators` starts', () => {
+  const firebase = JSON.parse(readFileSync(new URL('../../firebase.json', import.meta.url), 'utf8'))
+  const rc = JSON.parse(readFileSync(new URL('../../.firebaserc', import.meta.url), 'utf8'))
+  const mapped = rc.targets?.[rc.projects.default]?.hosting ?? {}
+  for (const { target } of firebase.hosting) {
+    assert.equal(mapped[target]?.length, 1, `hosting target "${target}" is mapped to one site`)
+  }
+})

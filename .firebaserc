@@ -7,6 +7,9 @@
       "hosting": {
         "app": [
           "vault-41b34"
+        ],
+        "landing": [
+          "lynor-finances"
         ]
       }
     }
