@@ -42,9 +42,10 @@ test('terms state that the assistant is not financial advice', () => {
   assert.match(text('terms'), /no constituye asesoría financiera/)
 })
 
-test('controller identity is still a placeholder and is detected as pending', () => {
-  assert.equal(hasPendingPlaceholders(), true)
-  assert.equal(hasPendingPlaceholders({ name: 'Vault SAS', id: 'NIT 900.000.000-1', address: 'Bogotá', email: 'hola@vault.co' }), false)
+test('controller fields still in brackets are detected as pending', () => {
+  const filled = { name: 'Vault SAS', id: 'NIT 900.000.000-1', address: 'Bogotá', email: 'hola@vault.co' }
+  assert.equal(hasPendingPlaceholders(filled), false)
+  assert.equal(hasPendingPlaceholders({ ...filled, email: '[CORREO DE ATENCIÓN DE DATOS PERSONALES]' }), true)
 })
 
 test('consent records the accepted versions, the method and the given timestamp', () => {
