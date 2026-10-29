@@ -9,6 +9,12 @@ const routes: Array<RouteRecordRaw> = [
     meta: { guestOnly: true }
   },
   {
+    path: '/bienvenida',
+    name: 'Landing',
+    component: () => import('@/views/Landing.vue'),
+    meta: { guestOnly: true }
+  },
+  {
     path: '/terminos',
     name: 'Terms',
     component: () => import('@/views/Legal.vue'),
@@ -69,6 +75,9 @@ const router = createRouter({
   routes
 })
 
+// The installed app opens straight to the login, never the landing.
+const isInstalledApp = () => window.matchMedia('(display-mode: standalone)').matches
+
 // Guards de navegación basados en autenticación de Firebase
 router.beforeEach(async (to, _from, next) => {
   const authStore = useAuthStore()
@@ -80,7 +89,7 @@ router.beforeEach(async (to, _from, next) => {
   const isAuth = authStore.isAuthenticated
 
   if (to.meta.requiresAuth && !isAuth) {
-    next({ name: 'Login' })
+    next(to.name === 'Dashboard' && !isInstalledApp() ? { name: 'Landing' } : { name: 'Login' })
   } else if (to.meta.guestOnly && isAuth) {
     next({ name: 'Dashboard' })
   } else {

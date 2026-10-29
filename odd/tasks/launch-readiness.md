@@ -12,7 +12,7 @@ Source: the assistant's roadmap step 1, "Bloqueantes sin cobro: legal, login, bo
 - **S4 Data export.** Roadmap gap: "También faltan borrar la cuenta y exportar los datos." A signed-in user can download the active workspace's data from Settings.
 - **S5 Account deletion.** Same roadmap gap as S4. Blocked: product decision on what happens to shared workspaces the user owns or belongs to.
 - **S6 Measurement.** Roadmap gap: "no hay analítica ni monitoreo de errores." Blocked: provider choice and accounts.
-- **S7 Landing.** Roadmap gap: "el router solo tiene /login y la app. No hay página pública ni página de precios." Blocked: first customer segment (question asked in L1 reply, unanswered).
+- **S7 Landing.** Roadmap gap: "el router solo tiene /login y la app. No hay página pública ni página de precios." First customer (L7): "el primer cliente son una pareja que comparten gastos... y otra persona sola (yo)". A public landing speaks to couples who share expenses and to individuals, states that the beta is free, and links to signup, login and both legal documents. Signed-out visits to `/` show it; the installed app (standalone) keeps opening the login, and every other protected route keeps redirecting to the login. Assumption: signup ("Crear cuenta gratis") replaces the roadmap's waitlist, because signup is already open and free during the beta, and a waitlist would need public Firestore writes. Link previews get Open Graph tags.
 
 ## Tasks
 
@@ -23,7 +23,7 @@ Source: the assistant's roadmap step 1, "Bloqueantes sin cobro: legal, login, bo
 | T3 | S4 | inline | done (fetch not run against Firestore yet) | RED 3 fail → GREEN 6/6 (`src/lib/dataExport.test.ts`, `src/views/Settings.test.ts`); `pnpm test` 251/251; `pnpm build` OK; read-only, same `workspaceId` queries the stores use; Risk: none |
 | T4 | S5 | inline | blocked (decision) | |
 | T5 | S6 | inline | blocked (accounts) | |
-| T6 | S7 | inline | blocked (decision) | |
+| T6 | S7 | inline | done | RED (Landing.vue missing) → GREEN 7/7 (`src/views/Landing.test.ts`); `pnpm test` 259/259; `pnpm build` OK; browser: signed-out `/` → `/bienvenida`, CTA → `/login?modo=registro` opens register with consent, `/accounts` → `/login`, no horizontal overflow at 390px, desktop 1280px checked; Risk: none (guard change pinned for every other protected route and for the installed app) |
 
 Route evidence: each unit is one understood change under ~400 lines with no parallel independent unit launched alongside it, so no Writer trigger fires.
 
@@ -35,3 +35,4 @@ Route evidence: each unit is one understood change under ~400 lines with no para
 - **L4 (T2):** Google sign-in records consent by unequivocal conduct (notice under the button, Decreto 1377 de 2013 art. 7); email signup by an unticked required checkbox. Accounts created before this change have no `legalConsent`; a re-consent gate for them (and for future version bumps) is a follow-up, not built. The policy says deletion is requested by email until S5 lands.
 - **L5 (verifier, T1):** B1: email login/register changed the text shown for `auth/too-many-requests` and `auth/invalid-email`, which nobody asked for. Correction: `authErrorMessage(error, flow)` keeps the original messages for the email flow and translates the new codes only for Google and password recovery. Recheck: `email sign-in keeps the original Firebase text…` failed before the fix and passes after. Advisories, not built: (1) Google sign-in with the email of an existing password account replaces the password provider (Firebase trusted-provider behavior), so that user can no longer log in with the password; (2) if `ensureUserProfile` fails after the popup, the user stays signed in without a profile until retrying, a gap baseline `signUp` already had; (3) Login tests are source assertions, the flows themselves were proven by the verifier's emulator probes.
 - **L6 (incident):** the verifier's scratch overlay rewrote 3 symlinks and 6 `.bin` shims in the repository `node_modules` to point at its temp dir, breaking `pnpm build`. `pnpm install --frozen-lockfile --offline` (also with `--force`) reported "Already up to date" and did not repair it; the links and the `NODE_PATH` segment were restored by hand to the repository's own `.pnpm` targets. Build and suite pass again; scratch removed.
+- **L7 (2026-10-29, user):** "el primer cliente son una pareja que comparten gastos... y otra persona sola (yo)"

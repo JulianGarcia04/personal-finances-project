@@ -168,7 +168,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { PASSWORD_RESET_NOTICE, authErrorMessage } from '@/lib/authProfile'
@@ -176,9 +176,10 @@ import { PASSWORD_RESET_NOTICE, authErrorMessage } from '@/lib/authProfile'
 const authStore = useAuthStore()
 const settingsStore = useSettingsStore()
 const router = useRouter()
+const route = useRoute()
 
 type Mode = 'login' | 'register' | 'reset'
-const mode = ref<Mode>('login')
+const mode = ref<Mode>(route.query.modo === 'registro' ? 'register' : 'login')
 const isRegister = computed(() => mode.value === 'register')
 const isReset = computed(() => mode.value === 'reset')
 const name = ref('')
