@@ -22,7 +22,7 @@ test("resolveSmtpConfig defaults the sender to the SMTP user and honors ALERTS_F
   assert.deepEqual(resolveSmtpConfig({ user: " a@gmail.com ", pass: "app pass" }), {
     user: "a@gmail.com",
     pass: "app pass",
-    from: "Vault <a@gmail.com>"
+    from: "Lynor Finanzas <a@gmail.com>"
   });
   assert.equal(resolveSmtpConfig({ user: "a@gmail.com", pass: "x", from: "Alertas <b@gmail.com>" })?.from, "Alertas <b@gmail.com>");
 });

@@ -9,7 +9,7 @@
         <span class="w-9 h-9 rounded-xl bg-gradient-to-tr from-accent-emerald to-accent-violet flex items-center justify-center shadow-glow-emerald">
           <span class="font-display font-extrabold text-background">V</span>
         </span>
-        <span class="font-display font-bold text-lg text-text-primary">Vault</span>
+        <span class="font-display font-bold text-lg text-text-primary">Lynor Finanzas</span>
       </div>
       <a
         :href="loginHref"
@@ -79,7 +79,7 @@
         <div class="glass-panel rounded-3xl p-6 sm:p-10 border border-white/5 text-center">
           <h2 class="font-display font-bold text-2xl sm:text-3xl text-text-primary">Empieza hoy, sin costo</h2>
           <p class="mt-3 text-sm sm:text-base text-text-secondary max-w-xl mx-auto leading-relaxed">
-            Vault está en beta y es gratis. Tus datos son tuyos: puedes exportarlos cuando quieras.
+            Lynor Finanzas está en beta y es gratis. Tus datos son tuyos: puedes exportarlos cuando quieras.
           </p>
           <a
             :href="signupHref"
@@ -92,7 +92,7 @@
     </main>
 
     <footer class="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] flex flex-col sm:flex-row gap-2 sm:gap-6 items-center justify-between text-xs text-text-muted">
-      <span>© 2026 Vault</span>
+      <span>© 2026 Lynor Finanzas</span>
       <nav class="flex gap-4">
         <a href="/terminos" class="min-h-11 flex items-center hover:text-text-secondary">Términos</a>
         <a href="/privacidad" class="min-h-11 flex items-center hover:text-text-secondary">Privacidad</a>
@@ -114,7 +114,7 @@ const features = [
   {
     icon: Users,
     title: 'Gastos de pareja sin cuentas raras',
-    body: 'Un espacio compartido para la casa y uno personal para cada uno. Vault lleva quién pagó qué y cuánto se deben, y lo liquidan cuando quieran.'
+    body: 'Un espacio compartido para la casa y uno personal para cada uno. Lynor Finanzas lleva quién pagó qué y cuánto se deben, y lo liquidan cuando quieran.'
   },
   {
     icon: CreditCard,
@@ -124,7 +124,7 @@ const features = [
   {
     icon: Sparkles,
     title: 'Importa tus extractos con IA',
-    body: 'Sube el extracto del banco o pega las notificaciones, y Vault los convierte en movimientos que revisas antes de guardar.'
+    body: 'Sube el extracto del banco o pega las notificaciones, y Lynor Finanzas los convierte en movimientos que revisas antes de guardar.'
   },
   {
     icon: PiggyBank,
@@ -144,7 +144,7 @@ const features = [
 ]
 
 const steps = [
-  { title: 'Crea tu cuenta', body: 'Con tu correo o tu cuenta de Google. Vault crea tu espacio personal.' },
+  { title: 'Crea tu cuenta', body: 'Con tu correo o tu cuenta de Google. Lynor Finanzas crea tu espacio personal.' },
   { title: 'Invita a tu pareja', body: 'Creen un espacio compartido para los gastos de la casa; cada uno conserva el suyo.' },
   { title: 'Registra o importa', body: 'Anota tus movimientos o importa tus extractos, y mira en qué se va la plata.' }
 ]

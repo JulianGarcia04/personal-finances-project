@@ -52,6 +52,6 @@ test('export holds every workspace collection, the profile and the caps of each 
 })
 
 test('file name uses the workspace name and the local calendar day', () => {
-  assert.equal(exportFileName('Mi Casa & Co', new Date(2026, 9, 29, 23, 30)), 'vault-mi-casa-co-2026-10-29.json')
-  assert.equal(exportFileName('   ', new Date(2026, 0, 5)), 'vault-workspace-2026-01-05.json')
+  assert.equal(exportFileName('Mi Casa & Co', new Date(2026, 9, 29, 23, 30)), 'lynor-finanzas-mi-casa-co-2026-10-29.json')
+  assert.equal(exportFileName('   ', new Date(2026, 0, 5)), 'lynor-finanzas-workspace-2026-01-05.json')
 })

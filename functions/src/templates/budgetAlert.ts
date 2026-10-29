@@ -112,7 +112,7 @@ export function renderBudgetAlertEmail(input: BudgetAlertEmailInput): RenderedEm
     "",
     advice,
     "",
-    "Recibes este correo porque las alertas de presupuesto están activas en Vault. Puedes desactivarlas en Configuración."
+    "Recibes este correo porque las alertas de presupuesto están activas en Lynor Finanzas. Puedes desactivarlas en Configuración."
   ].join("\n");
 
   const accent = reached ? "#f43f5e" : "#f59e0b";
@@ -128,14 +128,14 @@ export function renderBudgetAlertEmail(input: BudgetAlertEmailInput): RenderedEm
 <body style="margin:0;padding:24px 12px;background:#0b0f14;font-family:Arial,Helvetica,sans-serif;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;margin:0 auto;background:#111827;border:1px solid #1f2937;border-radius:16px;">
     <tr><td style="padding:24px;">
-      <p style="margin:0 0 4px;color:#10b981;font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;">Vault · Alerta de presupuesto</p>
+      <p style="margin:0 0 4px;color:#10b981;font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;">Lynor Finanzas · Alerta de presupuesto</p>
       <h1 style="margin:0 0 6px;color:${accent};font-size:20px;line-height:1.3;">${escapeHtml(headline)}</h1>
       <p style="margin:0 0 20px;color:#94a3b8;font-size:13px;">${escapeHtml(scope)}</p>
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${htmlRows}</table>
       <p style="margin:20px 0 0;color:#cbd5e1;font-size:14px;line-height:1.5;">${escapeHtml(advice)}</p>
     </td></tr>
   </table>
-  <p style="max-width:520px;margin:16px auto 0;color:#64748b;font-size:12px;line-height:1.5;text-align:center;">Recibes este correo porque las alertas de presupuesto están activas en Vault. Puedes desactivarlas en Configuración.</p>
+  <p style="max-width:520px;margin:16px auto 0;color:#64748b;font-size:12px;line-height:1.5;text-align:center;">Recibes este correo porque las alertas de presupuesto están activas en Lynor Finanzas. Puedes desactivarlas en Configuración.</p>
 </body>
 </html>`;
 

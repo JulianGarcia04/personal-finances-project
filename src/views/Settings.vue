@@ -77,7 +77,7 @@
             <div class="p-4 sm:p-6 space-y-3">
               <div>
                 <h4 class="font-display font-medium text-sm text-text-primary">Invitar miembro</h4>
-                <p class="text-text-muted text-xs mt-1">Comparte este workspace con alguien ya registrado en Vault usando su correo.</p>
+                <p class="text-text-muted text-xs mt-1">Comparte este workspace con alguien ya registrado en Lynor Finanzas usando su correo.</p>
               </div>
               <form @submit.prevent="handleInviteUser" class="flex flex-col sm:flex-row gap-3">
                 <input
@@ -154,7 +154,7 @@
                   <span class="block font-display font-medium text-sm text-text-primary">Notificaciones push en este dispositivo</span>
                   <span class="block text-text-muted text-xs">Recibe en este dispositivo las mismas alertas de presupuesto (80 % y 100 %) que llegan por correo.</span>
                   <span class="block text-xs" :class="pushStatusClass" role="status" aria-live="polite">{{ pushStatusText }}</span>
-                  <span class="block text-text-muted text-xs">En iPhone o iPad primero usa «Compartir → Agregar a pantalla de inicio» y abre Vault desde ese ícono.</span>
+                  <span class="block text-text-muted text-xs">En iPhone o iPad primero usa «Compartir → Agregar a pantalla de inicio» y abre Lynor Finanzas desde ese ícono.</span>
                 </span>
                 <span class="relative inline-flex items-center shrink-0 min-h-11 -mt-2.5">
                   <input

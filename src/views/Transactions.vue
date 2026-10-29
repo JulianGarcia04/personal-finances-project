@@ -178,7 +178,7 @@
               <td class="py-4 px-3 font-medium min-w-[10rem] max-w-[14rem] xl:max-w-[18rem] 2xl:max-w-md">
                 <div class="truncate" :title="tx.description">{{ tx.description }}</div>
                 <div v-if="tx.notes" class="text-[11px] text-text-muted mt-0.5 whitespace-pre-wrap break-words">{{ tx.notes }}</div>
-                <div v-if="tx.reversedBy" class="mt-1 text-[10px] font-semibold text-accent-amber">Liquidación revertida en Vault</div>
+                <div v-if="tx.reversedBy" class="mt-1 text-[10px] font-semibold text-accent-amber">Liquidación revertida en Lynor Finanzas</div>
                 <div v-if="tx.settlementType === 'reversal'" class="mt-1 text-[10px] font-semibold text-accent-amber">Ajuste contable · sin movimiento bancario</div>
                 <div v-if="tx.installments && tx.installments > 1" class="text-[10px] text-accent-amber mt-1">
                   {{ tx.installments }} cuotas · {{ formatCurrency(getMonthlyInstallmentAmount(tx.amount, tx.installments), tx.currency || getAccountCurrency(tx.accountId)) }} / mes
@@ -257,8 +257,8 @@
                     v-if="transactionsStore.reversibleSettlementIds.includes(tx.id)"
                     @click="openSettlementReversal(tx)"
                     class="hover-device:opacity-0 hover-device:group-hover:opacity-100 hover-device:group-focus-within:opacity-100 focus-visible:opacity-100 p-2 rounded-lg text-accent-amber hover:bg-accent-amber/10 transition-all"
-                    title="Revertir liquidación · solo corrige la contabilidad de Vault"
-                    aria-label="Revertir liquidación en Vault"
+                    title="Revertir liquidación · solo corrige la contabilidad de Lynor Finanzas"
+                    aria-label="Revertir liquidación en Lynor Finanzas"
                   >
                     <RotateCcwIcon class="w-4 h-4" />
                   </button>
@@ -339,7 +339,7 @@
             <div class="min-w-0">
               <p class="text-sm font-medium text-text-primary break-words">{{ tx.description }}</p>
               <p v-if="tx.notes" class="text-[11px] text-text-muted mt-0.5 whitespace-pre-wrap break-words">{{ tx.notes }}</p>
-              <p v-if="tx.reversedBy" class="mt-1 text-[10px] font-semibold text-accent-amber">Liquidación revertida en Vault</p>
+              <p v-if="tx.reversedBy" class="mt-1 text-[10px] font-semibold text-accent-amber">Liquidación revertida en Lynor Finanzas</p>
               <p v-if="tx.settlementType === 'reversal'" class="mt-1 text-[10px] font-semibold text-accent-amber">Ajuste contable · sin movimiento bancario</p>
               <p v-if="tx.installments && tx.installments > 1" class="text-[10px] text-accent-amber mt-1">
                 {{ tx.installments }} cuotas · {{ formatCurrency(getMonthlyInstallmentAmount(tx.amount, tx.installments), tx.currency || getAccountCurrency(tx.accountId)) }} / mes
@@ -386,8 +386,8 @@
               v-if="transactionsStore.reversibleSettlementIds.includes(tx.id)"
               @click="openSettlementReversal(tx)"
               class="tap flex items-center justify-center rounded-lg text-accent-amber hover:bg-accent-amber/10 active:bg-accent-amber/10 transition-all"
-              title="Revertir liquidación · solo corrige la contabilidad de Vault"
-              aria-label="Revertir liquidación en Vault"
+              title="Revertir liquidación · solo corrige la contabilidad de Lynor Finanzas"
+              aria-label="Revertir liquidación en Lynor Finanzas"
             >
               <RotateCcwIcon class="w-4 h-4" />
             </button>
@@ -692,15 +692,15 @@
             <RotateCcwIcon class="w-5 h-5" />
           </div>
           <div class="min-w-0">
-            <h3 class="font-display font-bold text-lg sm:text-xl text-text-primary">Revertir liquidación en Vault</h3>
+            <h3 class="font-display font-bold text-lg sm:text-xl text-text-primary">Revertir liquidación en Lynor Finanzas</h3>
             <p class="text-text-secondary text-xs mt-1 break-words">{{ settlementToReverse?.description }}</p>
           </div>
         </div>
       </template>
 
       <div v-if="settlementToReverse" class="rounded-2xl border border-accent-amber/20 bg-accent-amber/[0.05] p-4 space-y-3 text-sm text-text-secondary">
-        <p>Se crearán movimientos compensatorios en Vault para restaurar las proyecciones de las cuentas. <strong class="text-text-primary tabular-nums">{{ formatCurrency(Math.abs(settlementToReverse.amount), settlementToReverse.currency || getAccountCurrency(settlementToReverse.accountId)) }}</strong> volverá a quedar pendiente en la cuenta puente.</p>
-        <p class="font-semibold text-accent-amber">Esto es únicamente una corrección contable de Vault. No deshace ni devuelve el movimiento bancario real y no inicia ningún movimiento de dinero.</p>
+        <p>Se crearán movimientos compensatorios en Lynor Finanzas para restaurar las proyecciones de las cuentas. <strong class="text-text-primary tabular-nums">{{ formatCurrency(Math.abs(settlementToReverse.amount), settlementToReverse.currency || getAccountCurrency(settlementToReverse.accountId)) }}</strong> volverá a quedar pendiente en la cuenta puente.</p>
+        <p class="font-semibold text-accent-amber">Esto es únicamente una corrección contable de Lynor Finanzas. No deshace ni devuelve el movimiento bancario real y no inicia ningún movimiento de dinero.</p>
         <p>Después puedes registrar por separado la liquidación ya realizada con las cuentas correctas.</p>
       </div>
 

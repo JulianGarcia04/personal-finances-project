@@ -12,7 +12,7 @@
           <span class="font-display font-extrabold text-background text-xl">V</span>
         </div>
         <h2 class="font-display font-bold text-2xl sm:text-3xl tracking-wide text-text-primary">
-          {{ isReset ? 'Recupera tu contraseña' : isRegister ? 'Crear una Cuenta' : 'Bienvenido a Vault' }}
+          {{ isReset ? 'Recupera tu contraseña' : isRegister ? 'Crear una Cuenta' : 'Bienvenido a Lynor Finanzas' }}
         </h2>
         <p class="text-text-secondary text-sm mt-2">
           {{ isReset ? 'Te enviaremos un enlace para crear una contraseña nueva' : isRegister ? 'Registra tus datos para empezar a gestionar tus finanzas' : 'Inicia sesión para entrar a tu bóveda personal' }}

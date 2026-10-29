@@ -65,6 +65,19 @@ test('landing describes the app for search engines', () => {
   assert.equal(data.offers.price, '0')
 })
 
+test('every page calls the product Lynor Finanzas, never Vault', () => {
+  for (const file of ['index.html', 'terminos.html', 'privacidad.html']) {
+    const html = page(file)
+    assert.doesNotMatch(html, /\b(Vault|VAULT)\b/, file)
+    assert.equal(meta(html, 'property', 'og:site_name'), 'Lynor Finanzas', file)
+  }
+  assert.match(page('index.html'), /<title>Lynor Finanzas \|/)
+  assert.match(page('terminos.html'), /<title>[^<]* \| Lynor Finanzas<\/title>/)
+  assert.match(page('privacidad.html'), /<title>[^<]* \| Lynor Finanzas<\/title>/)
+  const jsonLd = page('index.html').match(/<script type="application\/ld\+json">([^<]*)<\/script>/)?.[1]
+  assert.equal(JSON.parse(jsonLd).name, 'Lynor Finanzas')
+})
+
 test('sitemap and robots.txt point crawlers at every page', () => {
   assert.ok(existsSync(new URL('../dist/sitemap-index.xml', import.meta.url)))
   const sitemap = page('sitemap-0.xml')

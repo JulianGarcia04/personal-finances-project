@@ -6,7 +6,7 @@ import { LEGAL_DOCUMENTS, hasPendingPlaceholders } from '@/lib/legal'
 const document = LEGAL_DOCUMENTS.privacy
 ---
 
-<BaseLayout title={`${document.title} | Vault`} description="Cómo Vault trata tus datos personales según la Ley 1581 de 2012.">
+<BaseLayout title={`${document.title} | Lynor Finanzas`} description="Cómo Lynor Finanzas trata tus datos personales según la Ley 1581 de 2012.">
   <LegalDocument document={document} isDraft={hasPendingPlaceholders()}>
     <a slot="back" href="/" class="inline-flex items-center min-h-11 text-sm text-accent-emerald hover:text-accent-emerald-hover font-semibold transition-colors">← Volver</a>
   </LegalDocument>

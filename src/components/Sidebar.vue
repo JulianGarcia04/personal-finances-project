@@ -9,7 +9,7 @@
         <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-accent-emerald to-accent-violet flex items-center justify-center shadow-glow-emerald">
           <span class="font-display font-extrabold text-background text-sm">V</span>
         </div>
-        <span class="font-display font-bold text-lg tracking-wider text-text-primary">VAULT</span>
+        <span class="font-display font-bold text-lg tracking-wider text-text-primary">LYNOR FINANZAS</span>
       </div>
     </header>
 
@@ -39,7 +39,7 @@
             <span class="font-display font-extrabold text-background text-lg">V</span>
           </div>
           <div>
-            <h1 class="font-display font-bold text-xl tracking-wider text-text-primary">VAULT</h1>
+            <h1 class="font-display font-bold text-xl tracking-wider text-text-primary">LYNOR</h1>
             <p class="text-[10px] tracking-widest text-accent-emerald font-semibold uppercase">Finanzas IA</p>
           </div>
           <button

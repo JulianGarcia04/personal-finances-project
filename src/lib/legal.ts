@@ -61,13 +61,13 @@ const terms: LegalDocument = {
   sections: [
     {
       heading: 'Aceptación',
-      paragraphs: ['Al crear una cuenta o usar Vault aceptas estos términos. Si no estás de acuerdo, no uses el servicio.']
+      paragraphs: ['Al crear una cuenta o usar Lynor Finanzas aceptas estos términos. Si no estás de acuerdo, no uses el servicio.']
     },
     {
       heading: 'El servicio',
       paragraphs: [
-        'Vault es una herramienta para registrar y organizar finanzas personales y compartidas: cuentas, bolsillos, tarjetas, movimientos, presupuestos y metas.',
-        'Vault no es una entidad financiera: no custodia dinero ni ejecuta pagos o transferencias.'
+        'Lynor Finanzas es una herramienta para registrar y organizar finanzas personales y compartidas: cuentas, bolsillos, tarjetas, movimientos, presupuestos y metas.',
+        'Lynor Finanzas no es una entidad financiera: no custodia dinero ni ejecuta pagos o transferencias.'
       ]
     },
     {
@@ -86,22 +86,22 @@ const terms: LegalDocument = {
     },
     {
       heading: 'Uso aceptable',
-      paragraphs: ['No uses Vault para actividades ilegales, para intentar acceder a cuentas o espacios de otras personas, ni para afectar el funcionamiento del servicio.']
+      paragraphs: ['No uses Lynor Finanzas para actividades ilegales, para intentar acceder a cuentas o espacios de otras personas, ni para afectar el funcionamiento del servicio.']
     },
     {
       heading: 'Disponibilidad y precio',
       paragraphs: [
-        'Durante la etapa de prueba (beta), Vault se ofrece sin costo y puede cambiar, presentar fallas o interrumpirse.',
+        'Durante la etapa de prueba (beta), Lynor Finanzas se ofrece sin costo y puede cambiar, presentar fallas o interrumpirse.',
         'Si en el futuro hay planes pagos, te informaremos las condiciones antes de cobrarte cualquier valor.'
       ]
     },
     {
       heading: 'Responsabilidad',
-      paragraphs: ['Vault se ofrece tal como está. En la medida permitida por la ley, no respondemos por decisiones financieras tomadas con base en la información de la aplicación, ni por pérdidas derivadas de errores en los datos registrados o importados.']
+      paragraphs: ['Lynor Finanzas se ofrece tal como está. En la medida permitida por la ley, no respondemos por decisiones financieras tomadas con base en la información de la aplicación, ni por pérdidas derivadas de errores en los datos registrados o importados.']
     },
     {
       heading: 'Terminación',
-      paragraphs: ['Puedes dejar de usar Vault en cualquier momento y solicitar la eliminación de tu cuenta. Podemos suspender cuentas que incumplan estos términos.']
+      paragraphs: ['Puedes dejar de usar Lynor Finanzas en cualquier momento y solicitar la eliminación de tu cuenta. Podemos suspender cuentas que incumplan estos términos.']
     },
     {
       heading: 'Cambios',
@@ -181,7 +181,7 @@ const privacy: LegalDocument = {
     },
     {
       heading: 'Menores de edad',
-      paragraphs: ['Vault está dirigido a personas mayores de 18 años. No recolectamos intencionalmente datos de menores de edad.']
+      paragraphs: ['Lynor Finanzas está dirigido a personas mayores de 18 años. No recolectamos intencionalmente datos de menores de edad.']
     },
     {
       heading: 'Vigencia',
