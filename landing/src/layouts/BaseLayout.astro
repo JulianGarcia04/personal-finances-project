@@ -1,0 +1,47 @@
+---
+import '../styles/global.css'
+
+interface Props {
+  title: string
+  description: string
+  jsonLd?: Record<string, unknown>
+}
+
+const { title, description, jsonLd } = Astro.props
+// Built pages report /terminos.html and /index.html; canonical URLs match the sitemap (/terminos, /).
+const path = Astro.url.pathname.replace(/(index)?\.html$/, '')
+const canonical = Astro.site ? new URL(path, Astro.site).href : undefined
+const image = Astro.site ? new URL('/icon-512.png', Astro.site).href : '/icon-512.png'
+---
+
+<!doctype html>
+<html lang="es" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#080c14" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    {canonical && <link rel="canonical" href={canonical} />}
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="es_CO" />
+    <meta property="og:site_name" content="Lynor Finanzas" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    {canonical && <meta property="og:url" content={canonical} />}
+    <meta property="og:image" content={image} />
+    <meta name="twitter:card" content="summary" />
+    {jsonLd && <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />}
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body class="bg-background text-text-primary antialiased selection:bg-accent-emerald selection:text-background min-h-dvh">
+    <slot />
+  </body>
+</html>

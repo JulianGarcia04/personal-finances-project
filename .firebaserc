@@ -1,5 +1,17 @@
 {
   "projects": {
     "default": "vault-41b34"
+  },
+  "targets": {
+    "vault-41b34": {
+      "hosting": {
+        "app": [
+          "vault-41b34"
+        ],
+        "landing": [
+          "lynor-finances"
+        ]
+      }
+    }
   }
 }

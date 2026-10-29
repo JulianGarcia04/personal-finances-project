@@ -1,15 +1,20 @@
 import { defineStore } from 'pinia'
 import { auth, db } from '@/lib/firebase'
 import { disablePush, hasPushRegistration } from '@/lib/push'
-import { 
-  createUserWithEmailAndPassword, 
-  signInWithEmailAndPassword, 
-  signOut, 
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  GoogleAuthProvider,
+  sendPasswordResetEmail,
+  signOut,
   onAuthStateChanged,
   updateProfile
 } from 'firebase/auth'
-import { doc, getDoc, setDoc, updateDoc, collection } from 'firebase/firestore'
+import { doc, getDoc, updateDoc, collection, runTransaction, serverTimestamp } from 'firebase/firestore'
 import type { UserProfile } from '@/types'
+import { buildPersonalWorkspace, buildUserProfile, resolveDisplayName } from '@/lib/authProfile'
+import { buildLegalConsent, type ConsentMethod } from '@/lib/legal'
 
 interface AuthUser {
   uid: string;
@@ -42,7 +47,7 @@ export const useAuthStore = defineStore('auth', {
             this.user = {
               uid: firebaseUser.uid,
               email: firebaseUser.email,
-              displayName: firebaseUser.displayName || (firebaseUser.email ? firebaseUser.email.split('@')[0] : 'Usuario'),
+              displayName: resolveDisplayName(firebaseUser.displayName, firebaseUser.email),
             }
             try {
               const profileDoc = await getDoc(doc(db, 'users', firebaseUser.uid))
@@ -70,44 +75,69 @@ export const useAuthStore = defineStore('auth', {
         const firebaseUser = userCredential.user
         
         await updateProfile(firebaseUser, { displayName })
-        
-        // Crear Workspace personal
-        const workspaceRef = doc(collection(db, 'workspaces'))
-        const workspaceId = workspaceRef.id
-        await setDoc(workspaceRef, {
-          id: workspaceId,
-          name: 'Personal',
-          ownerId: firebaseUser.uid,
-          members: [firebaseUser.uid],
-          currency: 'USD',
-          createdAt: new Date().toISOString()
-        })
-
-        const profileData = {
-          uid: firebaseUser.uid,
-          email,
-          displayName,
-          currency: 'USD',
-          createdAt: new Date(),
-          activeWorkspaceId: workspaceId,
-          workspaces: [workspaceId]
-        }
-        await setDoc(doc(db, 'users', firebaseUser.uid), profileData)
+        await this.ensureUserProfile(firebaseUser.uid, email, displayName, 'signup-checkbox')
 
         this.user = {
           uid: firebaseUser.uid,
           email,
           displayName,
         }
-        this.profile = profileData as unknown as UserProfile
-        this.activeWorkspaceId = workspaceId
-        
         return this.user
       } catch (error) {
         console.error('Error al registrarse:', error)
         throw error
       } finally {
         this.loading = false
+      }
+    },
+    async signInWithGoogle(): Promise<AuthUser> {
+      this.loading = true
+      try {
+        const { user: firebaseUser } = await signInWithPopup(auth, new GoogleAuthProvider())
+        const displayName = resolveDisplayName(firebaseUser.displayName, firebaseUser.email)
+        await this.ensureUserProfile(firebaseUser.uid, firebaseUser.email, displayName, 'google-continue')
+
+        this.user = {
+          uid: firebaseUser.uid,
+          email: firebaseUser.email,
+          displayName,
+        }
+        return this.user
+      } catch (error) {
+        console.error('Error al ingresar con Google:', error)
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+    // Loads the profile, creating the personal workspace and profile on the
+    // first sign-in. The transaction keeps a double submit or a retry from
+    // creating a second workspace or a profile without one. The legal consent
+    // given on that first sign-in is recorded with the new profile.
+    async ensureUserProfile(uid: string, email: string | null, displayName: string, consentMethod: ConsentMethod): Promise<void> {
+      const profileRef = doc(db, 'users', uid)
+      const profile = await runTransaction(db, async (tx) => {
+        const snapshot = await tx.get(profileRef)
+        if (snapshot.exists()) return snapshot.data() as UserProfile
+
+        const workspaceRef = doc(collection(db, 'workspaces'))
+        const now = new Date()
+        const legalConsent = buildLegalConsent(consentMethod, serverTimestamp())
+        const profileData = buildUserProfile({ uid, email, displayName, workspaceId: workspaceRef.id, now, legalConsent })
+        tx.set(workspaceRef, buildPersonalWorkspace(uid, workspaceRef.id, now))
+        tx.set(profileRef, profileData)
+        return profileData as unknown as UserProfile
+      })
+      this.profile = profile
+      this.activeWorkspaceId = profile.activeWorkspaceId || null
+    },
+    async resetPassword(email: string): Promise<void> {
+      try {
+        await sendPasswordResetEmail(auth, email.trim())
+      } catch (error) {
+        // Same answer whether or not the email is registered.
+        if ((error as { code?: string }).code === 'auth/user-not-found') return
+        throw error
       }
     },
     async signIn(email: string, password: string): Promise<AuthUser> {
@@ -118,7 +148,7 @@ export const useAuthStore = defineStore('auth', {
         this.user = {
           uid: firebaseUser.uid,
           email: firebaseUser.email,
-          displayName: firebaseUser.displayName || (firebaseUser.email ? firebaseUser.email.split('@')[0] : 'Usuario'),
+          displayName: resolveDisplayName(firebaseUser.displayName, firebaseUser.email),
         }
         const profileDoc = await getDoc(doc(db, 'users', firebaseUser.uid))
         if (profileDoc.exists()) {

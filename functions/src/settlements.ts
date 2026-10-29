@@ -281,7 +281,7 @@ export async function reverseBridgeSettlement(
       type: 'transfer',
       receiptUrl: null,
       userId: input.userId,
-      notes: 'Ajuste contable de Vault. No representa ni inicia un movimiento bancario.',
+      notes: 'Ajuste contable de Lynor Finanzas. No representa ni inicia un movimiento bancario.',
       settlementType: 'reversal',
       createdAt: reversalDate
     }

@@ -8,19 +8,47 @@
     <div class="w-full max-w-md glass-panel rounded-3xl p-6 sm:p-8 md:p-10 relative z-10 shadow-2xl border border-white/5">
       <!-- Title & Branding -->
       <div class="flex flex-col items-center mb-8 text-center">
-        <div class="w-12 h-12 rounded-2xl bg-gradient-to-tr from-accent-emerald to-accent-violet flex items-center justify-center shadow-glow-emerald mb-4">
-          <span class="font-display font-extrabold text-background text-xl">V</span>
-        </div>
+        <LynorLogo layout="mark" mark-class="w-12 h-12" class="mb-4" />
         <h2 class="font-display font-bold text-2xl sm:text-3xl tracking-wide text-text-primary">
-          {{ isRegister ? 'Crear una Cuenta' : 'Bienvenido a Vault' }}
+          {{ isReset ? 'Recupera tu contraseña' : isRegister ? 'Crear una Cuenta' : 'Bienvenido a Lynor Finanzas' }}
         </h2>
         <p class="text-text-secondary text-sm mt-2">
-          {{ isRegister ? 'Registra tus datos para empezar a gestionar tus finanzas' : 'Inicia sesión para entrar a tu bóveda personal' }}
+          {{ isReset ? 'Te enviaremos un enlace para crear una contraseña nueva' : isRegister ? 'Registra tus datos para empezar a gestionar tus finanzas' : 'Inicia sesión para entrar a tu bóveda personal' }}
         </p>
       </div>
 
+      <!-- Google sign-in -->
+      <template v-if="!isReset">
+        <button
+          type="button"
+          @click="handleGoogle"
+          :disabled="loading"
+          class="w-full min-h-11 py-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-text-primary font-semibold text-sm transition-colors flex items-center justify-center space-x-2 cursor-pointer disabled:opacity-50"
+        >
+          <svg aria-hidden="true" viewBox="0 0 48 48" class="w-4 h-4">
+            <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/>
+            <path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/>
+            <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/>
+            <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/>
+          </svg>
+          <span>Continuar con Google</span>
+        </button>
+        <p class="mt-3 text-xs text-text-secondary text-center leading-relaxed">
+          Al continuar con Google aceptas los
+          <router-link to="/terminos" target="_blank" class="text-accent-emerald hover:text-accent-emerald-hover underline">Términos</router-link>
+          y autorizas el tratamiento de tus datos según la
+          <router-link to="/privacidad" target="_blank" class="text-accent-emerald hover:text-accent-emerald-hover underline">Política de datos</router-link>.
+        </p>
+
+        <div class="flex items-center my-6 text-xs text-text-secondary">
+          <div class="flex-1 h-px bg-white/10"></div>
+          <span class="px-3">o con tu correo</span>
+          <div class="flex-1 h-px bg-white/10"></div>
+        </div>
+      </template>
+
       <!-- Form -->
-      <form @submit.prevent="handleSubmit" class="space-y-5">
+      <form @submit.prevent="isReset ? handleReset() : handleSubmit()" class="space-y-5">
         <div v-if="isRegister" class="space-y-1">
           <label for="name" class="text-xs font-semibold text-text-secondary uppercase tracking-wider">Nombre Completo</label>
           <input 
@@ -51,8 +79,18 @@
           />
         </div>
 
-        <div class="space-y-1">
-          <label for="password" class="text-xs font-semibold text-text-secondary uppercase tracking-wider">Contraseña</label>
+        <div v-if="!isReset" class="space-y-1">
+          <div class="flex items-center justify-between">
+            <label for="password" class="text-xs font-semibold text-text-secondary uppercase tracking-wider">Contraseña</label>
+            <button
+              v-if="!isRegister"
+              type="button"
+              @click="setMode('reset')"
+              class="text-xs text-accent-emerald hover:text-accent-emerald-hover font-semibold transition-colors focus:outline-none"
+            >
+              ¿Olvidaste tu contraseña?
+            </button>
+          </div>
           <input 
             id="password"
             v-model="password"
@@ -63,6 +101,26 @@
             class="field transition-colors"
           />
         </div>
+
+        <label v-if="isRegister" for="legal-consent" class="flex items-start gap-3 text-xs text-text-secondary leading-relaxed cursor-pointer">
+          <input
+            id="legal-consent"
+            v-model="acceptedLegal"
+            type="checkbox"
+            required
+            class="mt-0.5 shrink-0 rounded border-border bg-slate-900/50 text-accent-emerald focus:ring-accent-emerald cursor-pointer"
+          />
+          <span>
+            Acepto los
+            <router-link to="/terminos" target="_blank" class="text-accent-emerald hover:text-accent-emerald-hover underline">Términos</router-link>
+            y autorizo el tratamiento de mis datos personales según la
+            <router-link to="/privacidad" target="_blank" class="text-accent-emerald hover:text-accent-emerald-hover underline">Política de datos</router-link>.
+          </span>
+        </label>
+
+        <p v-if="noticeMessage" class="text-xs text-accent-emerald font-medium bg-accent-emerald/10 px-3 py-2 rounded-lg border border-accent-emerald/20">
+          {{ noticeMessage }}
+        </p>
 
         <!-- Error message -->
         <p v-if="errorMessage" class="text-xs text-accent-rose font-medium bg-accent-rose/10 px-3 py-2 rounded-lg border border-accent-rose/20">
@@ -76,18 +134,27 @@
           class="w-full min-h-11 py-3.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm tracking-wide shadow-glow-emerald hover:shadow-lg transition-all duration-200 flex items-center justify-center space-x-2 cursor-pointer disabled:opacity-50"
         >
           <span v-if="loading" class="w-4 h-4 border-2 border-background border-t-transparent rounded-full animate-spin"></span>
-          <span>{{ isRegister ? 'Registrarse' : 'Ingresar a la Bóveda' }}</span>
+          <span>{{ isReset ? 'Enviar enlace' : isRegister ? 'Registrarse' : 'Ingresar a la Bóveda' }}</span>
         </button>
       </form>
 
       <!-- Toggle Mode link -->
-      <div class="mt-6 text-center text-sm">
+      <div v-if="isReset" class="mt-6 text-center text-sm">
+        <button
+          type="button"
+          @click="setMode('login')"
+          class="py-2 px-1 min-h-11 text-accent-emerald hover:text-accent-emerald-hover font-semibold transition-colors focus:outline-none"
+        >
+          Volver a iniciar sesión
+        </button>
+      </div>
+      <div v-else class="mt-6 text-center text-sm">
         <span class="text-text-secondary">
           {{ isRegister ? '¿Ya tienes una cuenta?' : '¿No tienes una cuenta?' }}
         </span>
         <button 
           type="button"
-          @click="toggleMode" 
+          @click="setMode(isRegister ? 'login' : 'register')" 
           class="ml-1 py-2 px-1 min-h-11 text-accent-emerald hover:text-accent-emerald-hover font-semibold transition-colors focus:outline-none"
         >
           {{ isRegister ? 'Inicia Sesión' : 'Regístrate Gratis' }}
@@ -98,28 +165,39 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import LynorLogo from '@/components/LynorLogo.vue'
 import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { PASSWORD_RESET_NOTICE, authErrorMessage } from '@/lib/authProfile'
 
 const authStore = useAuthStore()
 const settingsStore = useSettingsStore()
 const router = useRouter()
+const route = useRoute()
 
-const isRegister = ref(false)
+type Mode = 'login' | 'register' | 'reset'
+const mode = ref<Mode>(route.query.modo === 'registro' ? 'register' : 'login')
+const isRegister = computed(() => mode.value === 'register')
+const isReset = computed(() => mode.value === 'reset')
 const name = ref('')
 const email = ref('')
 const password = ref('')
+const acceptedLegal = ref(false)
 const errorMessage = ref('')
+const noticeMessage = ref('')
 const loading = ref(false)
 
-const toggleMode = () => {
-  isRegister.value = !isRegister.value
+// The email survives the switch to recovery so the user does not retype it.
+const setMode = (next: Mode) => {
+  if (next !== 'reset') email.value = ''
+  mode.value = next
   errorMessage.value = ''
+  noticeMessage.value = ''
   name.value = ''
-  email.value = ''
   password.value = ''
+  acceptedLegal.value = false
 }
 
 const handleSubmit = async () => {
@@ -137,16 +215,39 @@ const handleSubmit = async () => {
     router.push({ name: 'Dashboard' })
   } catch (error) {
     console.error('Auth Error:', error)
-    const err = error as any
-    if (err.code === 'auth/invalid-credential') {
-      errorMessage.value = 'Correo o contraseña incorrectos.'
-    } else if (err.code === 'auth/email-already-in-use') {
-      errorMessage.value = 'El correo electrónico ya está registrado.'
-    } else if (err.code === 'auth/weak-password') {
-      errorMessage.value = 'La contraseña debe tener al menos 6 caracteres.'
-    } else {
-      errorMessage.value = err.message || 'Ocurrió un error inesperado.'
-    }
+    errorMessage.value = authErrorMessage(error, 'email')
+  } finally {
+    loading.value = false
+  }
+}
+
+const handleGoogle = async () => {
+  errorMessage.value = ''
+  loading.value = true
+
+  try {
+    await authStore.signInWithGoogle()
+    await settingsStore.loadSettings()
+    router.push({ name: 'Dashboard' })
+  } catch (error) {
+    console.error('Google Auth Error:', error)
+    errorMessage.value = authErrorMessage(error, 'google')
+  } finally {
+    loading.value = false
+  }
+}
+
+const handleReset = async () => {
+  errorMessage.value = ''
+  noticeMessage.value = ''
+  loading.value = true
+
+  try {
+    await authStore.resetPassword(email.value)
+    noticeMessage.value = PASSWORD_RESET_NOTICE
+  } catch (error) {
+    console.error('Password Reset Error:', error)
+    errorMessage.value = authErrorMessage(error, 'reset')
   } finally {
     loading.value = false
   }

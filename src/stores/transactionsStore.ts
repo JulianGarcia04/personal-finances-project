@@ -1065,7 +1065,7 @@ export const useTransactionsStore = defineStore('transactions', {
       }
     },
 
-    // Reverses only a validated bridge settlement; it records compensating entries in Vault and never moves bank funds.
+    // Reverses only a validated bridge settlement; it records compensating entries in Lynor Finanzas and never moves bank funds.
     async reverseSettlement(transactionId: string): Promise<void> {
       const user = auth.currentUser
       const authStore = useAuthStore()
@@ -1134,7 +1134,7 @@ export const useTransactionsStore = defineStore('transactions', {
           const receivedLeg = requested.id === plan.receivedLegId ? requested : twin
           const reversalDate = Timestamp.now()
           const reversalDescription = `Reversión contable de ${paidLeg.description}`
-          const reversalNotes = 'Ajuste contable de Vault. No representa ni inicia un movimiento bancario.'
+          const reversalNotes = 'Ajuste contable de Lynor Finanzas. No representa ni inicia un movimiento bancario.'
           const sharedReversal = {
             amount: plan.amount,
             description: reversalDescription,

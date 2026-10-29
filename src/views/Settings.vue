@@ -77,7 +77,7 @@
             <div class="p-4 sm:p-6 space-y-3">
               <div>
                 <h4 class="font-display font-medium text-sm text-text-primary">Invitar miembro</h4>
-                <p class="text-text-muted text-xs mt-1">Comparte este workspace con alguien ya registrado en Vault usando su correo.</p>
+                <p class="text-text-muted text-xs mt-1">Comparte este workspace con alguien ya registrado en Lynor Finanzas usando su correo.</p>
               </div>
               <form @submit.prevent="handleInviteUser" class="flex flex-col sm:flex-row gap-3">
                 <input
@@ -154,7 +154,7 @@
                   <span class="block font-display font-medium text-sm text-text-primary">Notificaciones push en este dispositivo</span>
                   <span class="block text-text-muted text-xs">Recibe en este dispositivo las mismas alertas de presupuesto (80 % y 100 %) que llegan por correo.</span>
                   <span class="block text-xs" :class="pushStatusClass" role="status" aria-live="polite">{{ pushStatusText }}</span>
-                  <span class="block text-text-muted text-xs">En iPhone o iPad primero usa «Compartir → Agregar a pantalla de inicio» y abre Vault desde ese ícono.</span>
+                  <span class="block text-text-muted text-xs">En iPhone o iPad primero usa «Compartir → Agregar a pantalla de inicio» y abre Lynor Finanzas desde ese ícono.</span>
                 </span>
                 <span class="relative inline-flex items-center shrink-0 min-h-11 -mt-2.5">
                   <input
@@ -510,6 +510,34 @@
             </div>
           </div>
         </template>
+
+        <template v-else-if="activeTab === 'data'">
+          <div class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
+            <div class="space-y-1">
+              <h4 class="font-display font-medium text-text-primary">Exportar mis datos</h4>
+              <p class="text-text-muted text-xs">Descarga un archivo JSON con las cuentas, movimientos, categorías, metas, presupuestos y conversaciones del espacio de trabajo activo, junto con tu perfil.</p>
+            </div>
+            <button
+              type="button"
+              @click="handleExport"
+              :disabled="exporting || !authStore.activeWorkspaceId"
+              class="min-h-11 px-5 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              <span v-if="exporting" class="w-3.5 h-3.5 border-2 border-background border-t-transparent rounded-full animate-spin"></span>
+              <DownloadIcon v-else class="w-4 h-4" />
+              <span>Descargar mis datos</span>
+            </button>
+            <p v-if="exportError" class="text-xs text-accent-rose font-medium">{{ exportError }}</p>
+          </div>
+
+          <div class="glass-panel rounded-2xl p-4 sm:p-6 space-y-2">
+            <h4 class="font-display font-medium text-text-primary">Documentos legales</h4>
+            <div class="flex flex-col sm:flex-row gap-2 sm:gap-6 text-sm">
+              <router-link to="/terminos" class="min-h-11 flex items-center text-accent-emerald hover:text-accent-emerald-hover font-semibold">Términos y condiciones</router-link>
+              <router-link to="/privacidad" class="min-h-11 flex items-center text-accent-emerald hover:text-accent-emerald-hover font-semibold">Política de tratamiento de datos</router-link>
+            </div>
+          </div>
+        </template>
       </section>
     </div>
   </div>
@@ -528,9 +556,12 @@ import { ApiKeySchema, CategorySchema } from '@/schemas'
 import { getPushStatus, enablePush, disablePush, onForegroundMessage, type PushStatus } from '@/lib/push'
 import { CATEGORY_COLORS, CATEGORY_ICONS, getCategoryIconComponent } from '@/lib/categoryIcons'
 import { SUPPORTED_COUNTRIES, SUPPORTED_CURRENCIES } from '@/lib/currencies'
+import { db } from '@/lib/firebase'
+import { exportFileName } from '@/lib/dataExport'
+import { fetchWorkspaceExport } from '@/lib/dataExportFetch'
 import {
   Trash2 as TrashIcon, Plus as PlusIcon, Mail as MailIcon, Check as CheckIcon,
-  KeyRound as KeyRoundIcon, Sparkles, Users, Globe, Tags
+  KeyRound as KeyRoundIcon, Sparkles, Users, Globe, Tags, Download as DownloadIcon, FileText
 } from 'lucide-vue-next'
 
 const authStore = useAuthStore()
@@ -541,7 +572,7 @@ const accountsStore = useAccountsStore()
 const goalsStore = useGoalsStore()
 
 // Section tabs (synced to ?tab= so sections are linkable and survive reloads)
-type SettingsTab = 'workspace' | 'regional' | 'categories' | 'ai'
+type SettingsTab = 'workspace' | 'regional' | 'categories' | 'ai' | 'data'
 interface TabDef { id: SettingsTab; label: string; hint: string; description: string; icon: Component }
 
 const tabs: TabDef[] = [
@@ -560,6 +591,10 @@ const tabs: TabDef[] = [
   {
     id: 'ai', label: 'Inteligencia Artificial', hint: 'Importador y API Key', icon: Sparkles,
     description: 'Activa el importador de extractos con Gemini y decide si usas la API Key del sistema o una personal.'
+  },
+  {
+    id: 'data', label: 'Tus datos', hint: 'Exportar y privacidad', icon: FileText,
+    description: 'Descarga una copia de tu información y consulta cómo tratamos tus datos.'
   }
 ]
 
@@ -568,6 +603,31 @@ const router = useRouter()
 const isTab = (v: unknown): v is SettingsTab => tabs.some(t => t.id === v)
 const activeTab = ref<SettingsTab>(isTab(route.query.tab) ? route.query.tab : 'workspace')
 const currentTab = computed(() => tabs.find(t => t.id === activeTab.value) ?? tabs[0])
+
+// Data export
+const exporting = ref(false)
+const exportError = ref('')
+
+const handleExport = async () => {
+  if (!authStore.activeWorkspaceId || !authStore.user) return
+  exporting.value = true
+  exportError.value = ''
+  try {
+    const data = await fetchWorkspaceExport(db, authStore.activeWorkspaceId, authStore.user.uid)
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = exportFileName(currentWorkspaceName.value, new Date())
+    link.click()
+    URL.revokeObjectURL(url)
+  } catch (err) {
+    console.error('Error exporting data', err)
+    exportError.value = 'No se pudo exportar la información. Inténtalo de nuevo.'
+  } finally {
+    exporting.value = false
+  }
+}
 
 const selectTab = (id: SettingsTab) => {
   activeTab.value = id

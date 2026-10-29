@@ -1,0 +1,13 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro'
+import LegalDocument from '@/components/LegalDocument.vue'
+import { LEGAL_DOCUMENTS, hasPendingPlaceholders } from '@/lib/legal'
+
+const document = LEGAL_DOCUMENTS.terms
+---
+
+<BaseLayout title={`${document.title} | Lynor Finanzas`} description="Condiciones de uso de Lynor Finanzas, la app de finanzas personales y de pareja.">
+  <LegalDocument document={document} isDraft={hasPendingPlaceholders()}>
+    <a slot="back" href="/" class="inline-flex items-center min-h-11 text-sm text-accent-emerald hover:text-accent-emerald-hover font-semibold transition-colors">← Volver</a>
+  </LegalDocument>
+</BaseLayout>

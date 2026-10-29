@@ -747,7 +747,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
     const selectedTaxContext = taxContexts[userCountry] || `País: Desconocido/Otro. Utiliza conceptos financieros estándar internacionales.`;
 
     const systemInstruction = `
-      Eres un asesor y contador financiero personal inteligente e integrado en la aplicación Vault.
+      Eres un asesor y contador financiero personal inteligente e integrado en la aplicación Lynor Finanzas.
       Tu objetivo es ayudar al usuario a administrar sus finanzas de manera óptima, proponer planes de ahorro, guiar en la elaboración de presupuestos y resolver dudas sobre sus transacciones y cuentas.
       ${buildAgentContextBlock({ now: new Date(), timeZone: userTimeZone, currency: primaryCurrency })}
       CONTEXTO GEOGRÁFICO Y FISCAL DEL USUARIO:
@@ -903,7 +903,7 @@ export const inviteToWorkspace = onRequest({cors: true}, async (req, res) => {
       // The response never reveals whether the email belongs to a registered user.
       const genericResponse = {
         success: true,
-        message: "Si el correo pertenece a una cuenta de Vault, ya tiene acceso al workspace."
+        message: "Si el correo pertenece a una cuenta de Lynor Finanzas, ya tiene acceso al workspace."
       };
 
       let inviteeId: string;

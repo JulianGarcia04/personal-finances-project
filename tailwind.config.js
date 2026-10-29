@@ -31,7 +31,7 @@ export default {
       },
       fontFamily: {
         sans: ['"Plus Jakarta Sans"', 'sans-serif'],
-        display: ['Outfit', 'sans-serif'],
+        display: ['Sora', 'sans-serif'],
       },
       boxShadow: {
         'glow-emerald': '0 0 20px rgba(16, 185, 129, 0.12)',

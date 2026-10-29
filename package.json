@@ -14,6 +14,9 @@
     "preview": "vite preview",
     "emulators": "pnpm dlx kill-port --port 8080,9099,5001,9199,4000 && firebase emulators:start",
     "genkit": "pnpm --filter functions genkit",
+    "landing:dev": "pnpm --filter landing dev",
+    "landing:build": "pnpm --filter landing build",
+    "landing:test": "pnpm --filter landing test",
     "emulators:watch": "pnpm dlx concurrently \"pnpm --filter functions build:watch\" \"pnpm emulators\""
   },
   "dependencies": {

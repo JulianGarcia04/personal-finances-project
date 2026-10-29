@@ -154,7 +154,7 @@ export async function onForegroundMessage(): Promise<void> {
   foregroundUnsubscribe = onMessage(messaging, async (payload) => {
     if (Notification.permission !== 'granted') return
     const data = payload.data || {}
-    const title = payload.notification?.title || data.title || 'Vault'
+    const title = payload.notification?.title || data.title || 'Lynor Finanzas'
     const body = payload.notification?.body || data.body || ''
     const link = payload.fcmOptions?.link || data.link || '/goals'
     try {

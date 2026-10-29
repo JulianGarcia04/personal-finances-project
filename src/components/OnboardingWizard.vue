@@ -214,7 +214,7 @@ const pushStatusText = computed(() => {
     case 'enabled': return 'Activadas en este dispositivo.'
     case 'disabled': return 'Aún no están activadas en este dispositivo.'
     case 'denied': return 'El navegador las bloqueó. Puedes permitirlas en la configuración del navegador.'
-    case 'unsupported': return 'Este navegador no soporta notificaciones push. En iPhone, instala Vault con Compartir → Agregar a pantalla de inicio.'
+    case 'unsupported': return 'Este navegador no soporta notificaciones push. En iPhone, instala Lynor Finanzas con Compartir → Agregar a pantalla de inicio.'
     case 'missing-vapid': return 'Las notificaciones push no están disponibles en esta instalación.'
     default: return 'Verificando…'
   }

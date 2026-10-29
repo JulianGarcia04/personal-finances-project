@@ -32,7 +32,7 @@ export function resolveSmtpConfig(values: { user?: string; pass?: string; from?:
   const user = values.user?.trim() ?? "";
   const pass = values.pass?.trim() ?? "";
   if (!user || !pass) return null;
-  const from = values.from?.trim() || `Vault <${user}>`;
+  const from = values.from?.trim() || `Lynor Finanzas <${user}>`;
   return { user, pass, from };
 }
 

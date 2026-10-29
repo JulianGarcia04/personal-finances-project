@@ -1,6 +1,7 @@
 packages:
   - '.'
   - 'functions'
+  - 'landing'
 
 allowBuilds:
   "@firebase/util": true

@@ -1,5 +1,5 @@
 /* global importScripts, firebase, clients */
-// Firebase Cloud Messaging service worker for Vault web push.
+// Firebase Cloud Messaging service worker for Lynor Finanzas web push.
 // The Firebase web config is passed by the app as query params when it
 // registers this worker (see src/lib/push.ts); nothing project-specific is
 // hardcoded here. Keep the SDK version in sync with the `firebase` package.
@@ -56,7 +56,7 @@ if (config.apiKey && config.projectId && config.messagingSenderId && config.appI
     // Payloads with a `notification` block are already shown by the SDK.
     if (payload.notification) return
     const data = payload.data || {}
-    const title = data.title || 'Vault'
+    const title = data.title || 'Lynor Finanzas'
     return self.registration.showNotification(title, {
       body: data.body || '',
       icon: '/icon-192.png',
