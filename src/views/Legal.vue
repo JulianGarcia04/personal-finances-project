@@ -39,5 +39,5 @@ const props = defineProps<{ doc: LegalDocumentId }>()
 const authStore = useAuthStore()
 const document = computed(() => LEGAL_DOCUMENTS[props.doc])
 const isDraft = hasPendingPlaceholders()
-const backTarget = computed(() => (authStore.isAuthenticated ? { name: 'Settings' } : { name: 'Login' }))
+const backTarget = computed(() => (authStore.isAuthenticated ? { name: 'Settings', query: { tab: 'data' } } : { name: 'Login' }))
 </script>

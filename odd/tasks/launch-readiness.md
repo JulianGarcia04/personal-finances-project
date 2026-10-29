@@ -20,7 +20,7 @@ Source: the assistant's roadmap step 1, "Bloqueantes sin cobro: legal, login, bo
 |----|-------|-------|--------|----------|
 | T1 | S1, S2 | inline | implemented, verifier pending | RED 6 fail → GREEN 12/12 (`src/lib/authProfile.test.ts`, `src/views/Login.test.ts`); `pnpm test` 235/235; `pnpm build` OK; Risk: item 2 (auth) |
 | T2 | S3 | inline | done | RED 6 fail → GREEN 22/22 (`src/lib/legal.test.ts`, `src/lib/authProfile.test.ts`, `src/views/Login.test.ts`); `pnpm test` 245/245; `pnpm build` OK; UI checked at 390px (register consent, `/privacidad` draft banner); Risk: item 2 (consent recorded at account creation) |
-| T3 | S4 | inline | pending | |
+| T3 | S4 | inline | done (fetch not run against Firestore yet) | RED 3 fail → GREEN 6/6 (`src/lib/dataExport.test.ts`, `src/views/Settings.test.ts`); `pnpm test` 251/251; `pnpm build` OK; read-only, same `workspaceId` queries the stores use; Risk: none |
 | T4 | S5 | inline | blocked (decision) | |
 | T5 | S6 | inline | blocked (accounts) | |
 | T6 | S7 | inline | blocked (decision) | |
