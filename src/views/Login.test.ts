@@ -85,3 +85,10 @@ test('legal documents are public routes', () => {
     assert.doesNotMatch(route, /requiresAuth|guestOnly/)
   }
 })
+
+test('leaving the login waits only for the page fade, not its 12 s background animation', () => {
+  const app = readFileSync(fileURLToPath(new URL('../App.vue', import.meta.url)), 'utf8')
+  // Without a type, Vue waits for the longer of the root's transition and animation.
+  assert.match(login, /\.moving-mesh \{[^}]*animation: mesh 12s ease infinite;/)
+  assert.match(app, /<transition name="page" mode="out-in" type="transition">/)
+})

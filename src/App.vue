@@ -24,7 +24,8 @@
         ]"
       >
         <router-view v-slot="{ Component }">
-          <transition name="page" mode="out-in">
+          <!-- type="transition": the login's 12 s background animation must not hold the page change. -->
+          <transition name="page" mode="out-in" type="transition">
             <component :is="Component" />
           </transition>
         </router-view>
