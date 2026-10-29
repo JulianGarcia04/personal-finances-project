@@ -65,3 +65,9 @@ test('Google and recovery failures get actionable messages', () => {
 test('password reset notice does not reveal whether the email exists', () => {
   assert.equal(PASSWORD_RESET_NOTICE, 'Si el correo está registrado, te enviamos un enlace para restablecer tu contraseña.')
 })
+
+test('user profile carries the consent record when given', () => {
+  const legalConsent = { termsVersion: 'v', privacyVersion: 'v', method: 'signup-checkbox', acceptedAt: 'ts' }
+  const profile = buildUserProfile({ uid: 'uid-1', email: null, displayName: 'Ana', workspaceId: 'ws-1', now, legalConsent })
+  assert.deepEqual(profile.legalConsent, legalConsent)
+})

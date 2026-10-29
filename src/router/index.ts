@@ -9,6 +9,18 @@ const routes: Array<RouteRecordRaw> = [
     meta: { guestOnly: true }
   },
   {
+    path: '/terminos',
+    name: 'Terms',
+    component: () => import('@/views/Legal.vue'),
+    props: { doc: 'terms' }
+  },
+  {
+    path: '/privacidad',
+    name: 'Privacy',
+    component: () => import('@/views/Legal.vue'),
+    props: { doc: 'privacy' }
+  },
+  {
     path: '/',
     name: 'Dashboard',
     component: () => import('@/views/Dashboard.vue'),

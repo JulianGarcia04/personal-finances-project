@@ -19,7 +19,7 @@ Source: the assistant's roadmap step 1, "Bloqueantes sin cobro: legal, login, bo
 | ID | Specs | Route | Status | Evidence |
 |----|-------|-------|--------|----------|
 | T1 | S1, S2 | inline | implemented, verifier pending | RED 6 fail → GREEN 12/12 (`src/lib/authProfile.test.ts`, `src/views/Login.test.ts`); `pnpm test` 235/235; `pnpm build` OK; Risk: item 2 (auth) |
-| T2 | S3 | inline | pending | |
+| T2 | S3 | inline | done | RED 6 fail → GREEN 22/22 (`src/lib/legal.test.ts`, `src/lib/authProfile.test.ts`, `src/views/Login.test.ts`); `pnpm test` 245/245; `pnpm build` OK; UI checked at 390px (register consent, `/privacidad` draft banner); Risk: item 2 (consent recorded at account creation) |
 | T3 | S4 | inline | pending | |
 | T4 | S5 | inline | blocked (decision) | |
 | T5 | S6 | inline | blocked (accounts) | |
@@ -32,3 +32,4 @@ Route evidence: each unit is one understood change under ~400 lines with no para
 - **L1 (2026-10-28, user):** "quiero que centrar a vault como un sass entonces revisemos eso y validemos que le faltaria para ser un sass competitivo... revisas productos similares y como podemos llegar a esto... la cuestión es lanzarlo al mercado"
 - **L2 (2026-10-29, user):** "okey prosigamos"
 - **L3:** Review findings recorded in Engram (`Vault SaaS readiness gaps and market context`). RDD is off for this clone (`clone_local`), so no native review runs. Observation outside scope: email signup creates the personal workspace with `currency: 'USD'` (`src/stores/authStore.ts:82`, `:90`), unusual for a Colombia-first launch; not changed.
+- **L4 (T2):** Google sign-in records consent by unequivocal conduct (notice under the button, Decreto 1377 de 2013 art. 7); email signup by an unticked required checkbox. Accounts created before this change have no `legalConsent`; a re-consent gate for them (and for future version bumps) is a follow-up, not built. The policy says deletion is requested by email until S5 lands.

@@ -21,6 +21,7 @@ export function buildUserProfile(input: {
   displayName: string
   workspaceId: string
   now: Date
+  legalConsent?: unknown
 }) {
   return {
     uid: input.uid,
@@ -29,7 +30,8 @@ export function buildUserProfile(input: {
     currency: DEFAULT_CURRENCY,
     createdAt: input.now,
     activeWorkspaceId: input.workspaceId,
-    workspaces: [input.workspaceId]
+    workspaces: [input.workspaceId],
+    ...(input.legalConsent === undefined ? {} : { legalConsent: input.legalConsent })
   }
 }
 

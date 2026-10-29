@@ -52,3 +52,34 @@ test('store password reset hides unknown emails', () => {
   assert.match(reset, /sendPasswordResetEmail\(auth, email/)
   assert.match(reset, /auth\/user-not-found/)
 })
+
+const router = readFileSync(fileURLToPath(new URL('../router/index.ts', import.meta.url)), 'utf8')
+
+test('signup requires an unticked consent checkbox linking both documents', () => {
+  assert.match(login, /id="legal-consent"[\s\S]{0,200}v-model="acceptedLegal"[\s\S]{0,120}required/)
+  assert.match(login, /const acceptedLegal = ref\(false\)/)
+  assert.match(login, /to="\/terminos"/)
+  assert.match(login, /to="\/privacidad"/)
+})
+
+test('Google sign-in states that continuing accepts both documents', () => {
+  assert.match(login, /Al continuar con Google aceptas/)
+})
+
+test('store records consent only when it creates the profile', () => {
+  const ensure = block(store, /async ensureUserProfile\(/)
+  assert.match(ensure, /buildLegalConsent\(consentMethod, serverTimestamp\(\)\)/)
+  assert.ok(
+    ensure.indexOf('if (snapshot.exists())') < ensure.indexOf('buildLegalConsent('),
+    'existing profiles are returned before consent is built'
+  )
+  assert.match(block(store, /async signUp\(/), /'signup-checkbox'/)
+  assert.match(block(store, /async signInWithGoogle\(/), /'google-continue'/)
+})
+
+test('legal documents are public routes', () => {
+  for (const path of ['/terminos', '/privacidad']) {
+    const route = block(router, new RegExp(`path: '${path}'`)).slice(0, 220)
+    assert.doesNotMatch(route, /requiresAuth|guestOnly/)
+  }
+})

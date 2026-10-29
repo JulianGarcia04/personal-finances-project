@@ -11,9 +11,10 @@ import {
   onAuthStateChanged,
   updateProfile
 } from 'firebase/auth'
-import { doc, getDoc, updateDoc, collection, runTransaction } from 'firebase/firestore'
+import { doc, getDoc, updateDoc, collection, runTransaction, serverTimestamp } from 'firebase/firestore'
 import type { UserProfile } from '@/types'
 import { buildPersonalWorkspace, buildUserProfile, resolveDisplayName } from '@/lib/authProfile'
+import { buildLegalConsent, type ConsentMethod } from '@/lib/legal'
 
 interface AuthUser {
   uid: string;
@@ -74,7 +75,7 @@ export const useAuthStore = defineStore('auth', {
         const firebaseUser = userCredential.user
         
         await updateProfile(firebaseUser, { displayName })
-        await this.ensureUserProfile(firebaseUser.uid, email, displayName)
+        await this.ensureUserProfile(firebaseUser.uid, email, displayName, 'signup-checkbox')
 
         this.user = {
           uid: firebaseUser.uid,
@@ -94,7 +95,7 @@ export const useAuthStore = defineStore('auth', {
       try {
         const { user: firebaseUser } = await signInWithPopup(auth, new GoogleAuthProvider())
         const displayName = resolveDisplayName(firebaseUser.displayName, firebaseUser.email)
-        await this.ensureUserProfile(firebaseUser.uid, firebaseUser.email, displayName)
+        await this.ensureUserProfile(firebaseUser.uid, firebaseUser.email, displayName, 'google-continue')
 
         this.user = {
           uid: firebaseUser.uid,
@@ -111,8 +112,9 @@ export const useAuthStore = defineStore('auth', {
     },
     // Loads the profile, creating the personal workspace and profile on the
     // first sign-in. The transaction keeps a double submit or a retry from
-    // creating a second workspace or a profile without one.
-    async ensureUserProfile(uid: string, email: string | null, displayName: string): Promise<void> {
+    // creating a second workspace or a profile without one. The legal consent
+    // given on that first sign-in is recorded with the new profile.
+    async ensureUserProfile(uid: string, email: string | null, displayName: string, consentMethod: ConsentMethod): Promise<void> {
       const profileRef = doc(db, 'users', uid)
       const profile = await runTransaction(db, async (tx) => {
         const snapshot = await tx.get(profileRef)
@@ -120,7 +122,8 @@ export const useAuthStore = defineStore('auth', {
 
         const workspaceRef = doc(collection(db, 'workspaces'))
         const now = new Date()
-        const profileData = buildUserProfile({ uid, email, displayName, workspaceId: workspaceRef.id, now })
+        const legalConsent = buildLegalConsent(consentMethod, serverTimestamp())
+        const profileData = buildUserProfile({ uid, email, displayName, workspaceId: workspaceRef.id, now, legalConsent })
         tx.set(workspaceRef, buildPersonalWorkspace(uid, workspaceRef.id, now))
         tx.set(profileRef, profileData)
         return profileData as unknown as UserProfile

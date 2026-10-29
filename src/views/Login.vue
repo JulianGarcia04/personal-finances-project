@@ -35,6 +35,12 @@
           </svg>
           <span>Continuar con Google</span>
         </button>
+        <p class="mt-3 text-xs text-text-secondary text-center leading-relaxed">
+          Al continuar con Google aceptas los
+          <router-link to="/terminos" target="_blank" class="text-accent-emerald hover:text-accent-emerald-hover underline">Términos</router-link>
+          y autorizas el tratamiento de tus datos según la
+          <router-link to="/privacidad" target="_blank" class="text-accent-emerald hover:text-accent-emerald-hover underline">Política de datos</router-link>.
+        </p>
 
         <div class="flex items-center my-6 text-xs text-text-secondary">
           <div class="flex-1 h-px bg-white/10"></div>
@@ -97,6 +103,22 @@
             class="field transition-colors"
           />
         </div>
+
+        <label v-if="isRegister" for="legal-consent" class="flex items-start gap-3 text-xs text-text-secondary leading-relaxed cursor-pointer">
+          <input
+            id="legal-consent"
+            v-model="acceptedLegal"
+            type="checkbox"
+            required
+            class="mt-0.5 shrink-0 rounded border-border bg-slate-900/50 text-accent-emerald focus:ring-accent-emerald cursor-pointer"
+          />
+          <span>
+            Acepto los
+            <router-link to="/terminos" target="_blank" class="text-accent-emerald hover:text-accent-emerald-hover underline">Términos</router-link>
+            y autorizo el tratamiento de mis datos personales según la
+            <router-link to="/privacidad" target="_blank" class="text-accent-emerald hover:text-accent-emerald-hover underline">Política de datos</router-link>.
+          </span>
+        </label>
 
         <p v-if="noticeMessage" class="text-xs text-accent-emerald font-medium bg-accent-emerald/10 px-3 py-2 rounded-lg border border-accent-emerald/20">
           {{ noticeMessage }}
@@ -162,6 +184,7 @@ const isReset = computed(() => mode.value === 'reset')
 const name = ref('')
 const email = ref('')
 const password = ref('')
+const acceptedLegal = ref(false)
 const errorMessage = ref('')
 const noticeMessage = ref('')
 const loading = ref(false)
@@ -174,6 +197,7 @@ const setMode = (next: Mode) => {
   noticeMessage.value = ''
   name.value = ''
   password.value = ''
+  acceptedLegal.value = false
 }
 
 const handleSubmit = async () => {
