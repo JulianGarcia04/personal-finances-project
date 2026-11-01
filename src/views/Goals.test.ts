@@ -435,3 +435,10 @@ test('budget basis: Goals shows the consumption/payment switch and counts budget
   assertContains(/vista «\{\{ BUDGET_BASIS_LABELS\[budgetBasis\] \}\}»/, 'the protected baseline must name the view it counts with')
   assertContains(/Gasto real del mes \(\{\{ BUDGET_BASIS_LABELS\[budgetBasis\] \}\}\)/, 'the 50/30/20 comparison must name the view it counts with')
 })
+
+test('budget planner labels show the configured percentages, not fixed 50/30/20', () => {
+  assertContains(/Necesidades \(\{\{ needsPercent \}\}%\)/, 'needs label must show the configured percent')
+  assertContains(/Deseos \(\{\{ wantsPercent \}\}%\)/, 'wants label must show the configured percent')
+  assertContains(/Ahorro \(\{\{ savingsPercent \}\}%\)/, 'savings label must show the configured percent')
+  assertNotContains(/Necesidades \(50%\)|Deseos \(30%\)|Ahorro \(20%\)/, 'fixed default percentages must not be shown as labels')
+})

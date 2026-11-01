@@ -175,7 +175,7 @@
               <div class="flex justify-between gap-2 text-xs font-semibold">
                 <span class="min-w-0 text-text-secondary flex items-center gap-1.5">
                   <span class="shrink-0 w-2.5 h-2.5 rounded-full bg-accent-emerald"></span>
-                  Necesidades (50%)
+                  Necesidades ({{ needsPercent }}%)
                 </span>
                 <span class="shrink-0 text-text-primary tabular-nums">{{ formatCurrency(monthlyNeedsAmount, userCurrency) }}</span>
               </div>
@@ -195,7 +195,7 @@
               <div class="flex justify-between gap-2 text-xs font-semibold">
                 <span class="min-w-0 text-text-secondary flex items-center gap-1.5">
                   <span class="shrink-0 w-2.5 h-2.5 rounded-full bg-accent-violet"></span>
-                  Deseos (30%)
+                  Deseos ({{ wantsPercent }}%)
                 </span>
                 <span class="shrink-0 text-text-primary tabular-nums">{{ formatCurrency(monthlyWantsAmount, userCurrency) }}</span>
               </div>
@@ -215,7 +215,7 @@
               <div class="flex justify-between gap-2 text-xs font-semibold">
                 <span class="min-w-0 text-text-secondary flex items-center gap-1.5">
                   <span class="shrink-0 w-2.5 h-2.5 rounded-full bg-accent-amber"></span>
-                  Ahorro (20%)
+                  Ahorro ({{ savingsPercent }}%)
                 </span>
                 <span class="shrink-0 text-text-primary tabular-nums">{{ formatCurrency(monthlySavingsAmount, userCurrency) }}</span>
               </div>
