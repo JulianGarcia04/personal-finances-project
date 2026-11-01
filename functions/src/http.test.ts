@@ -217,3 +217,25 @@ test("cardBillingOf only returns billing days for regular credit cards with both
   assert.equal(cardBillingOf({ ...visa, mirror: { workspaceId: "w", accountId: "a", sourceAccountId: "s" } }), null);
   assert.equal(cardBillingOf(undefined), null);
 });
+
+test("expenseAmountForMonth with consumption billing uses the statement cycle month", () => {
+  const card = { statementClosingDay: 30, paymentDueDay: 15, basis: "consumption" as const };
+  const beforeClosing = { type: "expense", amount: -100, date: "2026-10-15" };
+  const afterClosing = { type: "expense", amount: -100, date: "2026-10-31" };
+  const split = { type: "expense", amount: -1200, date: "2026-10-15", installments: 12 };
+
+  assert.equal(expenseAmountForMonth(beforeClosing, 2026, 9, "America/Bogota", card), 100);
+  assert.equal(expenseAmountForMonth(beforeClosing, 2026, 10, "America/Bogota", card), 0);
+  assert.equal(expenseAmountForMonth(afterClosing, 2026, 9, "America/Bogota", card), 0);
+  assert.equal(expenseAmountForMonth(afterClosing, 2026, 10, "America/Bogota", card), 100);
+  assert.equal(expenseAmountForMonth(split, 2026, 9, "America/Bogota", card), 100);
+  assert.equal(expenseAmountForMonth(split, 2027, 8, "America/Bogota", card), 100);
+  assert.equal(expenseAmountForMonth(split, 2027, 9, "America/Bogota", card), 0);
+});
+
+test("expenseAmountForMonth without a basis keeps the statement payment month", () => {
+  const card = { statementClosingDay: 30, paymentDueDay: 15 };
+  const purchase = { type: "expense", amount: -100, date: "2026-10-15" };
+  assert.equal(expenseAmountForMonth(purchase, 2026, 9, "America/Bogota", card), 0);
+  assert.equal(expenseAmountForMonth(purchase, 2026, 10, "America/Bogota", card), 100);
+});
