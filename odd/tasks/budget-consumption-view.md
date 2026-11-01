@@ -13,12 +13,14 @@ Branch: `feat/budget-consumption-view` → `main` · Delivery: ask-on-risk · Ru
 - Assumption: the AI advisor's budget answers are unchanged in this feature (follow-up).
 
 ## Tasks
-- T1 [todo] — S2–S4 — Client imputation basis in `src/lib/installments.ts` (lookup carries the basis) with tests. Route: inline.
-- T2 [todo] — S1, S5–S6 — Budget view switch (per-device), wire Goals and Dashboard budget surfaces, copy per view, tests. Route: inline.
-- T3 [todo] — S7 — Server port in `functions/src/http.ts`, alerts use consumption, tests, AGENTS.md alert docs. Route: inline.
+- T1 [done] — S2–S4 — Client imputation basis in `src/lib/installments.ts` (lookup carries the basis) with tests. Route: inline. Commit: `e5c7a6c`. RED 2/4 new tests failing → GREEN 21/21.
+- T2 [done] — S1, S5–S6 — Budget view switch (per-device), wire Goals and Dashboard budget surfaces, copy per view, tests. Route: inline. Commit: `e5c7a6c`. budgetBasis RED (module missing) → GREEN 3/3; pnpm test 342/342; pnpm build exit 0.
+- T3 [done] — S7 — Server port in `functions/src/http.ts`, alerts use consumption, tests, AGENTS.md alert docs. Route: inline. Commit: `69e066d`. RED (TS2554/TS2305) → GREEN; pnpm test:functions 201/201.
 
 ## Log
 - L1 (2026-11-01, verbatim): "Quiero que revisemo el como se relacionan el presupuesto mensual protegido con los gastos... Ya que veo que lo gastos se marcan según la fecha del gasto, es decir que si yo gasté 15 octubre en una categoria, en mi presupuesto va salir ese presupuesto lleno hasta el 15 de noviembre, en vez de se mes vigente... Entonces revisemos eso y por que está así ? y que solución le podemos dar ?"
 - L2: Cause found: commit 08d05b5 imputes card expenses to the statement payment month (`getPaymentBucket`) everywhere, budgets included. No rolling 30-day window exists anywhere.
 - L3 (verbatim): "una cuota por mes empezando ese mes (obviamente teniendo en cuenta la fecha de corte)"; alerts follow consumption (proposed, not objected).
 - L4 (verbatim): "si, impleméntalo ... revisa la UI si es clara o no y también revisa si porque el presupuesto cuenta 1 mes desde que se hizo el movimiento en vez del mes efectivo en el presupuesto"
+- L5: UI review: no budget surface explained that card purchases counted in the payment month (only "Los gastos sin presupuesto asignado permanecen aquí"), which matches L4. Added the switch with a hint per view in Goals and a caption on the 3 Dashboard budget widgets. Not checked visually in the running app.
+- L6: Risk: item 3 (shared helpers expenseAmountForMonth / createCardBillingLookup / cardBillingByAccount also feed cash flow and the advisor; default 'payment' keeps their output, pinned by tests). RDD off (clone_local). Independent verifier launched against fc2bf61..69e066d.
