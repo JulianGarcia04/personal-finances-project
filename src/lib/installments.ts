@@ -1,3 +1,5 @@
+import { buildCardStatementLedger, type CardLedgerTransaction, type CardStatementLedger } from './cardStatements.ts'
+
 export interface InstallmentTransaction {
   type: string;
   amount: number;
@@ -12,13 +14,22 @@ export interface InstallmentTransaction {
 export interface CardBilling {
   statementClosingDay: number;
   paymentDueDay: number;
+  // 'payment' (default): the month the statement is paid, for cash flow.
+  // 'consumption': the month of the statement cycle that contains the purchase, for budgets.
+  basis?: ImputationBasis;
+  // Payment basis only: payments already made to the card, so each statement counts in the
+  // months it was actually paid and only its unpaid rest in its payment month.
+  ledger?: CardStatementLedger;
 }
+
+export type ImputationBasis = 'payment' | 'consumption'
 
 export interface BillingAccount {
   id: string;
   type: string;
   statementClosingDay?: number | null;
   paymentDueDay?: number | null;
+  balance?: number | null;
   mirror?: unknown;
 }
 
@@ -36,11 +47,21 @@ export const cardBillingOf = (account?: BillingAccount | null): CardBilling | nu
   return { statementClosingDay, paymentDueDay }
 }
 
-export const createCardBillingLookup = (accounts: readonly BillingAccount[]): CardBillingLookup => {
+// With `options.transactions` the payment basis also applies the payments made to each card
+// (see cardStatements.ts); without it, every statement counts whole in its payment month.
+export const createCardBillingLookup = (
+  accounts: readonly BillingAccount[],
+  basis: ImputationBasis = 'payment',
+  options: { transactions?: readonly CardLedgerTransaction[] } = {}
+): CardBillingLookup => {
   const billingById = new Map<string, CardBilling>()
   for (const account of accounts) {
     const billing = cardBillingOf(account)
-    if (billing) billingById.set(account.id, billing)
+    if (!billing) continue
+    if (basis === 'consumption') billingById.set(account.id, { ...billing, basis })
+    else if (options.transactions) {
+      billingById.set(account.id, { ...billing, ledger: buildCardStatementLedger(account, billing, options.transactions) })
+    } else billingById.set(account.id, billing)
   }
   return accountId => (accountId ? billingById.get(accountId) ?? null : null)
 }
@@ -77,8 +98,9 @@ export const prorateInstallmentCents = (totalAmount: number, installments: numbe
   return (baseCents + (installmentIndex < remainderCents ? 1 : 0)) / 100
 }
 
-// Installment i of an expense is imputed to its first month + i. The first month is the
-// card payment month when `billing` is given, otherwise the purchase calendar month.
+// Installment i of an expense is imputed to its first month + i. The first month is, when
+// `billing` is given, the card payment month (basis 'payment', the default) or the statement
+// cycle month (basis 'consumption'); otherwise the purchase calendar month.
 export const expenseAmountForMonth = (
   transaction: InstallmentTransaction,
   year: number,
@@ -93,11 +115,22 @@ export const expenseAmountForMonth = (
   if (Number.isNaN(transactionDate.getTime())) return 0
 
   const firstMonth = billing
-    ? getPaymentBucket(transactionDate, billing)
+    ? billing.basis === 'consumption'
+      ? getCycleBucket(transactionDate, billing.statementClosingDay)
+      : getPaymentBucket(transactionDate, billing)
     : transactionDate.getFullYear() * 12 + transactionDate.getMonth()
   const targetMonth = year * 12 + month
   const installmentIndex = targetMonth - firstMonth
   const installments = getInstallmentCount(transaction.installments)
+
+  if (billing?.ledger && billing.basis !== 'consumption') {
+    let total = 0
+    for (let index = 0; index < installments; index++) {
+      const weight = billing.ledger.weight(firstMonth + index, targetMonth)
+      if (weight > 0) total += prorateInstallmentCents(transaction.amount, installments, index) * weight
+    }
+    return Math.round(total * 100) / 100
+  }
 
   if (installmentIndex < 0 || installmentIndex >= installments) return 0
 

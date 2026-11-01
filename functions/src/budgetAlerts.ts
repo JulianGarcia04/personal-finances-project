@@ -23,6 +23,11 @@ import { DEFAULT_MONTHLY_BUDGET_ID } from "./legacyCategoryBudgets";
 // (see notifyBudgetThreshold for how it is chosen).
 
 export const BUDGET_ALERTS_COLLECTION = "budgetAlerts";
+/**
+ * Alerts warn about consumption: card purchases count in their statement cycle month, the
+ * default "Consumo del mes" view of the app's budgets (src/lib/budgetBasis.ts).
+ */
+export const ALERT_CARD_BASIS = "consumption" as const;
 export const BUDGET_ALERT_THRESHOLDS = [80, 100] as const;
 export type BudgetThreshold = (typeof BUDGET_ALERT_THRESHOLDS)[number];
 /** Ledger slot (in place of a category id) for alerts on a budget's overall cap. */

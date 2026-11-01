@@ -185,3 +185,49 @@ test('createCardBillingLookup resolves billing by account id and falls back to n
   assert.equal(lookup(undefined), null)
   assert.equal(lookup(null), null)
 })
+
+// Consumption basis: card expenses count in the statement cycle that contains the purchase.
+const cardAccount = { id: 'card', type: 'credit', statementClosingDay: 30, paymentDueDay: 15 }
+
+test('consumption basis imputes a card purchase to its statement cycle month', () => {
+  const billingFor = createCardBillingLookup([cardAccount], 'consumption')
+  const beforeClosing = { type: 'expense', amount: -100, date: new Date(2026, 9, 15), accountId: 'card' }
+  const afterClosing = { type: 'expense', amount: -100, date: new Date(2026, 9, 31), accountId: 'card' }
+
+  assert.equal(expenseAmountForMonth(beforeClosing, 2026, 9, billingFor('card')), 100)
+  assert.equal(expenseAmountForMonth(beforeClosing, 2026, 10, billingFor('card')), 0)
+  assert.equal(expenseAmountForMonth(afterClosing, 2026, 9, billingFor('card')), 0)
+  assert.equal(expenseAmountForMonth(afterClosing, 2026, 10, billingFor('card')), 100)
+})
+
+test('consumption basis spreads installments from the statement cycle month', () => {
+  const billingFor = createCardBillingLookup([cardAccount], 'consumption')
+  const purchase = { type: 'expense', amount: -1200, date: new Date(2026, 9, 15), installments: 12, accountId: 'card' }
+
+  assert.equal(expenseAmountForMonth(purchase, 2026, 8, billingFor('card')), 0)
+  assert.equal(expenseAmountForMonth(purchase, 2026, 9, billingFor('card')), 100)
+  assert.equal(expenseAmountForMonth(purchase, 2027, 8, billingFor('card')), 100)
+  assert.equal(expenseAmountForMonth(purchase, 2027, 9, billingFor('card')), 0)
+})
+
+test('payment basis stays the default and keeps the statement payment month', () => {
+  const purchase = { type: 'expense', amount: -1200, date: new Date(2026, 9, 15), installments: 12, accountId: 'card' }
+  for (const billingFor of [createCardBillingLookup([cardAccount]), createCardBillingLookup([cardAccount], 'payment')]) {
+    assert.equal(expenseAmountForMonth(purchase, 2026, 9, billingFor('card')), 0)
+    assert.equal(expenseAmountForMonth(purchase, 2026, 10, billingFor('card')), 100)
+    assert.equal(expenseAmountForMonth(purchase, 2027, 9, billingFor('card')), 100)
+  }
+})
+
+test('consumption basis keeps calendar months for non-card and unconfigured accounts', () => {
+  const billingFor = createCardBillingLookup([
+    { id: 'savings', type: 'savings' },
+    { id: 'bare-card', type: 'credit', statementClosingDay: 30 },
+    { id: 'mirror', type: 'credit', statementClosingDay: 30, paymentDueDay: 15, mirror: { workspaceId: 'w' } }
+  ], 'consumption')
+  for (const accountId of ['savings', 'bare-card', 'mirror']) {
+    const tx = { type: 'expense', amount: -100, date: new Date(2026, 9, 31), accountId }
+    assert.equal(billingFor(accountId), null)
+    assert.equal(expenseAmountForMonth(tx, 2026, 9, billingFor(accountId)), 100)
+  }
+})

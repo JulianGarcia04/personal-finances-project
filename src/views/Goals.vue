@@ -243,6 +243,11 @@
     </div>
 
     <!-- Additional operating budgets; the protected legacy baseline remains below. -->
+    <section class="glass-panel rounded-2xl p-4 sm:p-5 border border-white/5 space-y-3" data-testid="goals-budget-basis" aria-labelledby="budget-basis-heading">
+      <h3 id="budget-basis-heading" class="font-display font-semibold text-sm text-text-primary">Cómo se cuentan los gastos en tus presupuestos</h3>
+      <BudgetBasisSwitch />
+    </section>
+
     <section class="space-y-5" aria-labelledby="additional-budgets-heading">
       <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div class="min-w-0">
@@ -448,6 +453,7 @@
 
         <p class="text-xs text-text-muted">
           Este presupuesto base conserva los límites heredados en <code>categoryBudgets</code>. Los gastos sin presupuesto asignado permanecen aquí.
+          El gasto se cuenta según la vista «{{ BUDGET_BASIS_LABELS[budgetBasis] }}» elegida arriba.
           Cuando la moneda de los límites está confirmada, el gasto se compara en {{ userCurrency }} usando las tasas manuales actuales; si falta una tasa, no se muestra una comparación incompleta.
           Tip: también puedes pedirle al <span class="text-accent-emerald font-semibold">Asesor IA</span> que analice tus gastos y te proponga presupuestos.
         </p>
@@ -542,7 +548,7 @@
               <span class="shrink-0 text-right text-text-primary tabular-nums">{{ formatCurrency(monthlyNeedsAmount + monthlyWantsAmount, userCurrency) }}</span>
             </div>
             <div class="flex justify-between gap-2 font-semibold">
-              <span class="min-w-0 text-text-secondary">Gasto real del mes</span>
+              <span class="min-w-0 text-text-secondary">Gasto real del mes ({{ BUDGET_BASIS_LABELS[budgetBasis] }})</span>
               <span class="shrink-0 text-right tabular-nums" :class="realMonthExpense > (monthlyNeedsAmount + monthlyWantsAmount) ? 'text-accent-rose' : 'text-accent-emerald'">
                 {{ formatCurrency(realMonthExpense, userCurrency) }}
               </span>
@@ -907,6 +913,8 @@ import { isReservedBudgetName } from '@/schemas'
 import { reportBudgetScope } from '@/lib/budgetReporting'
 import type { BudgetWorkspaceBudgetSnapshot } from '@/lib/budgetWorkspaceAdapter'
 import { createCardBillingLookup, expenseAmountForDate } from '@/lib/installments'
+import { BUDGET_BASIS_LABELS, budgetBasis } from '@/lib/budgetBasis'
+import BudgetBasisSwitch from '@/components/BudgetBasisSwitch.vue'
 import { parseDateOnly, toDateValue, toLocalDateKey } from '@/lib/dates'
 import { getAccountDisplayLabel, isPocketRelatedAccount } from '@/lib/pockets'
 import {
@@ -1059,8 +1067,12 @@ const budgetSuggestedCategories = computed(() => suggestCategoriesBySpending({
   excludeIds: budgetSelectedCategoryIds.value,
   amountOf: tx => goalsStore.convertToPrimary(Math.abs(tx.amount), tx.currency, userCurrency.value)
 }))
-// Billed card installments count in the month their statement is paid.
-const cardBillingFor = computed(() => createCardBillingLookup(accountsStore.accounts))
+// Card expenses count in their statement cycle month ("Consumo del mes") or when their
+// statement is paid ("Pagos del mes": payments already made count in their month, the unpaid
+// rest in the statement payment month), as chosen with the budget basis switch.
+const cardBillingFor = computed(() => createCardBillingLookup(accountsStore.accounts, budgetBasis.value, {
+  transactions: transactionsStore.transactions
+}))
 
 const baselineBudgetReport = computed(() => {
   const now = new Date()

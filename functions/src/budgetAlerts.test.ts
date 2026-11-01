@@ -22,7 +22,8 @@ import {
   evaluateBudgetThresholds,
   monthKey,
   resolveAlertBudgetId,
-  spendFieldsChanged
+  spendFieldsChanged,
+  ALERT_CARD_BASIS
 } from "./budgetAlerts";
 
 const BOGOTA = "America/Bogota";
@@ -479,4 +480,13 @@ test("a write that is only a transfer touching no linked account cannot move any
   assert.equal(skipsUnlinkedTransferWrite(expense(10), transfer("bank", "savings"), linkedBudgetOf), false);
   assert.equal(skipsUnlinkedTransferWrite(undefined, expense(10), linkedBudgetOf), false);
   assert.equal(skipsUnlinkedTransferWrite(undefined, undefined, linkedBudgetOf), false);
+});
+
+test("budget alerts count card purchases in their statement cycle month (consumption)", () => {
+  assert.equal(ALERT_CARD_BASIS, "consumption");
+  const card = { statementClosingDay: 30, paymentDueDay: 15, basis: ALERT_CARD_BASIS };
+  const purchase = { type: "expense", amount: -100, categoryId: "food", accountId: "visa", date: "2026-10-15" };
+  const options = { timeZone: BOGOTA, billingFor: () => card };
+  assert.equal(alertCategoryFor(purchase, DEFAULT_SCOPE, { year: 2026, month: 9 }, options), "food");
+  assert.equal(alertCategoryFor(purchase, DEFAULT_SCOPE, { year: 2026, month: 10 }, options), null);
 });

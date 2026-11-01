@@ -1,5 +1,5 @@
 import { AgentToolError, buildDateContext, NameMaps } from "./agentTools";
-import { CardBilling, cardBillingOf, paymentMonthIndex, YearMonth, zonedDateKey, zonedWallClockToInstant, zonedYearMonth } from "./http";
+import { CardBilling, cardBillingOf, ImputationBasis, paymentMonthIndex, YearMonth, zonedDateKey, zonedWallClockToInstant, zonedYearMonth } from "./http";
 import {
   AlertScope,
   LinkedBudgetLookup,
@@ -262,12 +262,18 @@ function contributions(tx: SummaryTransaction, timeZone: string, billing?: CardB
   });
 }
 
-/** Billing days by account id for the workspace's regular credit cards (see cardBillingOf). */
-export function cardBillingByAccount(accounts: { id: string; [key: string]: unknown }[]): Map<string, CardBilling> {
+/**
+ * Billing days by account id for the workspace's regular credit cards (see cardBillingOf),
+ * tagged with the imputation basis when it is not the default "payment".
+ */
+export function cardBillingByAccount(
+  accounts: { id: string; [key: string]: unknown }[],
+  basis: ImputationBasis = "payment"
+): Map<string, CardBilling> {
   const billing = new Map<string, CardBilling>();
   for (const account of accounts) {
     const days = cardBillingOf(account);
-    if (days) billing.set(account.id, days);
+    if (days) billing.set(account.id, basis === "payment" ? days : { ...days, basis });
   }
   return billing;
 }

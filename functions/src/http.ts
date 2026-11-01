@@ -236,7 +236,14 @@ export function storedDateValue(value: any, timeZone: string = DEFAULT_TIME_ZONE
 export interface CardBilling {
   statementClosingDay: number;
   paymentDueDay: number;
+  /**
+   * "payment" (default): the month the statement is paid (cash flow).
+   * "consumption": the month of the statement cycle that contains the purchase (budgets).
+   */
+  basis?: ImputationBasis;
 }
+
+export type ImputationBasis = "payment" | "consumption";
 
 const isBillingDay = (value: unknown): value is number =>
   Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 31;
@@ -259,14 +266,22 @@ export function cardBillingOf(account: Record<string, any> | null | undefined): 
  * the closing day, otherwise the month after it.
  */
 export function paymentMonthIndex(year: number, month: number, day: number, billing: CardBilling): number {
-  const closingIndex = year * 12 + month + (day > billing.statementClosingDay ? 1 : 0);
-  return closingIndex + (billing.paymentDueDay > billing.statementClosingDay ? 0 : 1);
+  return cycleMonthIndex(year, month, day, billing) + (billing.paymentDueDay > billing.statementClosingDay ? 0 : 1);
+}
+
+/**
+ * Port of getCycleBucket for a local calendar day (0-based month): year * 12 + month of the
+ * statement closing that contains that day; a day after the closing day belongs to next month.
+ */
+export function cycleMonthIndex(year: number, month: number, day: number, billing: CardBilling): number {
+  return year * 12 + month + (day > billing.statementClosingDay ? 1 : 0);
 }
 
 /**
  * Share of an expense (installments split to the cent) that falls in the given local month.
- * With card `billing`, installment i falls in the statement payment month + i; otherwise in
- * the purchase month + i.
+ * With card `billing`, installment i falls in the statement payment month + i (basis
+ * "payment", the default) or the statement cycle month + i (basis "consumption"); otherwise
+ * in the purchase month + i.
  */
 export function expenseAmountForMonth(
   data: Record<string, any>,
@@ -282,7 +297,9 @@ export function expenseAmountForMonth(
   const installments = Number.isInteger(data.installments) && data.installments > 0 ? data.installments : 1;
   const local = zonedParts(transactionDate, timeZone);
   const firstMonth = billing
-    ? paymentMonthIndex(local.year, local.month - 1, local.day, billing)
+    ? billing.basis === "consumption"
+      ? cycleMonthIndex(local.year, local.month - 1, local.day, billing)
+      : paymentMonthIndex(local.year, local.month - 1, local.day, billing)
     : local.year * 12 + local.month - 1;
   const monthIndex = year * 12 + month - firstMonth;
   if (monthIndex < 0 || monthIndex >= installments) return 0;

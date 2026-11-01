@@ -62,6 +62,7 @@ import {
   resolveAlertBudgetId,
   scopeTotalSpend,
   spendFieldsChanged,
+  ALERT_CARD_BASIS,
   TOTAL_ALERT_SUBJECT,
   FUNDS_ALERT_SUBJECT,
   scopeFundsTotal,
@@ -396,7 +397,7 @@ export const notifyBudgetThreshold = onDocumentWritten(
       : {};
     const month = zonedYearMonth(new Date(event.time), timeZone);
     const accountsSnap = await db.collection("accounts").where("workspaceId", "==", workspaceId).get();
-    const billing = cardBillingByAccount(accountsSnap.docs.map((d) => ({ ...d.data(), id: d.id })));
+    const billing = cardBillingByAccount(accountsSnap.docs.map((d) => ({ ...d.data(), id: d.id })), ALERT_CARD_BASIS);
     const billingFor = (accountId?: string | null) => (accountId ? billing.get(accountId) ?? null : null);
 
     // Which caps this write can move: its category cap, its additional budget's overall cap and

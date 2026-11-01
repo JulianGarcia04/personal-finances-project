@@ -428,3 +428,10 @@ test('bridge and pocket accounts cannot be linked, and the contribution lock is 
   assert.match(goalsView, /:aria-describedby="contributeLinkedBudget \? 'contribute-budget-lock' : undefined"/)
   assert.match(goalsView, /id="contribute-budget-lock"/)
 })
+
+test('budget basis: Goals shows the consumption/payment switch and counts budgets with it', () => {
+  assertContains(/data-testid="goals-budget-basis"[\s\S]{0,400}<BudgetBasisSwitch \/>/, 'the budget area must start with the basis switch')
+  assertContains(/const cardBillingFor = computed\(\(\) => createCardBillingLookup\(accountsStore\.accounts, budgetBasis\.value, \{\s*transactions: transactionsStore\.transactions\s*\}\)\)/, 'budget figures must follow the chosen basis and apply card payments')
+  assertContains(/vista «\{\{ BUDGET_BASIS_LABELS\[budgetBasis\] \}\}»/, 'the protected baseline must name the view it counts with')
+  assertContains(/Gasto real del mes \(\{\{ BUDGET_BASIS_LABELS\[budgetBasis\] \}\}\)/, 'the 50/30/20 comparison must name the view it counts with')
+})

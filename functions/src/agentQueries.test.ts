@@ -457,3 +457,12 @@ test("byBudget is only computed for whole calendar months and unfiltered summari
   const range = runBudgets(BUDGET_ROWS, { startDate: "2026-10-01", endDate: "2026-10-31" }, { budgetBreakdown: { budgets: [VENTAS] } });
   assert.equal(range.byBudget?.monthlyIncome, 5_000_000);
 });
+
+test("cardBillingByAccount tags billing with the consumption basis only when asked", () => {
+  const accounts = [{ id: "visa", type: "credit", statementClosingDay: 30, paymentDueDay: 15 }];
+  assert.deepEqual(cardBillingByAccount(accounts).get("visa"), { statementClosingDay: 30, paymentDueDay: 15 });
+  assert.deepEqual(
+    cardBillingByAccount(accounts, "consumption").get("visa"),
+    { statementClosingDay: 30, paymentDueDay: 15, basis: "consumption" }
+  );
+});
