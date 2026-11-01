@@ -22,7 +22,7 @@ import {
   projectMonthEndExpenses,
   splitMonthEndExpenses
 } from '../lib/dashboardMetrics.ts'
-import { createCardBillingLookup, expenseAmountForMonth, type BillingAccount } from '../lib/installments.ts'
+import { createCardBillingLookup, expenseAmountForMonth, type BillingAccount, type ImputationBasis } from '../lib/installments.ts'
 
 const componentSource = readFileSync(new URL('./Dashboard.vue', import.meta.url), 'utf8')
 const script = componentSource.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)?.[1]
@@ -70,7 +70,7 @@ const currentMonthExpense = (overrides: Partial<BudgetExpenseTransaction> = {}):
 
 const computedDependency = <Value>(getter: () => Value) => ({ get value() { return getter() } })
 
-const billingDependency = (accounts: BillingAccount[] = []) => ({ value: createCardBillingLookup(accounts) })
+const billingDependency = (accounts: BillingAccount[] = [], basis?: ImputationBasis) => ({ value: createCardBillingLookup(accounts, basis) })
 
 // Closing 31 keeps every purchase on its calendar month's statement and due day 10 pays
 // it the following month, so the expectations do not depend on today's date.
@@ -85,14 +85,15 @@ const estimateDependencies = (
   transactions: BudgetExpenseTransaction[],
   currency: string,
   exchangeRates: Record<string, number>,
-  accounts: BillingAccount[] = []
+  accounts: BillingAccount[] = [],
+  basis?: ImputationBasis
 ) => ({
   computed: computedDependency,
   reportAllBudgetsEstimatedMonthly,
   transactionsStore: { transactions },
   primaryCurrency: { value: currency },
   goalsStore: { exchangeRates },
-  cardBillingFor: billingDependency(accounts)
+  budgetBillingFor: billingDependency(accounts, basis)
 })
 
 test('Dashboard estimates current monthly installments across budget IDs without adding event principal', () => {
@@ -140,7 +141,7 @@ const legacyBudgetDependencies = (
   primaryCurrency: { value: 'USD' },
   convert: (amount: number, currency: string) => currency === 'EUR' ? amount * (exchangeRates.EUR ?? 1) : amount,
   getCategory: () => ({ name: 'Food', color: '#ffffff' }),
-  cardBillingFor: billingDependency()
+  budgetBillingFor: billingDependency()
 })
 
 test('Dashboard keeps legacy caps nominal in confirmed currency and uses manual FX only for comparisons', () => {
@@ -228,18 +229,19 @@ test('Dashboard exposes reporting currency and names missing and invalid manual 
   assert.match(template, /allBudgetsEstimatedMonthly\.amount !== null/)
 })
 
-test('Dashboard budget estimate counts card statements due this month instead of this month\'s card purchases', () => {
+test('Dashboard budget estimate counts this month\'s card purchases by consumption and statements due this month by payment', () => {
   const transactions = [
     currentMonthExpense({ amount: -50, accountId: 'visa', date: previousMonthFirstDay() }),
     currentMonthExpense({ amount: -1000, accountId: 'visa' }),
     currentMonthExpense({ amount: -10, accountId: 'cash' })
   ]
-  const estimate = evaluateComputed<BudgetAmountReport>(
+  const estimateFor = (basis: ImputationBasis) => evaluateComputed<BudgetAmountReport>(
     'allBudgetsEstimatedMonthly',
-    estimateDependencies(transactions, 'USD', {}, [visa])
+    estimateDependencies(transactions, 'USD', {}, [visa], basis)
   )
 
-  assert.equal(estimate.value.amount, 60)
+  assert.equal(estimateFor('consumption').value.amount, 1010)
+  assert.equal(estimateFor('payment').value.amount, 60)
 })
 
 test('Dashboard month-end projection adds card statements of earlier purchases once without extrapolating them', () => {
@@ -351,7 +353,7 @@ test('S9: the per-budget panel lists active budgets with activity and their fund
     goalsStore: { operatingBudgets: s9OperatingBudgets, exchangeRates: {} },
     transactionsStore: { transactions: s9Transactions() },
     primaryCurrency: { value: 'COP' },
-    cardBillingFor: billingDependency(),
+    budgetBillingFor: billingDependency(),
     linkedBudgetOfAccount: () => null,
     budgetCardFigures,
     hasBudgetActivity
@@ -361,4 +363,13 @@ test('S9: the per-budget panel lists active budgets with activity and their fund
   ])
   assert.match(componentSource, /v-if="flowView === 'budget'"[\s\S]{0,400}data-testid="dashboard-budget-breakdown"/)
   assert.match(componentSource, /data-testid="dashboard-budget-breakdown"[\s\S]*?to="\/goals"/)
+})
+
+test('budget basis: Dashboard budget widgets follow the basis while cash flow keeps the payment month', () => {
+  assert.ok(script)
+  assert.match(script, /const cardBillingFor = computed\(\(\) => createCardBillingLookup\(accountsStore\.accounts\)\)/)
+  assert.match(script, /const budgetBillingFor = computed\(\(\) => createCardBillingLookup\(accountsStore\.accounts, budgetBasis\.value\)\)/)
+  assert.equal(script.match(/cardBilling: budgetBillingFor\.value/g)?.length, 3)
+  assert.equal(script.match(/cardBilling: cardBillingFor\.value/g), null)
+  assert.equal(componentSource.match(/data-testid="dashboard-budget-basis-caption"/g)?.length, 3)
 })

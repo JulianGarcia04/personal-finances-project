@@ -12,7 +12,12 @@ export interface InstallmentTransaction {
 export interface CardBilling {
   statementClosingDay: number;
   paymentDueDay: number;
+  // 'payment' (default): the month the statement is paid, for cash flow.
+  // 'consumption': the month of the statement cycle that contains the purchase, for budgets.
+  basis?: ImputationBasis;
 }
+
+export type ImputationBasis = 'payment' | 'consumption'
 
 export interface BillingAccount {
   id: string;
@@ -36,11 +41,14 @@ export const cardBillingOf = (account?: BillingAccount | null): CardBilling | nu
   return { statementClosingDay, paymentDueDay }
 }
 
-export const createCardBillingLookup = (accounts: readonly BillingAccount[]): CardBillingLookup => {
+export const createCardBillingLookup = (
+  accounts: readonly BillingAccount[],
+  basis: ImputationBasis = 'payment'
+): CardBillingLookup => {
   const billingById = new Map<string, CardBilling>()
   for (const account of accounts) {
     const billing = cardBillingOf(account)
-    if (billing) billingById.set(account.id, billing)
+    if (billing) billingById.set(account.id, basis === 'payment' ? billing : { ...billing, basis })
   }
   return accountId => (accountId ? billingById.get(accountId) ?? null : null)
 }
@@ -77,8 +85,9 @@ export const prorateInstallmentCents = (totalAmount: number, installments: numbe
   return (baseCents + (installmentIndex < remainderCents ? 1 : 0)) / 100
 }
 
-// Installment i of an expense is imputed to its first month + i. The first month is the
-// card payment month when `billing` is given, otherwise the purchase calendar month.
+// Installment i of an expense is imputed to its first month + i. The first month is, when
+// `billing` is given, the card payment month (basis 'payment', the default) or the statement
+// cycle month (basis 'consumption'); otherwise the purchase calendar month.
 export const expenseAmountForMonth = (
   transaction: InstallmentTransaction,
   year: number,
@@ -93,7 +102,9 @@ export const expenseAmountForMonth = (
   if (Number.isNaN(transactionDate.getTime())) return 0
 
   const firstMonth = billing
-    ? getPaymentBucket(transactionDate, billing)
+    ? billing.basis === 'consumption'
+      ? getCycleBucket(transactionDate, billing.statementClosingDay)
+      : getPaymentBucket(transactionDate, billing)
     : transactionDate.getFullYear() * 12 + transactionDate.getMonth()
   const targetMonth = year * 12 + month
   const installmentIndex = targetMonth - firstMonth

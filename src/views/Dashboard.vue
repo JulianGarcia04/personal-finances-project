@@ -248,6 +248,7 @@
             Ver presupuestos
           </router-link>
         </div>
+        <p class="text-[11px] text-text-muted" data-testid="dashboard-budget-basis-caption">{{ budgetBasisCaption }}</p>
         <p v-if="budgetBreakdown.length === 0" class="text-xs text-text-secondary">
           Ningún presupuesto adicional tiene fondos ni gastos este mes.
         </p>
@@ -337,6 +338,7 @@
               Ajustar
             </router-link>
           </div>
+          <p class="text-[11px] text-text-muted" data-testid="dashboard-budget-basis-caption">{{ budgetBasisCaption }}</p>
           <div class="flex items-end justify-between">
             <span class="text-[10px] text-text-muted uppercase tracking-widest">Usado</span>
             <span v-if="budgetSummary.percent !== null" :class="['font-display font-bold text-lg', budgetSummary.percent > 100 ? 'text-accent-rose' : budgetSummary.percent >= 70 ? 'text-accent-amber' : 'text-accent-emerald']">
@@ -394,6 +396,7 @@
               <p class="text-text-muted text-xs mt-1 max-w-xl">
                 Cuotas del mes de gastos de todos los presupuestos, incluidos los eliminados y sin asignar; el principal de eventos no se suma aparte.
               </p>
+              <p class="text-[11px] text-text-muted mt-1 max-w-xl" data-testid="dashboard-budget-basis-caption">{{ budgetBasisCaption }}</p>
             </div>
             <span class="shrink-0 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] font-semibold text-text-secondary">
               Moneda de reporte: {{ allBudgetsEstimatedMonthly.currency }}
@@ -554,6 +557,7 @@ import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useGoalsStore } from '@/stores/goalsStore'
 import { Account, AccountType, Transaction } from '@/types'
 import { createCardBillingLookup, expenseAmountForMonth } from '@/lib/installments'
+import { BUDGET_BASIS_HINTS, BUDGET_BASIS_LABELS, budgetBasis } from '@/lib/budgetBasis'
 import { getTransactionDisplay } from '@/lib/transactionDisplay'
 import { splitMoney } from '@/lib/money'
 import { getAccountDisplayLabel, groupAccountsByPocket } from '@/lib/pockets'
@@ -653,6 +657,9 @@ const primaryCurrency = computed(() => settingsStore.currency || 'COP')
 // Billing days per credit card: billed card installments count in the month the
 // statement is paid. "Compras registradas" and the card statement widget do not use it.
 const cardBillingFor = computed(() => createCardBillingLookup(accountsStore.accounts))
+// Budget widgets follow the budget basis chosen in Goals ("Consumo del mes" by default).
+const budgetBillingFor = computed(() => createCardBillingLookup(accountsStore.accounts, budgetBasis.value))
+const budgetBasisCaption = computed(() => `Vista: ${BUDGET_BASIS_LABELS[budgetBasis.value]}. ${BUDGET_BASIS_HINTS[budgetBasis.value]}`)
 
 const allBudgetsEstimatedMonthly = computed(() => {
   const now = new Date()
@@ -661,7 +668,7 @@ const allBudgetsEstimatedMonthly = computed(() => {
     period: { year: now.getFullYear(), month: now.getMonth() },
     reportingCurrency: primaryCurrency.value,
     exchangeRates: goalsStore.exchangeRates,
-    cardBilling: cardBillingFor.value
+    cardBilling: budgetBillingFor.value
   })
 })
 
@@ -772,7 +779,7 @@ const budgetBreakdown = computed(() => {
         period: { year: now.getFullYear(), month: now.getMonth() },
         reportingCurrency: primaryCurrency.value,
         exchangeRates: goalsStore.exchangeRates,
-        cardBilling: cardBillingFor.value
+        cardBilling: budgetBillingFor.value
       })
     }))
     .filter(hasBudgetActivity)
@@ -966,7 +973,7 @@ const budgetSummary = computed(() => {
     period: { year: now.getFullYear(), month: now.getMonth() },
     reportingCurrency: primaryCurrency.value,
     exchangeRates: goalsStore.exchangeRates,
-    cardBilling: cardBillingFor.value
+    cardBilling: budgetBillingFor.value
   })
 
   const comparisonWarnings = new Set<string>()
