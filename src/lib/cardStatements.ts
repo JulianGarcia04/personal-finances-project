@@ -30,6 +30,8 @@ export interface CardStatementLedger {
   // Share of the statement paid in `paymentBucket` that counts in `targetBucket`
   // (buckets are year * 12 + month).
   weight: (paymentBucket: number, targetBucket: number) => number
+  // Still unpaid of every statement paid up to `paymentBucket`, overdue ones included.
+  pendingThrough: (paymentBucket: number) => number
 }
 
 const monthBucket = (date: Date) => date.getFullYear() * 12 + date.getMonth()
@@ -120,6 +122,13 @@ export const buildCardStatementLedger = (
       const paid = statement.paidByMonth.get(targetBucket) ?? 0
       const unpaid = paymentBucket === targetBucket ? statement.remainingCents : 0
       return (paid + unpaid) / statement.totalCents
+    },
+    pendingThrough: paymentBucket => {
+      let pendingCents = 0
+      for (const [bucket, statement] of statements) {
+        if (bucket <= paymentBucket) pendingCents += statement.remainingCents
+      }
+      return pendingCents / 100
     }
   }
 }

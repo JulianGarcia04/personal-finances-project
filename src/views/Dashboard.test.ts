@@ -23,6 +23,8 @@ import {
   splitMonthEndExpenses
 } from '../lib/dashboardMetrics.ts'
 import { createCardBillingLookup, expenseAmountForMonth, type BillingAccount, type ImputationBasis } from '../lib/installments.ts'
+import { buildCardStatementLedger } from '../lib/cardStatements.ts'
+import { daysUntil, getNextOccurrence } from '../lib/creditCycle.ts'
 
 const componentSource = readFileSync(new URL('./Dashboard.vue', import.meta.url), 'utf8')
 const script = componentSource.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)?.[1]
@@ -367,9 +369,58 @@ test('S9: the per-budget panel lists active budgets with activity and their fund
 
 test('budget basis: Dashboard budget widgets follow the basis while cash flow keeps the payment month', () => {
   assert.ok(script)
-  assert.match(script, /const cardBillingFor = computed\(\(\) => createCardBillingLookup\(accountsStore\.accounts\)\)/)
+  assert.match(script, /const cardBillingFor = computed\(\(\) => createCardBillingLookup\(accountsStore\.accounts, 'payment', \{\s*transactions: transactionsStore\.transactions\s*\}\)\)/)
   assert.match(script, /const budgetBillingFor = computed\(\(\) => createCardBillingLookup\(accountsStore\.accounts, budgetBasis\.value, \{\s*transactions: transactionsStore\.transactions\s*\}\)\)/)
   assert.equal(script.match(/cardBilling: budgetBillingFor\.value/g)?.length, 3)
   assert.equal(script.match(/cardBilling: cardBillingFor\.value/g), null)
   assert.equal(componentSource.match(/data-testid="dashboard-budget-basis-caption"/g)?.length, 3)
+})
+
+// --- Card payments already made (cash flow and upcoming payments) ---
+
+const paidCardFlow = (withPayment: boolean) => {
+  const purchase = currentMonthExpense({ amount: -50, accountId: 'visa', date: previousMonthFirstDay() })
+  const payment = { type: 'transfer', amount: 50, currency: 'USD', date: previousMonthFirstDay(), accountId: 'savings', toAccountId: 'visa' }
+  const transactions = (withPayment ? [purchase, payment] : [purchase]) as unknown as BudgetExpenseTransaction[]
+  const balance = withPayment ? 0 : -50
+  const getMoMData = evaluateComputed<never>('getMoMData', {
+    alignedMonthPeriods,
+    transactionsStore: { transactions },
+    cardBillingFor: { value: createCardBillingLookup([{ ...visa, balance }], 'payment', { transactions: transactions as never }) },
+    convert: (amount: number) => amount,
+    expenseAmountForMonth,
+    expenseAmountInPeriod,
+    isDateInPeriod,
+    percentChange,
+    budgetMonthFilter: { value: null }
+  }) as unknown as (type: 'income' | 'expense', view: 'all' | 'budget') => { current: number }
+  return getMoMData('expense', 'all').current
+}
+
+test('Dashboard cash flow does not count again a card statement already paid', () => {
+  assert.equal(paidCardFlow(false), 50)
+  assert.equal(paidCardFlow(true), 0)
+})
+
+const upcomingFor = (balance: number, transactions: unknown[]) => evaluateComputed<{ id: string; amount: number | null; debt: number }[]>('upcomingCardPayments', {
+  computed: computedDependency,
+  accountsStore: { accounts: [{ id: 'nu', name: 'Nu', type: 'credit', currency: 'COP', statementClosingDay: 15, paymentDueDay: 4, balance }] },
+  transactionsStore: { transactions },
+  getNextOccurrence,
+  daysUntil,
+  buildCardStatementLedger
+}).value[0]
+
+test('upcoming card payments show what is still unpaid of the statements due, capped by the debt', () => {
+  const due = getNextOccurrence(4)
+  // A purchase on the 1st of the month before the due month is on the statement paid on `due`.
+  const purchaseDate = new Date(due.getFullYear(), due.getMonth() - 1, 1, 12)
+  const purchase = { type: 'expense', amount: -1000, date: purchaseDate, accountId: 'nu' }
+  const lent = { type: 'transfer', amount: 200, date: purchaseDate, accountId: 'nu', toAccountId: 'receivable' }
+  const paid = { type: 'transfer', amount: 700, date: purchaseDate, accountId: 'savings', toAccountId: 'nu' }
+
+  assert.equal(upcomingFor(-1200, [purchase, lent]).amount, 1200)
+  assert.equal(upcomingFor(-500, [purchase, lent, paid]).amount, 500)
+  assert.equal(upcomingFor(0, [purchase, lent, { ...paid, amount: 1200 }]).amount, 0)
+  assert.equal(upcomingFor(-1200, [purchase, lent]).debt, 1200)
 })

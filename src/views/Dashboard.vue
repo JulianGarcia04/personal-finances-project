@@ -582,7 +582,8 @@ import {
   parseFlowView,
   type FlowView
 } from '@/lib/dashboardMetrics'
-import { getNextOccurrence, daysUntil, expenseAmountForCycle, getStatementClosingForDueDate } from '@/lib/creditCycle'
+import { getNextOccurrence, daysUntil } from '@/lib/creditCycle'
+import { buildCardStatementLedger } from '@/lib/cardStatements'
 import { DEFAULT_MONTHLY_BUDGET_ID, budgetScopedMonthFilter, linkedBudgetForAccount } from '@/lib/budgets'
 import { reportAllBudgetsEstimatedMonthly, reportBudgetScope } from '@/lib/budgetReporting'
 import { 
@@ -654,9 +655,12 @@ watch(
 // Moneda principal: la elegida por el usuario en Settings
 const primaryCurrency = computed(() => settingsStore.currency || 'COP')
 
-// Billing days per credit card: billed card installments count in the month the
-// statement is paid. "Compras registradas" and the card statement widget do not use it.
-const cardBillingFor = computed(() => createCardBillingLookup(accountsStore.accounts))
+// Billing days per credit card: card expenses count when their statement is paid. Payments
+// already made to the card count in the month they were made and only the unpaid rest of a
+// statement in its payment month (cardStatements.ts). "Compras registradas" does not use it.
+const cardBillingFor = computed(() => createCardBillingLookup(accountsStore.accounts, 'payment', {
+  transactions: transactionsStore.transactions
+}))
 // Budget widgets follow the budget basis chosen in Goals ("Consumo del mes" by default).
 const budgetBillingFor = computed(() => createCardBillingLookup(accountsStore.accounts, budgetBasis.value, {
   transactions: transactionsStore.transactions
@@ -1269,15 +1273,18 @@ const upcomingCardPayments = computed(() => {
       const dueDate = getNextOccurrence(acc.paymentDueDay!)
       // Sin statementClosingDay no se puede saber qué cae en el corte: se muestra
       // el recordatorio de fecha sin monto (ver creditCycle.ts).
-      // El monto es el del extracto que se paga en dueDate (último corte antes del
-      // vencimiento), no el del ciclo en curso: después del corte hoy ya cae en el siguiente.
-      const closing = acc.statementClosingDay
-        ? getStatementClosingForDueDate(acc.statementClosingDay, dueDate)
+      // El monto es lo que falta por pagar de los extractos que vencen hasta dueDate: todos
+      // los cargos de la tarjeta menos los pagos ya hechos, nunca más que la deuda actual.
+      const billing = acc.statementClosingDay
+        ? { statementClosingDay: acc.statementClosingDay, paymentDueDay: acc.paymentDueDay! }
         : null
-      const amount = closing
-        ? transactionsStore.transactions
-            .filter(t => t.accountId === acc.id)
-            .reduce((sum, t) => sum + expenseAmountForCycle(t, acc.statementClosingDay!, closing), 0)
+      const debt = Math.max(0, -acc.balance)
+      const amount = billing
+        ? Math.min(
+            buildCardStatementLedger(acc, billing, transactionsStore.transactions)
+              .pendingThrough(dueDate.getFullYear() * 12 + dueDate.getMonth()),
+            debt
+          )
         : null
       return {
         id: acc.id,
@@ -1285,7 +1292,7 @@ const upcomingCardPayments = computed(() => {
         currency: acc.currency,
         dueDate,
         daysLeft: daysUntil(dueDate),
-        debt: Math.max(0, -acc.balance),
+        debt,
         amount
       }
     })

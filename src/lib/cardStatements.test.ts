@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createCardBillingLookup, expenseAmountForMonth } from './installments.ts'
+import { buildCardStatementLedger } from './cardStatements.ts'
 
 // Closing 15, due 4: a purchase on 3-oct is on the statement closed 15-oct, paid 4-nov.
 const card = (balance: number) => ({ id: 'nu', type: 'credit', statementClosingDay: 15, paymentDueDay: 4, balance })
@@ -77,4 +78,23 @@ test('the consumption basis ignores payments', () => {
   const billingFor = createCardBillingLookup([card(0)], 'consumption', { transactions: [purchase, payment('2026-10-04', 1000)] })
   assert.equal(expenseAmountForMonth(purchase, ...OCT, billingFor('nu')), 1000)
   assert.equal(expenseAmountForMonth(purchase, ...NOV, billingFor('nu')), 0)
+})
+
+const ledgerFor = (transactions: Parameters<typeof buildCardStatementLedger>[2], balance: number) =>
+  buildCardStatementLedger(card(balance), { statementClosingDay: 15, paymentDueDay: 4 }, transactions)
+const bucket = (year: number, month: number) => year * 12 + month
+
+test('pendingThrough is what is still unpaid of the statements due up to that month', () => {
+  const october = expense('2026-10-03', 1000) // due 4-nov
+  const november = expense('2026-10-20', 300) // due 4-dec
+  const ledger = ledgerFor([october, november, payment('2026-10-04', 600)], -700)
+  assert.equal(ledger.pendingThrough(bucket(2026, 10)), 400)
+  assert.equal(ledger.pendingThrough(bucket(2026, 11)), 700)
+})
+
+test('pendingThrough is zero for a statement paid early and counts card charges that are not expenses', () => {
+  const purchase = expense('2026-10-03', 1000)
+  const lent = { type: 'transfer', amount: 500, date: new Date('2026-10-05T12:00:00'), accountId: 'nu', toAccountId: 'receivable' }
+  assert.equal(ledgerFor([purchase, lent, payment('2026-10-16', 1500)], 0).pendingThrough(bucket(2026, 10)), 0)
+  assert.equal(ledgerFor([purchase, lent], -1500).pendingThrough(bucket(2026, 10)), 1500)
 })
