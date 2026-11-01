@@ -368,7 +368,7 @@ test('S9: the per-budget panel lists active budgets with activity and their fund
 test('budget basis: Dashboard budget widgets follow the basis while cash flow keeps the payment month', () => {
   assert.ok(script)
   assert.match(script, /const cardBillingFor = computed\(\(\) => createCardBillingLookup\(accountsStore\.accounts\)\)/)
-  assert.match(script, /const budgetBillingFor = computed\(\(\) => createCardBillingLookup\(accountsStore\.accounts, budgetBasis\.value\)\)/)
+  assert.match(script, /const budgetBillingFor = computed\(\(\) => createCardBillingLookup\(accountsStore\.accounts, budgetBasis\.value, \{\s*transactions: transactionsStore\.transactions\s*\}\)\)/)
   assert.equal(script.match(/cardBilling: budgetBillingFor\.value/g)?.length, 3)
   assert.equal(script.match(/cardBilling: cardBillingFor\.value/g), null)
   assert.equal(componentSource.match(/data-testid="dashboard-budget-basis-caption"/g)?.length, 3)

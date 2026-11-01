@@ -29,4 +29,5 @@ test('each budget view names what it counts', () => {
   assert.match(BUDGET_BASIS_HINTS.consumption, /tarjeta de crédito/)
   assert.match(BUDGET_BASIS_HINTS.consumption, /corte/)
   assert.match(BUDGET_BASIS_HINTS.payment, /meses anteriores/)
+  assert.match(BUDGET_BASIS_HINTS.payment, /ya transferiste a la tarjeta/)
 })

@@ -1067,9 +1067,12 @@ const budgetSuggestedCategories = computed(() => suggestCategoriesBySpending({
   excludeIds: budgetSelectedCategoryIds.value,
   amountOf: tx => goalsStore.convertToPrimary(Math.abs(tx.amount), tx.currency, userCurrency.value)
 }))
-// Card expenses count in their statement cycle month ("Consumo del mes") or in the month
-// their statement is paid ("Pagos del mes"), as chosen with the budget basis switch.
-const cardBillingFor = computed(() => createCardBillingLookup(accountsStore.accounts, budgetBasis.value))
+// Card expenses count in their statement cycle month ("Consumo del mes") or when their
+// statement is paid ("Pagos del mes": payments already made count in their month, the unpaid
+// rest in the statement payment month), as chosen with the budget basis switch.
+const cardBillingFor = computed(() => createCardBillingLookup(accountsStore.accounts, budgetBasis.value, {
+  transactions: transactionsStore.transactions
+}))
 
 const baselineBudgetReport = computed(() => {
   const now = new Date()

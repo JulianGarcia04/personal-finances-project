@@ -658,7 +658,9 @@ const primaryCurrency = computed(() => settingsStore.currency || 'COP')
 // statement is paid. "Compras registradas" and the card statement widget do not use it.
 const cardBillingFor = computed(() => createCardBillingLookup(accountsStore.accounts))
 // Budget widgets follow the budget basis chosen in Goals ("Consumo del mes" by default).
-const budgetBillingFor = computed(() => createCardBillingLookup(accountsStore.accounts, budgetBasis.value))
+const budgetBillingFor = computed(() => createCardBillingLookup(accountsStore.accounts, budgetBasis.value, {
+  transactions: transactionsStore.transactions
+}))
 const budgetBasisCaption = computed(() => `Vista: ${BUDGET_BASIS_LABELS[budgetBasis.value]}. ${BUDGET_BASIS_HINTS[budgetBasis.value]}`)
 
 const allBudgetsEstimatedMonthly = computed(() => {
