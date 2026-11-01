@@ -539,7 +539,7 @@
 
       <!-- 50/30/20 vs realidad del mes -->
       <div class="glass-panel rounded-2xl p-4 sm:p-6 border border-white/5 space-y-4">
-        <h4 class="font-display font-semibold text-sm text-text-primary">Tu plan 50/30/20 vs este mes (real)</h4>
+        <h4 class="font-display font-semibold text-sm text-text-primary">Tu plan {{ needsPercent }}/{{ wantsPercent }}/{{ savingsPercent }} vs este mes (real)</h4>
         <!-- ponytail: no sabemos qué categorías son "necesidad" vs "deseo"; comparamos gasto total y ahorro reales contra el plan -->
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
           <div class="space-y-1.5">

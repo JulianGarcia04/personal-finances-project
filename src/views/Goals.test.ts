@@ -442,3 +442,8 @@ test('budget planner labels show the configured percentages, not fixed 50/30/20'
   assertContains(/Ahorro \(\{\{ savingsPercent \}\}%\)/, 'savings label must show the configured percent')
   assertNotContains(/Necesidades \(50%\)|Deseos \(30%\)|Ahorro \(20%\)/, 'fixed default percentages must not be shown as labels')
 })
+
+test('plan vs real title shows the configured split, not a fixed 50/30/20', () => {
+  assertContains(/Tu plan \{\{ needsPercent \}\}\/\{\{ wantsPercent \}\}\/\{\{ savingsPercent \}\} vs este mes \(real\)/, 'the title must show the configured percentages')
+  assertNotContains(/Tu plan 50\/30\/20 vs este mes/, 'the title must not show a fixed split')
+})
