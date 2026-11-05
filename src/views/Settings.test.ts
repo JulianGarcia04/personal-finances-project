@@ -29,3 +29,15 @@ test('existing settings tabs are unchanged', () => {
     assert.match(settings, new RegExp(`id: '${id}', label: `))
   }
 })
+
+test('data tab deletes the account only after typing the confirmation word', () => {
+  const tab = settings.slice(settings.indexOf(`<template v-else-if="activeTab === 'data'">`))
+  assert.match(tab, /Eliminar mi cuenta/)
+  assert.match(tab, /v-model="deleteConfirmation"/)
+  assert.match(tab, /@click="handleDeleteAccount"\s*:disabled="deletingAccount \|\| !isDeletionConfirmed\(deleteConfirmation\)"/)
+
+  const handler = settings.slice(settings.indexOf('const handleDeleteAccount = async'))
+  assert.match(handler.slice(0, 800), /if \(!isDeletionConfirmed\(deleteConfirmation\.value\)\) return/)
+  assert.match(handler.slice(0, 800), /await authStore\.deleteAccount\(\)/)
+  assert.match(handler.slice(0, 800), /await router\.replace\('\/login'\)/)
+})

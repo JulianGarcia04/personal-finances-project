@@ -57,3 +57,12 @@ test('consent records the accepted versions, the method and the given timestamp'
     acceptedAt
   })
 })
+
+test('both documents explain deleting the account from Settings and what stays in shared workspaces', () => {
+  const privacy = text('privacy')
+  assert.match(privacy, /Puedes eliminar tu cuenta en Configuración > Tus datos/)
+  assert.match(privacy, /espacios de trabajo donde eres el único miembro/)
+  assert.match(privacy, /pasa al miembro más antiguo/)
+  assert.match(privacy, /También puedes solicitar la supresión escribiendo a /)
+  assert.match(text('terms'), /eliminar tu cuenta desde Configuración/)
+})
