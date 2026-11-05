@@ -46,22 +46,36 @@ export interface ErrorContext {
   uid?: string;
 }
 
+/** Longest a report may delay the function's answer or retry. */
+const REPORT_BUDGET_MS = 2500;
+
 export function createErrorReporter(
   env: Env,
-  createClient: (config: ErrorReportingConfig) => ExceptionClient | Promise<ExceptionClient>
+  createClient: (config: ErrorReportingConfig) => ExceptionClient | Promise<ExceptionClient>,
+  budgetMs = REPORT_BUDGET_MS
 ): (error: unknown, context: ErrorContext) => Promise<void> {
   let client: ExceptionClient | undefined;
   return async (error, context) => {
     const config = errorReportingConfig(env);
     if (!config) return;
-    try {
+    let timer: NodeJS.Timeout | undefined;
+    const send = (async () => {
       client ??= await createClient(config);
       const properties = context.uid
         ? { function: context.source }
         : { function: context.source, $process_person_profile: false };
       await client.captureExceptionImmediate(scrubError(error), context.uid ?? "server", properties);
+    })();
+    const budget = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), budgetMs); });
+    try {
+      if (await Promise.race([send, budget]) === "timeout") {
+        logger.warn(`Gave up reporting the ${context.source} error to PostHog after ${budgetMs} ms`);
+      }
     } catch (reportFailure) {
       logger.warn(`Could not report the ${context.source} error to PostHog`, reportFailure);
+    } finally {
+      clearTimeout(timer);
+      send.catch(() => undefined);
     }
   };
 }
@@ -69,5 +83,6 @@ export function createErrorReporter(
 // Loaded on first use, so functions that never fail do not pay for it at cold start.
 export const reportError = createErrorReporter(process.env, async (config) => {
   const { PostHog } = await import("posthog-node");
-  return new PostHog(config.key, { host: config.host, flushAt: 1, flushInterval: 0 });
+  // No retries and a short timeout: a failing PostHog must not hold the function's answer.
+  return new PostHog(config.key, { host: config.host, flushAt: 1, flushInterval: 0, requestTimeout: 2000, fetchRetryCount: 0 });
 });

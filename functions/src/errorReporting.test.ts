@@ -69,3 +69,16 @@ test("HTTP endpoints, callables and triggers report unexpected errors before ans
   assert.match(source("pocketImports.ts"), /await reportError\(error, \{ source: 'importPocketStatement', uid: request\.auth\.uid \}\)/);
   assert.match(source("accountDeletion.ts"), /await reportError\(error, \{ source: 'deleteAccount', uid \}\)/);
 });
+
+test("a slow or hung PostHog never delays the function's answer beyond the report budget", async () => {
+  const hung = createErrorReporter(configured, () => ({
+    captureExceptionImmediate: () => new Promise<void>(() => undefined)
+  }), 50);
+  const started = Date.now();
+  await hung(new Error("x"), { source: "chatWithAgent" });
+  assert.ok(Date.now() - started < 1000, `took ${Date.now() - started} ms`);
+});
+
+test("the PostHog client does not retry and gives up quickly", () => {
+  assert.match(source("errorReporting.ts"), /new PostHog\(config\.key, \{ host: config\.host, flushAt: 1, flushInterval: 0, requestTimeout: \d{3,4}, fetchRetryCount: 0 \}\)/);
+});
