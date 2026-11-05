@@ -6,6 +6,7 @@ import { logger } from 'firebase-functions'
 import { HttpsError, onCall } from 'firebase-functions/v2/https'
 import { z } from 'zod'
 import { EMBEDDINGS_COLLECTION } from './embeddings'
+import { reportError } from './errorReporting'
 
 export const DELETE_CONFIRMATION = 'ELIMINAR'
 
@@ -192,6 +193,7 @@ export const deleteAccount = onCall({ timeoutSeconds: 540 }, async request => {
     }, uid)
   } catch (error) {
     logger.error('deleteAccount failed', { uid, error })
+    await reportError(error, { source: 'deleteAccount', uid })
     throw new HttpsError('internal', 'No se pudo eliminar la cuenta. Intenta de nuevo: lo que ya se eliminó no se repite.')
   }
 })

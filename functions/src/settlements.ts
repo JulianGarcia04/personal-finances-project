@@ -7,6 +7,7 @@ import { HttpsError, onCall } from 'firebase-functions/v2/https'
 import { z } from 'zod'
 import { roundMoney } from './money'
 import { isPocketRelated } from './pockets'
+import { reportError } from './errorReporting'
 import {
   isSettlementCandidate,
   planSettlement,
@@ -382,6 +383,7 @@ export const bridgeSettlement = onCall(async request => {
       throw new HttpsError('aborted', 'Las cuentas están recibiendo otros cambios. Intenta de nuevo.')
     }
     logger.error('bridgeSettlement failed', error)
+    await reportError(error, { source: 'bridgeSettlement', uid: userId })
     throw new HttpsError('internal', 'No se pudo completar la liquidación. Intenta de nuevo más tarde.')
   }
 })

@@ -77,8 +77,15 @@ import { buildBudgetAlertPush, loadPushTokens, memberUidsOf, planBudgetAlertDeli
 export { importPocketStatement } from "./pocketImports";
 export { bridgeSettlement } from "./settlements";
 export { deleteAccount } from "./accountDeletion";
+import { reportError } from "./errorReporting";
 
 const corsHandler = cors({ origin: true });
+
+/** Reports unexpected errors to PostHog before answering; an HttpError is an expected answer. */
+async function failRequest(res: Parameters<typeof sendError>[0], error: unknown, context: string): Promise<void> {
+  if (!(error instanceof HttpError)) await reportError(error, { source: context });
+  sendError(res, error, context);
+}
 admin.initializeApp();
 
 const db = admin.firestore();
@@ -180,7 +187,7 @@ export const saveUserApiKey = onRequest({cors: true}, async (req, res) => {
 
       res.status(200).json({ success: true, message: "API Key guardada y encriptada exitosamente." });
     } catch (error) {
-      sendError(res, error, "saveUserApiKey");
+      await failRequest(res, error, "saveUserApiKey");
     }
   });
 });
@@ -283,7 +290,7 @@ export const parseStatement = onRequest({cors: true}, async (req, res) => {
       res.status(200).json(parsedTransactions);
 
     } catch (error) {
-      sendError(res, error, "parseStatement");
+      await failRequest(res, error, "parseStatement");
     }
   });
 });
@@ -315,6 +322,7 @@ export const syncTransactionEmbedding = onDocumentWritten(
         console.error(`Embedding for ${transactionId} failed permanently:`, error);
         return;
       }
+      await reportError(error, { source: "syncTransactionEmbedding" });
       throw error; // transient: let the platform retry
     }
   }
@@ -639,6 +647,7 @@ async function deliverBudgetAlert(ctx: BudgetAlertContext, subject: BudgetAlertS
       console.error(`Could not release budget alert claim ${ledgerRef.id}:`, releaseError);
     });
     console.error(`Budget alert email for ${ledgerRef.id} failed.`);
+    await reportError(error, { source: "notifyBudgetThreshold" });
     throw error;
   }
 
@@ -878,7 +887,7 @@ export const chatWithAgent = onRequest( {cors: true},  async (req, res) => {
     res.status(200).json({ response: answer });
 
   } catch (error) {
-    sendError(res, error, "chatWithAgent");
+    await failRequest(res, error, "chatWithAgent");
   }
 });
 
@@ -936,7 +945,7 @@ export const inviteToWorkspace = onRequest({cors: true}, async (req, res) => {
       res.status(200).json(genericResponse);
 
     } catch (error) {
-      sendError(res, error, "inviteToWorkspace");
+      await failRequest(res, error, "inviteToWorkspace");
     }
   });
 });

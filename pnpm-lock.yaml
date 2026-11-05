@@ -81,6 +81,9 @@ importers:
       nodemailer:
         specifier: ^10.1.0
         version: 10.1.0
+      posthog-node:
+        specifier: 5.60.0
+        version: 5.60.0(@opentelemetry/api@1.9.1)(rxjs@7.8.2)
       zod:
         specifier: ^3.23.8
         version: 3.25.76
@@ -3649,6 +3652,18 @@ packages:
       '@types/react':
         optional: true
       react:
+        optional: true
+
+  posthog-node@5.60.0:
+    resolution: {integrity: sha512-DJ7pQoPyCxRKhKZUGoBKteV7CR0tJLdQuLQuU66F9VRBbgFCFrJlN4JZ9rPe28rgEyHm5nWtfoxRFFr6ng7U4A==}
+    engines: {node: ^20.20.0 || >=22.22.0}
+    peerDependencies:
+      '@opentelemetry/api': ^1.2.0
+      rxjs: ^7.0.0
+    peerDependenciesMeta:
+      '@opentelemetry/api':
+        optional: true
+      rxjs:
         optional: true
 
   powershell-utils@0.2.1:
@@ -8775,6 +8790,13 @@ snapshots:
       web-vitals-soft-navs: web-vitals@6.2.1
     transitivePeerDependencies:
       - preact-render-to-string
+
+  posthog-node@5.60.0(@opentelemetry/api@1.9.1)(rxjs@7.8.2):
+    dependencies:
+      '@posthog/core': 1.63.1
+    optionalDependencies:
+      '@opentelemetry/api': 1.9.1
+      rxjs: 7.8.2
 
   powershell-utils@0.2.1: {}
 
