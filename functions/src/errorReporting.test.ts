@@ -25,6 +25,10 @@ test("reported errors lose every number in their message but keep the stack fram
   assert.equal(lines[0], "Error: Saldo insuficiente: # de #");
   assert.ok(lines.length > 1 && lines.slice(1).every((line) => /^\s+at /.test(line)));
   assert.equal(scrubError("timeout after 30000 ms").message, "timeout after # ms");
+  assert.equal(
+    scrubError(new Error("Fallo para ana.probe@example.com en https://x.test/p?q=secret#h")).message,
+    "Fallo para [email] en https://x.test/p"
+  );
 });
 
 test("errors go to PostHog with the caller's uid, or as the server without a person profile", async () => {

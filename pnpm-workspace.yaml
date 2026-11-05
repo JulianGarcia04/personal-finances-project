@@ -8,3 +8,10 @@ allowBuilds:
   "protobufjs": true
   "esbuild": true
   core-js: false
+
+# PostHog SDK internals pinned to releases at least a week old at adoption
+# (2026-11-05), inside the ranges posthog-js 1.442.0 and posthog-node 5.60.0 declare.
+overrides:
+  "@posthog/core": 1.61.2
+  "@posthog/browser-common": 0.10.2
+  "@posthog/types": 1.418.0

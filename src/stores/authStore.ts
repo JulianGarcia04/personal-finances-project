@@ -66,6 +66,7 @@ export const useAuthStore = defineStore('auth', {
               console.error("Error fetching user profile", err)
             }
           } else {
+            resetAnalytics()
             this.user = null
             this.profile = null
             this.activeWorkspaceId = null

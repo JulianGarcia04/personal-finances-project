@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
-import { ANALYTICS_EVENTS, analyticsConfig, sanitizeEvent } from './analytics.ts'
+import { ANALYTICS_EVENTS, analyticsConfig, sanitizeEvent, vueErrorInfo } from './analytics.ts'
 
 const source = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8')
 
@@ -73,15 +73,35 @@ test('error messages lose every number and the breadcrumbs are dropped', () => {
   assert.equal('$exception_steps' in result.properties, false)
 })
 
-test('the app starts analytics and reports Vue errors', () => {
+test('error messages lose emails and URL queries too', () => {
+  const result = sanitizeEvent(event('$exception', {
+    $exception_list: [{ type: 'Error', value: 'Fallo para ana.probe@example.com en https://x.test/p?q=secret#h' }]
+  }))!
+  const [exception] = result.properties.$exception_list as Array<{ value: string }>
+  assert.equal(exception.value, 'Fallo para [email] en https://x.test/p')
+})
+
+test('Vue error info keeps the error code that production puts in a URL hash', () => {
+  assert.equal(vueErrorInfo('https://vuejs.org/error-reference/#runtime-3'), 'runtime-3')
+  assert.equal(vueErrorInfo('render function'), 'render function')
+})
+
+test('the app starts analytics and reports Vue errors only when analytics is on', () => {
   const main = source('../main.ts')
-  assert.match(main, /initAnalytics\(\)/)
-  assert.match(main, /app\.config\.errorHandler = \(error, _instance, info\) => \{[\s\S]*?captureError\(error, \{ vue_info: info \}\)/)
+  assert.match(main, /const analyticsEnabled = initAnalytics\(\)/)
+  assert.match(main, /if \(analyticsEnabled\) \{\n\s+app\.config\.errorHandler = \(error, _instance, info\) => \{[\s\S]*?captureError\(error, \{ vue_info: vueErrorInfo\(info\) \}\)/)
+})
+
+test('campaign parameters are not saved, and only an identified user is reset', () => {
+  const analytics = source('./analytics.ts')
+  assert.match(analytics, /save_campaign_params: false/)
+  assert.match(analytics, /if \(posthog\.get_property\('\$user_state'\) === 'identified'\) posthog\.reset\(\)/)
 })
 
 test('signed-in users are identified by uid only and forgotten on logout and account deletion', () => {
   const store = source('../stores/authStore.ts')
   assert.match(store, /identifyUser\(firebaseUser\.uid\)/)
+  assert.match(store, /\} else \{\n\s+resetAnalytics\(\)\n\s+this\.user = null/)
   assert.doesNotMatch(store, /identifyUser\([^)]*email/)
   for (const action of ['async logout()', 'async deleteAccount()']) {
     const start = store.indexOf(action)

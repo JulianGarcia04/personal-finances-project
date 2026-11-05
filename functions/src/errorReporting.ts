@@ -1,9 +1,9 @@
 import { logger } from "firebase-functions";
 
 // Unexpected function errors go to PostHog error tracking, next to the app's browser
-// errors. Messages lose every number (amounts can appear in them), and users are
-// identified by their uid only. Off in the emulator and without POSTHOG_KEY and
-// POSTHOG_HOST in functions/.env. Reporting never fails the function.
+// errors. Messages lose emails, URL queries and every number (amounts can appear in
+// them), and users are identified by their uid only. Off in the emulator and without
+// POSTHOG_KEY and POSTHOG_HOST in functions/.env. Reporting never fails the function.
 
 type Env = Record<string, string | undefined>;
 
@@ -19,12 +19,16 @@ export function errorReportingConfig(env: Env): ErrorReportingConfig | null {
   return { key, host };
 }
 
-const scrubNumbers = (text: string) => text.replace(/\d[\d.,]*/g, "#");
+const EMAIL = /[^\s@<>()"']+@[^\s@<>()"']+\.[^\s@<>()"'.,;:]+/g;
+const URL_QUERY = /(https?:\/\/[^\s?#]*)[?#]\S*/gi;
 
-/** Copy of the error whose message (also in the stack's first line) has no numbers. */
+const scrubMessage = (text: string) =>
+  text.replace(EMAIL, "[email]").replace(URL_QUERY, "$1").replace(/\d[\d.,]*/g, "#");
+
+/** Copy of the error whose message (also in the stack's first line) has no emails, URL queries or numbers. */
 export function scrubError(error: unknown): Error {
   const original = error instanceof Error ? error : new Error(String(error));
-  const scrubbed = new Error(scrubNumbers(original.message));
+  const scrubbed = new Error(scrubMessage(original.message));
   scrubbed.name = original.name;
   const frames = (original.stack ?? "").split("\n").filter((line) => /^\s+at /.test(line));
   scrubbed.stack = [`${scrubbed.name}: ${scrubbed.message}`, ...frames].join("\n");

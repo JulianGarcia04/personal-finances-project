@@ -3,7 +3,8 @@
 // Privacy: users are identified by their Firebase uid only, and every event passes
 // `sanitizeEvent` before it leaves the browser: only the events listed here are sent,
 // app events keep only their declared properties, URLs lose their query string and
-// hash, and error messages lose every number (amounts can appear in them).
+// hash, and error messages lose emails, URL queries and every number (amounts can
+// appear in them). Campaign parameters are not saved.
 // Without a key and host (development, tests, emulators) nothing is loaded or sent.
 import type { CaptureResult, PostHog } from 'posthog-js'
 import type { AccountType, TransactionType } from '@/types'
@@ -64,7 +65,12 @@ const stripUrls = (value: unknown): unknown => {
   return value
 }
 
-const scrubNumbers = (value: unknown) => typeof value === 'string' ? value.replace(/\d[\d.,]*/g, '#') : value
+const EMAIL = /[^\s@<>()"']+@[^\s@<>()"']+\.[^\s@<>()"'.,;:]+/g
+const URL_QUERY = /(https?:\/\/[^\s?#]*)[?#]\S*/gi
+
+const scrubMessage = (value: unknown) => typeof value === 'string'
+  ? value.replace(EMAIL, '[email]').replace(URL_QUERY, '$1').replace(/\d[\d.,]*/g, '#')
+  : value
 
 function scrubException(properties: Properties): Properties {
   const { $exception_steps: _breadcrumbs, ...rest } = properties
@@ -72,10 +78,10 @@ function scrubException(properties: Properties): Properties {
     ...rest,
     ...(Array.isArray(rest.$exception_list) ? {
       $exception_list: rest.$exception_list.map(entry =>
-        entry && typeof entry === 'object' ? { ...entry, value: scrubNumbers((entry as Properties).value) } : entry)
+        entry && typeof entry === 'object' ? { ...entry, value: scrubMessage((entry as Properties).value) } : entry)
     } : {}),
-    ...(Array.isArray(rest.$exception_values) ? { $exception_values: rest.$exception_values.map(scrubNumbers) } : {}),
-    ...('$exception_message' in rest ? { $exception_message: scrubNumbers(rest.$exception_message) } : {})
+    ...(Array.isArray(rest.$exception_values) ? { $exception_values: rest.$exception_values.map(scrubMessage) } : {}),
+    ...('$exception_message' in rest ? { $exception_message: scrubMessage(rest.$exception_message) } : {})
   }
 }
 
@@ -122,10 +128,13 @@ const withClient = (use: (posthog: PostHog) => void) => {
   client.then(posthog => { if (posthog) use(posthog) }).catch(() => undefined)
 }
 
-/** Loads PostHog only when configured, so development and tests never send anything. */
-export function initAnalytics(env: AnalyticsEnv = import.meta.env): void {
+/**
+ * Loads PostHog only when configured, so development and tests never send anything.
+ * Returns whether analytics is on.
+ */
+export function initAnalytics(env: AnalyticsEnv = import.meta.env): boolean {
   const config = analyticsConfig(env)
-  if (!config) return
+  if (!config) return false
   client = import('posthog-js').then(({ default: posthog }) => {
     posthog.init(config.key, {
       api_host: config.host,
@@ -138,6 +147,7 @@ export function initAnalytics(env: AnalyticsEnv = import.meta.env): void {
       capture_performance: { web_vitals: true, network_timing: false },
       disable_session_recording: true,
       disable_surveys: true,
+      save_campaign_params: false,
       before_send: sanitizeEvent
     })
     return posthog
@@ -145,15 +155,21 @@ export function initAnalytics(env: AnalyticsEnv = import.meta.env): void {
     console.warn('Analytics could not be loaded', error)
     return null
   })
+  return true
 }
+
+/** Production Vue passes `https://vuejs.org/error-reference/#runtime-N`; keep the code that URL stripping would drop. */
+export const vueErrorInfo = (info: string): string => info.includes('#') ? info.slice(info.lastIndexOf('#') + 1) : info
 
 export function identifyUser(uid: string): void {
   withClient(posthog => posthog.identify(uid))
 }
 
-/** Forgets the signed-in user on this device (logout, account deletion). */
+/** Forgets the signed-in user on this device (sign-out, account deletion, lost session). */
 export function resetAnalytics(): void {
-  withClient(posthog => posthog.reset())
+  withClient(posthog => {
+    if (posthog.get_property('$user_state') === 'identified') posthog.reset()
+  })
 }
 
 export function track<E extends AnalyticsEventName>(
