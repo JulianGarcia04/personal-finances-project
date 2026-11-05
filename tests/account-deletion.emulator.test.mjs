@@ -172,3 +172,18 @@ test('a retry finishes a deletion that stopped after removing the workspace docu
   assert.equal(await exists(`${ACCOUNT_DELETIONS_COLLECTION}/${dana}`), false)
   await assert.rejects(auth.getUser(dana), { code: 'auth/user-not-found' })
 })
+
+test('a second call after a finished deletion succeeds without changing anything', async () => {
+  const key = `again-${Date.now()}`
+  const erin = `${key}-erin`
+  const personal = `${key}-personal`
+  await seedUser(erin, [personal])
+  await db.doc(`workspaces/${personal}`).set({ id: personal, name: 'Personal', ownerId: erin, members: [erin], currency: 'COP' })
+  await deleteUserAccount(deps([]), erin)
+
+  // Another device of the same user calls again while its ID token is still valid.
+  const result = await deleteUserAccount(deps([]), erin)
+
+  assert.deepEqual(result, { deletedWorkspaces: 0, leftWorkspaces: 0 })
+  assert.equal(await exists(`${ACCOUNT_DELETIONS_COLLECTION}/${erin}`), false)
+})

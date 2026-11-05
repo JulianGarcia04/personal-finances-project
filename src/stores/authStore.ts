@@ -3,6 +3,9 @@ import { auth, db, functions } from '@/lib/firebase'
 import { disablePush, hasPushRegistration } from '@/lib/push'
 import { httpsCallable } from 'firebase/functions'
 import { ACCOUNT_DELETION_CONFIRMATION } from '@/lib/accountDeletion'
+
+// Matches the server function's timeoutSeconds; the callable SDK otherwise gives up after 70 s.
+const DELETE_ACCOUNT_TIMEOUT_MS = 540_000
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
@@ -188,7 +191,7 @@ export const useAuthStore = defineStore('auth', {
     // The server deletes the account (see functions/src/accountDeletion.ts); the Auth user is gone
     // afterwards, so this device only signs out locally.
     async deleteAccount(): Promise<void> {
-      await httpsCallable(functions, 'deleteAccount')({ confirmation: ACCOUNT_DELETION_CONFIRMATION })
+      await httpsCallable(functions, 'deleteAccount', { timeout: DELETE_ACCOUNT_TIMEOUT_MS })({ confirmation: ACCOUNT_DELETION_CONFIRMATION })
       await signOut(auth)
       this.user = null
       this.profile = null

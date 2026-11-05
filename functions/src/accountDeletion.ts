@@ -165,7 +165,12 @@ export async function deleteUserAccount(deps: AccountDeletionDeps, uid: string):
   await db.recursiveDelete(db.collection('users').doc(uid))
   await deps.deleteStoragePrefix(`users/${uid}/`)
   await recordRef.delete()
-  await deps.deleteAuthUser(uid)
+  try {
+    await deps.deleteAuthUser(uid)
+  } catch (error) {
+    // Already deleted, e.g. by a call from another device that finished first.
+    if ((error as { code?: string } | null)?.code !== 'auth/user-not-found') throw error
+  }
 
   return { deletedWorkspaces: deleted.size, leftWorkspaces }
 }
