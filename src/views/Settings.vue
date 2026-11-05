@@ -582,6 +582,7 @@ import { db } from '@/lib/firebase'
 import { exportFileName } from '@/lib/dataExport'
 import { fetchWorkspaceExport } from '@/lib/dataExportFetch'
 import { ACCOUNT_DELETION_CONFIRMATION, isDeletionConfirmed } from '@/lib/accountDeletion'
+import { track } from '@/lib/analytics'
 import {
   Trash2 as TrashIcon, Plus as PlusIcon, Mail as MailIcon, Check as CheckIcon,
   KeyRound as KeyRoundIcon, Sparkles, Users, Globe, Tags, Download as DownloadIcon, FileText
@@ -643,6 +644,7 @@ const handleExport = async () => {
     link.href = url
     link.download = exportFileName(currentWorkspaceName.value, new Date())
     link.click()
+    track('data_exported')
     URL.revokeObjectURL(url)
   } catch (err) {
     console.error('Error exporting data', err)
@@ -823,6 +825,7 @@ const handleCreateWorkspace = async () => {
   creatingWorkspace.value = true
   try {
     await workspacesStore.createWorkspace(newWorkspaceName.value.trim())
+    track('workspace_created')
     newWorkspaceName.value = ''
   } catch (err: any) {
     console.error('Error al crear workspace', err)
@@ -841,6 +844,7 @@ const handleInviteUser = async () => {
   
   try {
     inviteMsg.value = await workspacesStore.inviteUser(authStore.activeWorkspaceId, inviteEmail.value.trim())
+    track('member_invited')
     inviteEmail.value = ''
   } catch (err: any) {
     console.error('Error invitando usuario', err)

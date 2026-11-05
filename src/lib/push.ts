@@ -8,6 +8,7 @@ import {
 } from 'firebase/messaging'
 import { doc, setDoc, deleteDoc, serverTimestamp } from 'firebase/firestore'
 import { app, auth, db, firebaseConfig } from '@/lib/firebase'
+import { track } from '@/lib/analytics'
 
 export type PushStatus = 'enabled' | 'disabled' | 'denied' | 'unsupported' | 'missing-vapid'
 
@@ -114,6 +115,7 @@ export async function enablePush(uid: string): Promise<PushStatus> {
   })
   writeStoredToken(token)
   onForegroundMessage()
+  track('push_enabled')
   return 'enabled'
 }
 

@@ -896,6 +896,7 @@
 </template>
 
 <script setup lang="ts">
+import { track } from '@/lib/analytics'
 import { ref, reactive, onMounted, computed, watch, nextTick } from 'vue'
 import { useGoalsStore } from '@/stores/goalsStore'
 import { useAccountsStore } from '@/stores/accountsStore'
@@ -1449,6 +1450,7 @@ const handleSaveOperatingBudget = async () => {
         if (endDate) draft.endDate = endDate
       }
       const created = await goalsStore.createOperatingBudget(draft, { releases })
+      track('budget_created', { kind: draft.kind })
       budgetId = created.id
       editingOperatingBudget.value = goalsStore.operatingBudgets.find(entry => entry.budget.id === created.id)
         ?? { budget: created, categoryCaps: {} }
@@ -1605,6 +1607,7 @@ const handleCreateGoal = async () => {
       currency: newGoalCurrency.value,
       targetDate: parseDateOnly(newGoalTargetDate.value)
     })
+    track('goal_created')
 
     showCreateModal.value = false
     // Reset form

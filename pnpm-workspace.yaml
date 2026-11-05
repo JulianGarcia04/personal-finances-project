@@ -7,3 +7,4 @@ allowBuilds:
   "@firebase/util": true
   "protobufjs": true
   "esbuild": true
+  core-js: false

@@ -628,6 +628,7 @@
 </template>
 
 <script setup lang="ts">
+import { track } from '@/lib/analytics'
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAccountsStore } from '@/stores/accountsStore'
@@ -844,6 +845,7 @@ const saveAccount = async () => {
         currency: pocketParent.value.currency,
         parentAccountId: pocketParent.value.id
       })
+      track('bank_account_created', { type: 'savings', pocket: true })
     } else {
       await accountsStore.addAccount({
         name: newAcc.value.name,
@@ -854,6 +856,7 @@ const saveAccount = async () => {
         statementClosingDay: newAcc.value.statementClosingDay || null,
         paymentDueDay: newAcc.value.paymentDueDay || null
       })
+      track('bank_account_created', { type: newAcc.value.type, pocket: false })
     }
     closeAddModal()
   } catch (err) {

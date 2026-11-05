@@ -97,6 +97,7 @@
 </template>
 
 <script setup lang="ts">
+import { track } from '@/lib/analytics'
 import { computed, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/authStore'
 import { useGoalsStore } from '@/stores/goalsStore'
@@ -245,6 +246,7 @@ const activatePush = async () => {
 }
 
 const finish = () => {
+  track('onboarding_finished', { push_enabled: pushStatus.value === 'enabled' })
   open.value = false
 }
 </script>
