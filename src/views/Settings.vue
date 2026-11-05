@@ -537,6 +537,28 @@
               <router-link to="/privacidad" class="min-h-11 flex items-center text-accent-emerald hover:text-accent-emerald-hover font-semibold">Política de tratamiento de datos</router-link>
             </div>
           </div>
+
+          <div class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4 border border-accent-rose/20">
+            <div class="space-y-1">
+              <h4 class="font-display font-medium text-accent-rose">Eliminar mi cuenta</h4>
+              <p class="text-text-muted text-xs">Se borran tu perfil, tus dispositivos para notificaciones, tu API Key y los espacios de trabajo donde eres el único miembro, con todo su contenido. En los espacios compartidos, lo que registraste se queda para los demás miembros y, si eras el dueño, el espacio pasa al miembro más antiguo. No se puede deshacer: si quieres conservar tu información, descárgala antes.</p>
+            </div>
+            <label class="block space-y-1.5">
+              <span class="text-xs text-text-muted">Escribe <strong class="text-text-primary">{{ ACCOUNT_DELETION_CONFIRMATION }}</strong> para confirmar</span>
+              <input v-model="deleteConfirmation" type="text" autocomplete="off" autocapitalize="characters" class="field" :disabled="deletingAccount" />
+            </label>
+            <button
+              type="button"
+              @click="handleDeleteAccount"
+              :disabled="deletingAccount || !isDeletionConfirmed(deleteConfirmation)"
+              class="min-h-11 px-5 py-2.5 rounded-xl bg-accent-rose text-background font-display font-semibold text-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              <span v-if="deletingAccount" class="w-3.5 h-3.5 border-2 border-background border-t-transparent rounded-full animate-spin"></span>
+              <TrashIcon v-else class="w-4 h-4" />
+              <span>Eliminar mi cuenta</span>
+            </button>
+            <p v-if="deleteError" class="text-xs text-accent-rose font-medium">{{ deleteError }}</p>
+          </div>
         </template>
       </section>
     </div>
@@ -559,6 +581,7 @@ import { SUPPORTED_COUNTRIES, SUPPORTED_CURRENCIES } from '@/lib/currencies'
 import { db } from '@/lib/firebase'
 import { exportFileName } from '@/lib/dataExport'
 import { fetchWorkspaceExport } from '@/lib/dataExportFetch'
+import { ACCOUNT_DELETION_CONFIRMATION, isDeletionConfirmed } from '@/lib/accountDeletion'
 import {
   Trash2 as TrashIcon, Plus as PlusIcon, Mail as MailIcon, Check as CheckIcon,
   KeyRound as KeyRoundIcon, Sparkles, Users, Globe, Tags, Download as DownloadIcon, FileText
@@ -594,7 +617,7 @@ const tabs: TabDef[] = [
   },
   {
     id: 'data', label: 'Tus datos', hint: 'Exportar y privacidad', icon: FileText,
-    description: 'Descarga una copia de tu información y consulta cómo tratamos tus datos.'
+    description: 'Descarga una copia de tu información, consulta cómo tratamos tus datos o elimina tu cuenta.'
   }
 ]
 
@@ -626,6 +649,26 @@ const handleExport = async () => {
     exportError.value = 'No se pudo exportar la información. Inténtalo de nuevo.'
   } finally {
     exporting.value = false
+  }
+}
+
+// Account deletion
+const deleteConfirmation = ref('')
+const deletingAccount = ref(false)
+const deleteError = ref('')
+
+const handleDeleteAccount = async () => {
+  if (!isDeletionConfirmed(deleteConfirmation.value)) return
+  deletingAccount.value = true
+  deleteError.value = ''
+  try {
+    await authStore.deleteAccount()
+    await router.replace('/login')
+  } catch (err) {
+    console.error('Error deleting account', err)
+    deleteError.value = 'No se pudo eliminar la cuenta. Inténtalo de nuevo.'
+  } finally {
+    deletingAccount.value = false
   }
 }
 

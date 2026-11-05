@@ -76,6 +76,7 @@ import { BudgetAlertEmailInput, renderBudgetAlertEmail } from "./templates/budge
 import { buildBudgetAlertPush, loadPushTokens, memberUidsOf, planBudgetAlertDelivery, PushTokenEntry, sendPushToTokens } from "./push";
 export { importPocketStatement } from "./pocketImports";
 export { bridgeSettlement } from "./settlements";
+export { deleteAccount } from "./accountDeletion";
 
 const corsHandler = cors({ origin: true });
 admin.initializeApp();

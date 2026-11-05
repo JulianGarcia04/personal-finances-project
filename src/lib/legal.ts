@@ -4,7 +4,7 @@
 
 export const LEGAL_VERSIONS = {
   terms: '2026-10-29',
-  privacy: '2026-10-29'
+  privacy: '2026-11-05'
 } as const
 
 export interface DataController {
@@ -101,7 +101,7 @@ const terms: LegalDocument = {
     },
     {
       heading: 'Terminación',
-      paragraphs: ['Puedes dejar de usar Lynor Finanzas en cualquier momento y solicitar la eliminación de tu cuenta. Podemos suspender cuentas que incumplan estos términos.']
+      paragraphs: ['Puedes dejar de usar Lynor Finanzas en cualquier momento y eliminar tu cuenta desde Configuración. Podemos suspender cuentas que incumplan estos términos.']
     },
     {
       heading: 'Cambios',
@@ -177,7 +177,7 @@ const privacy: LegalDocument = {
     },
     {
       heading: 'Conservación y supresión',
-      paragraphs: [`Conservamos tus datos mientras tengas una cuenta activa o mientras sean necesarios para las finalidades descritas. Puedes solicitar la supresión de tu cuenta y de tus datos escribiendo a ${c.email}.`]
+      paragraphs: [`Conservamos tus datos mientras tengas una cuenta activa o mientras sean necesarios para las finalidades descritas. Puedes eliminar tu cuenta en Configuración > Tus datos: se borran tu perfil y los espacios de trabajo donde eres el único miembro, con todo su contenido. En los espacios compartidos, lo que registraste permanece para los demás miembros y, si eras el dueño, el espacio pasa al miembro más antiguo. También puedes solicitar la supresión escribiendo a ${c.email}.`]
     },
     {
       heading: 'Menores de edad',
