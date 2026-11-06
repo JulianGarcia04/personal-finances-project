@@ -1031,6 +1031,7 @@
 </template>
 
 <script setup lang="ts">
+import { track } from '@/lib/analytics'
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAccountsStore } from '@/stores/accountsStore'
@@ -1546,6 +1547,7 @@ const saveTransaction = async () => {
       userId: newTx.value.userId || undefined,
       budgetId: showNewTxBudget.value ? (newTxLinkedBudget.value?.id ?? newTx.value.budgetId) : null
     })
+    track('transaction_created', { type: newTx.value.type })
     closeAddModal()
   } catch (err: any) {
     console.error('Error guardando transacción:', err)

@@ -293,6 +293,7 @@
 </template>
 
 <script setup lang="ts">
+import { track } from '@/lib/analytics'
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAccountsStore } from '@/stores/accountsStore'
@@ -457,6 +458,7 @@ const confirmBatchImport = async () => {
       statementImportId: pendingImport.statementImportId
     })
     pendingImport = null
+    track('statement_imported', { transactions: rows.length })
     router.push({ name: 'Transactions' })
   } catch (err) {
     console.error(err)

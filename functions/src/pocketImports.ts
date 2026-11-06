@@ -1,5 +1,6 @@
 // Must stay first: applies global function options before onCall below.
 import './options'
+import { reportError } from './errorReporting'
 import { createHash } from 'node:crypto'
 import * as admin from 'firebase-admin'
 import { Timestamp } from 'firebase-admin/firestore'
@@ -306,6 +307,7 @@ export const importPocketStatement = onCall(async request => {
   } catch (error) {
     if (!(error instanceof HttpsError) && !(error instanceof ImportRejection)) {
       logger.error('importPocketStatement failed', error)
+      await reportError(error, { source: 'importPocketStatement', uid: request.auth.uid })
     }
     throw toImportHttpsError(error)
   }

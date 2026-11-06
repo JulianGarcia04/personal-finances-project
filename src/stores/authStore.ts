@@ -3,6 +3,7 @@ import { auth, db, functions } from '@/lib/firebase'
 import { disablePush, hasPushRegistration } from '@/lib/push'
 import { httpsCallable } from 'firebase/functions'
 import { ACCOUNT_DELETION_CONFIRMATION } from '@/lib/accountDeletion'
+import { identifyUser, resetAnalytics, track } from '@/lib/analytics'
 
 // Matches the server function's timeoutSeconds; the callable SDK otherwise gives up after 70 s.
 const DELETE_ACCOUNT_TIMEOUT_MS = 540_000
@@ -54,6 +55,7 @@ export const useAuthStore = defineStore('auth', {
               email: firebaseUser.email,
               displayName: resolveDisplayName(firebaseUser.displayName, firebaseUser.email),
             }
+            identifyUser(firebaseUser.uid)
             try {
               const profileDoc = await getDoc(doc(db, 'users', firebaseUser.uid))
               if (profileDoc.exists()) {
@@ -64,6 +66,7 @@ export const useAuthStore = defineStore('auth', {
               console.error("Error fetching user profile", err)
             }
           } else {
+            resetAnalytics()
             this.user = null
             this.profile = null
             this.activeWorkspaceId = null
@@ -81,6 +84,7 @@ export const useAuthStore = defineStore('auth', {
         
         await updateProfile(firebaseUser, { displayName })
         await this.ensureUserProfile(firebaseUser.uid, email, displayName, 'signup-checkbox')
+        track('signed_up', { method: 'email' })
 
         this.user = {
           uid: firebaseUser.uid,
@@ -100,7 +104,8 @@ export const useAuthStore = defineStore('auth', {
       try {
         const { user: firebaseUser } = await signInWithPopup(auth, new GoogleAuthProvider())
         const displayName = resolveDisplayName(firebaseUser.displayName, firebaseUser.email)
-        await this.ensureUserProfile(firebaseUser.uid, firebaseUser.email, displayName, 'google-continue')
+        const created = await this.ensureUserProfile(firebaseUser.uid, firebaseUser.email, displayName, 'google-continue')
+        track(created ? 'signed_up' : 'logged_in', { method: 'google' })
 
         this.user = {
           uid: firebaseUser.uid,
@@ -118,12 +123,13 @@ export const useAuthStore = defineStore('auth', {
     // Loads the profile, creating the personal workspace and profile on the
     // first sign-in. The transaction keeps a double submit or a retry from
     // creating a second workspace or a profile without one. The legal consent
-    // given on that first sign-in is recorded with the new profile.
-    async ensureUserProfile(uid: string, email: string | null, displayName: string, consentMethod: ConsentMethod): Promise<void> {
+    // given on that first sign-in is recorded with the new profile. Returns whether
+    // this call created them.
+    async ensureUserProfile(uid: string, email: string | null, displayName: string, consentMethod: ConsentMethod): Promise<boolean> {
       const profileRef = doc(db, 'users', uid)
-      const profile = await runTransaction(db, async (tx) => {
+      const { profile, created } = await runTransaction(db, async (tx) => {
         const snapshot = await tx.get(profileRef)
-        if (snapshot.exists()) return snapshot.data() as UserProfile
+        if (snapshot.exists()) return { profile: snapshot.data() as UserProfile, created: false }
 
         const workspaceRef = doc(collection(db, 'workspaces'))
         const now = new Date()
@@ -131,10 +137,11 @@ export const useAuthStore = defineStore('auth', {
         const profileData = buildUserProfile({ uid, email, displayName, workspaceId: workspaceRef.id, now, legalConsent })
         tx.set(workspaceRef, buildPersonalWorkspace(uid, workspaceRef.id, now))
         tx.set(profileRef, profileData)
-        return profileData as unknown as UserProfile
+        return { profile: profileData as unknown as UserProfile, created: true }
       })
       this.profile = profile
       this.activeWorkspaceId = profile.activeWorkspaceId || null
+      return created
     },
     async resetPassword(email: string): Promise<void> {
       try {
@@ -160,6 +167,7 @@ export const useAuthStore = defineStore('auth', {
           this.profile = profileDoc.data() as UserProfile
           this.activeWorkspaceId = this.profile.activeWorkspaceId || null
         }
+        track('logged_in', { method: 'email' })
         return this.user
       } catch (error) {
         console.error('Error al iniciar sesión:', error)
@@ -178,6 +186,7 @@ export const useAuthStore = defineStore('auth', {
           await disablePush(uid).catch((err) => console.warn('Push unregister on logout failed:', err))
         }
         await signOut(auth)
+        resetAnalytics()
         this.user = null
         this.profile = null
         this.activeWorkspaceId = null
@@ -193,6 +202,7 @@ export const useAuthStore = defineStore('auth', {
     async deleteAccount(): Promise<void> {
       await httpsCallable(functions, 'deleteAccount', { timeout: DELETE_ACCOUNT_TIMEOUT_MS })({ confirmation: ACCOUNT_DELETION_CONFIRMATION })
       await signOut(auth)
+      resetAnalytics()
       this.user = null
       this.profile = null
       this.activeWorkspaceId = null

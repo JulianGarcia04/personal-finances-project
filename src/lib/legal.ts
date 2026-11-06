@@ -4,7 +4,7 @@
 
 export const LEGAL_VERSIONS = {
   terms: '2026-10-29',
-  privacy: '2026-11-05'
+  privacy: '2026-11-06'
 } as const
 
 export interface DataController {
@@ -133,6 +133,7 @@ const privacy: LegalDocument = {
         'Información financiera que registras: cuentas, bolsillos, saldos, tarjetas, movimientos, presupuestos, metas, categorías y comprobantes adjuntos.',
         'Extractos bancarios que subes al importador y las conversaciones con el asistente.',
         'Datos técnicos: identificadores de dispositivo para enviarte notificaciones y registros necesarios para operar y proteger el servicio.',
+        'Datos de uso: las acciones que realizas en la aplicación (por ejemplo, crear una cuenta o importar un extracto), las páginas que visitas, tu navegador y dispositivo, la velocidad de carga y los errores de la aplicación, asociados a un identificador interno de tu cuenta. Estos datos no incluyen montos, descripciones, nombres de cuentas o categorías, ni tu correo.',
         'No solicitamos datos sensibles en los términos del artículo 5 de la Ley 1581 de 2012. Te recomendamos no incluirlos en descripciones, notas ni conversaciones.'
       ]
     },
@@ -145,13 +146,14 @@ const privacy: LegalDocument = {
         'Analizar con inteligencia artificial los extractos que importes y responder las preguntas que le hagas al asistente.',
         'Enviarte alertas de presupuesto por notificación o correo electrónico, y comunicaciones sobre el servicio.',
         'Prevenir fraude, abuso y fallas de seguridad, y atender tus solicitudes.',
+        'Medir el uso, la velocidad y los errores de la aplicación para corregir fallas y mejorarla.',
         'No vendemos tu información ni la usamos para publicidad de terceros.'
       ]
     },
     {
       heading: 'Encargados y transferencia internacional',
       paragraphs: [
-        'Para operar el servicio usamos proveedores que actúan como encargados del tratamiento: Google LLC, a través de Firebase (autenticación, base de datos, almacenamiento, funciones, alojamiento y notificaciones), la API de Gemini (funciones de inteligencia artificial) y Gmail (envío de correos).',
+        'Para operar el servicio usamos proveedores que actúan como encargados del tratamiento: Google LLC, a través de Firebase (autenticación, base de datos, almacenamiento, funciones, alojamiento y notificaciones), la API de Gemini (funciones de inteligencia artificial) y Gmail (envío de correos); y PostHog, Inc. (medición de uso y detección de errores).',
         'Estos proveedores pueden almacenar o procesar los datos en servidores ubicados fuera de Colombia, principalmente en Estados Unidos. Al aceptar esta política autorizas esa transmisión.'
       ]
     },

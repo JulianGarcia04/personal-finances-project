@@ -86,6 +86,7 @@ test('S7: handleSaveOperatingBudget accepts numeric v-model values from number i
     linkableOperatingBudgets: { value: [] as unknown[] },
     openMoveSheet: (budgetId: string) => { offeredMoves.push(budgetId) },
     isReservedBudgetName,
+    track: () => undefined,
     goalsStore: {
       operatingBudgets: [] as unknown[],
       async createOperatingBudget(draft: Record<string, unknown>) {
@@ -108,7 +109,7 @@ test('S7: handleSaveOperatingBudget accepts numeric v-model values from number i
       budgetTotalLimitInput, budgetStartDateInput, budgetEndDateInput, budgetCategoryCapInputs,
       budgetManagementError, savingOperatingBudget, showBudgetModal, goalsStore,
       budgetLinkConflicts, budgetLinkedAccountIds, linkableOperatingBudgets, openMoveSheet,
-      isReservedBudgetName
+      isReservedBudgetName, track
     } = ctx;
     ${transpiled}
     return handleSaveOperatingBudget();`
@@ -258,6 +259,7 @@ test('saving a budget that takes a linked account removes the link from its prev
     linkableOperatingBudgets: { value: [{ id: 'ventas', name: 'Ventas Casa', archived: false, linkedAccountIds: ['cash-casa', 'cash-ventas'] }] },
     openMoveSheet: () => undefined,
     isReservedBudgetName,
+    track: () => undefined,
     goalsStore: {
       operatingBudgets: [] as unknown[],
       async createOperatingBudget(draft: Record<string, unknown>, options: unknown) { created.push([draft, options]); return { id: 'toro', ...draft, archived: false } },
@@ -270,7 +272,7 @@ test('saving a budget that takes a linked account removes the link from its prev
     budgetTotalLimitInput, budgetStartDateInput, budgetEndDateInput, budgetCategoryCapInputs,
     budgetManagementError, savingOperatingBudget, showBudgetModal, goalsStore,
     budgetLinkConflicts, budgetLinkedAccountIds, linkableOperatingBudgets, openMoveSheet,
-    isReservedBudgetName
+    isReservedBudgetName, track
   } = ctx;
   ${transpiled}
   return handleSaveOperatingBudget();`)
@@ -303,6 +305,7 @@ test('the budget form rejects the name reserved for the default monthly budget, 
       budgetLinkedAccountIds: { value: [] }, budgetLinkConflicts: { value: [] },
       linkableOperatingBudgets: { value: [] }, openMoveSheet: () => undefined,
       isReservedBudgetName,
+      track: () => undefined,
       goalsStore: {
         operatingBudgets: [] as unknown[],
         async createOperatingBudget(draft: { name: string }) { writes.push(`create:${draft.name}`); return { id: 'b', ...draft, archived: false } },
@@ -315,7 +318,7 @@ test('the budget form rejects the name reserved for the default monthly budget, 
       budgetTotalLimitInput, budgetStartDateInput, budgetEndDateInput, budgetCategoryCapInputs,
       budgetManagementError, savingOperatingBudget, showBudgetModal, goalsStore,
       budgetLinkConflicts, budgetLinkedAccountIds, linkableOperatingBudgets, openMoveSheet,
-      isReservedBudgetName
+      isReservedBudgetName, track
     } = ctx;
     ${transpiled}
     return handleSaveOperatingBudget();`)(ctx)

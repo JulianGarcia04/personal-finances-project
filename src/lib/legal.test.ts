@@ -66,3 +66,11 @@ test('both documents explain deleting the account from Settings and what stays i
   assert.match(privacy, /También puedes solicitar la supresión escribiendo a /)
   assert.match(text('terms'), /eliminar tu cuenta desde Configuración/)
 })
+
+test('privacy policy names PostHog, what it receives and why', () => {
+  const privacy = text('privacy')
+  assert.match(privacy, /PostHog, Inc\. \(medición de uso y detección de errores\)/)
+  assert.match(privacy, /asociados a un identificador interno de tu cuenta/)
+  assert.match(privacy, /no incluyen montos, descripciones, nombres de cuentas o categorías, ni tu correo/)
+  assert.match(privacy, /Medir el uso, la velocidad y los errores de la aplicación para corregir fallas y mejorarla\./)
+})

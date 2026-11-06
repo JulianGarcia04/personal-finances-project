@@ -269,6 +269,7 @@
 </template>
 
 <script setup lang="ts">
+import { track } from '@/lib/analytics'
 import { ref, onMounted, onBeforeUnmount, nextTick, computed, watch } from 'vue'
 import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -457,6 +458,7 @@ const sendMessage = async () => {
     // Agregar el mensaje del usuario (los avisos de error previos dejan de ser relevantes)
     chatsStore.clearErrorNotices(chatId)
     await chatsStore.addMessageToChat(chatId, 'user', userText)
+    track('advisor_message_sent')
     await scrollToBottom()
 
     await requestReply(chatId)
