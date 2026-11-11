@@ -155,3 +155,75 @@ test('fails closed for ambiguous legacy pairs and already reversed settlements',
     first: { ...received, reversedBy: 'reversal-a' }, second: paid, accountsById
   }), /reverted|revertid/i)
 })
+
+test('a bridge account only accepts shared expenses; every other movement on, onto or to it is refused', async () => {
+  const mirror = await import('./mirror.ts')
+  assert.equal(typeof mirror.assertBridgeMovement, 'function', 'bridge movement guard is required')
+  const bridge = { mirror: { workspaceId: 'personal', accountId: 'receivable', sourceAccountId: 'card' } }
+  const bank = { mirror: null }
+
+  assert.doesNotThrow(() => mirror.assertBridgeMovement('expense', bridge))
+  for (const type of ['expense', 'income', 'loan', 'loan_payment']) {
+    assert.doesNotThrow(() => mirror.assertBridgeMovement(type, bank))
+  }
+  assert.doesNotThrow(() => mirror.assertBridgeMovement('transfer', bank, bank))
+
+  for (const type of ['income', 'transfer', 'loan', 'loan_payment']) {
+    assert.throws(() => mirror.assertBridgeMovement(type, bridge, bank), /cuenta puente solo admite gastos compartidos/)
+  }
+  assert.throws(() => mirror.assertBridgeMovement('transfer', bank, bridge), /cuenta puente solo admite gastos compartidos/)
+})
+
+function sharedExpensePair() {
+  const bridgeLeg = {
+    id: 'expense', workspaceId: 'home', accountId: 'bridge', toAccountId: null, amount: -300,
+    type: 'expense', mirrorOf: 'transfer', description: 'Mercado', categoryId: 'food', notes: null
+  }
+  const mirrorLeg = {
+    id: 'transfer', workspaceId: 'personal', accountId: 'card', toAccountId: 'receivable', amount: 300,
+    type: 'transfer', mirrorOf: 'expense', description: 'Mercado', categoryId: '',
+    notes: 'Gasto reembolsable registrado en "Bridge"'
+  }
+  return { bridgeLeg, mirrorLeg }
+}
+
+test('a shared expense pair is identified from either leg', async () => {
+  const mirror = await import('./mirror.ts')
+  assert.equal(typeof mirror.sharedExpenseLegs, 'function', 'shared expense pair splitter is required')
+  const { bridgeLeg, mirrorLeg } = sharedExpensePair()
+  assert.deepEqual(mirror.sharedExpenseLegs(bridgeLeg, mirrorLeg), { bridgeLeg, mirrorLeg })
+  assert.deepEqual(mirror.sharedExpenseLegs(mirrorLeg, bridgeLeg), { bridgeLeg, mirrorLeg })
+})
+
+test('settlements, reversals and broken pairs are not shared expenses', async () => {
+  const mirror = await import('./mirror.ts')
+  const { bridgeLeg, mirrorLeg } = sharedExpensePair()
+  const { paid, received } = settlementLegs()
+  assert.throws(() => mirror.sharedExpenseLegs(paid, received), /liquidaciones no se editan/)
+  assert.throws(() => mirror.sharedExpenseLegs(
+    { ...paid, settlementType: 'reversal' }, { ...received, settlementType: 'reversal' }
+  ), /liquidaciones no se editan/)
+  assert.throws(() => mirror.sharedExpenseLegs(bridgeLeg, { ...mirrorLeg, mirrorOf: 'other' }), /pata espejo/)
+  assert.throws(() => mirror.sharedExpenseLegs(bridgeLeg, { ...mirrorLeg, amount: 200 }), /no es válido/)
+  assert.throws(() => mirror.sharedExpenseLegs(bridgeLeg, { ...mirrorLeg, type: 'expense', amount: -300 }), /no es válido/)
+})
+
+test('editing a shared expense moves the three balances by the difference only', async () => {
+  const mirror = await import('./mirror.ts')
+  assert.equal(typeof mirror.planSharedExpenseEdit, 'function', 'shared expense edit planner is required')
+  // 300 -> 450: the debt grows 150 on both sides and the card is charged 150 more.
+  assert.deepEqual(mirror.planSharedExpenseEdit({ previousAmount: -300, amount: -450, ...COP }), {
+    bridge: -150, source: -150, receivable: 150
+  })
+  // 300 -> 120, whatever sign the form sends.
+  assert.deepEqual(mirror.planSharedExpenseEdit({ previousAmount: -300, amount: 120, ...COP }), {
+    bridge: 180, source: 180, receivable: -180
+  })
+  assert.deepEqual(mirror.planSharedExpenseEdit({ previousAmount: -300, amount: -300, ...COP }), {
+    bridge: 0, source: 0, receivable: 0
+  })
+  assert.throws(() => mirror.planSharedExpenseEdit({ previousAmount: -300, amount: 0, ...COP }), /distinto de cero/)
+  assert.throws(() => mirror.planSharedExpenseEdit({
+    previousAmount: -300, amount: -100, bridgeCurrency: 'COP', sourceCurrency: 'USD', receivableCurrency: 'COP'
+  }), /misma moneda/)
+})

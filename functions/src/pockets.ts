@@ -394,6 +394,13 @@ export async function mutateWorkspaceTransaction(
     if ([...accountData.values()].some(data => data.workspaceId !== input.workspaceId)) {
       throw new Error('Acceso denegado a una cuenta fuera del workspace activo.')
     }
+    // A bridge only holds shared expenses, which the app mirrors into the other workspace; this
+    // path cannot write that twin, so any movement it would put on a bridge desyncs the debt.
+    // Deleting an old unmirrored movement stays allowed: it restores the bridge balance.
+    const movement = input.movement
+    if (movement && [movement.accountId, movement.toAccountId].some(id => id && accountData.get(id)?.mirror != null)) {
+      throw new Error('Una cuenta puente solo admite gastos compartidos registrados desde la app. Para saldar la deuda usa «Liquidar puente» en Cuentas.')
+    }
     const related = [...accountData.values()].some(isPocketRelated)
     if (related && accountData.size !== ids.size) throw new Error('Falta una cuenta relacionada con el movimiento.')
 

@@ -47,6 +47,84 @@ export function planMirror({ amount, bridgeCurrency, sourceCurrency, receivableC
   return { bridge: spent, source: spent, receivable: -spent }
 }
 
+export interface SharedExpenseLeg {
+  id: string
+  workspaceId: string
+  accountId: string
+  toAccountId?: string | null
+  amount: number
+  type: string
+  description: string
+  categoryId?: string
+  notes?: string | null
+  mirrorOf?: string | null
+  settlementType?: string | null
+  reversalOf?: string | null
+  reversedBy?: string | null
+}
+
+/**
+ * Splits a reciprocal shared-expense pair, given either leg first, into its bridge leg (the
+ * expense on the bridge) and its mirror leg (the transfer source -> receivable in the other
+ * workspace). Settlements and reversals are refused: they keep their own reversal flow.
+ */
+export function sharedExpenseLegs<T extends SharedExpenseLeg>(first: T, second: T): { bridgeLeg: T; mirrorLeg: T } {
+  const legs = [first, second]
+  if (legs.some(leg => leg.settlementType != null || leg.reversalOf != null || leg.reversedBy != null ||
+      isSettlementCandidate(leg))) {
+    throw new Error('Las liquidaciones no se editan. Si quedó mal, usa «Revertir liquidación» y regístrala de nuevo.')
+  }
+  if (!first.id || !second.id || first.id === second.id || first.mirrorOf !== second.id || second.mirrorOf !== first.id) {
+    throw new Error('No se encontró la pata espejo de este gasto compartido; no se modificó nada.')
+  }
+  const bridgeLeg = legs.find(leg => leg.type === 'expense')
+  const mirrorLeg = legs.find(leg => leg.type === 'transfer')
+  if (!bridgeLeg || !mirrorLeg || bridgeLeg.toAccountId || !mirrorLeg.toAccountId ||
+      !(bridgeLeg.amount < 0) || mirrorLeg.amount !== -bridgeLeg.amount) {
+    throw new Error('El par espejo de este gasto compartido no es válido; no se modificó nada.')
+  }
+  return { bridgeLeg, mirrorLeg }
+}
+
+/**
+ * Balance increments of editing a shared expense from `previousAmount` to `amount`: the
+ * difference between both mirror plans, so the three accounts move together and only by the
+ * change (same currency rule and sign normalization as planMirror).
+ */
+export function planSharedExpenseEdit({ previousAmount, amount, ...currencies }: {
+  previousAmount: number
+  amount: number
+  bridgeCurrency: string
+  sourceCurrency: string
+  receivableCurrency: string
+}): MirrorDeltas {
+  const before = planMirror({ amount: previousAmount, ...currencies })
+  const after = planMirror({ amount, ...currencies })
+  return {
+    bridge: after.bridge - before.bridge,
+    source: after.source - before.source,
+    receivable: after.receivable - before.receivable
+  }
+}
+
+export const BRIDGE_EXPENSES_ONLY_MESSAGE =
+  'Una cuenta puente solo admite gastos compartidos. Para saldar la deuda usa «Liquidar puente» en Cuentas.'
+
+/**
+ * A bridge account only holds shared expenses: they are the only movement replicated into the
+ * mirror workspace, so any other movement on, onto or to a bridge would desync its debt.
+ * Settlements and their reversals use their own flow and never pass through here.
+ */
+export function assertBridgeMovement(
+  type: string,
+  source?: { mirror?: unknown } | null,
+  destination?: { mirror?: unknown } | null
+): void {
+  if ((source?.mirror && type !== 'expense') || destination?.mirror) {
+    throw new Error(BRIDGE_EXPENSES_ONLY_MESSAGE)
+  }
+}
+
 export interface SettlementDeltas {
   from: number // cuenta que paga la deuda, en el workspace del puente
   bridge: number // cuenta puente: sube hacia 0

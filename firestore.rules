@@ -254,6 +254,65 @@ service cloud.firestore {
         (!destinationExists || rootAccountForWorkspace(data.toAccountId, data.workspaceId));
     }
 
+    // A bridge account (mirror set) only holds mirrored legs: the bridge side of a shared expense or
+    // a settlement/reversal leg, each committed together with its reciprocal twin. Any other
+    // movement on, onto or to a bridge is never replicated and would desync the debt it tracks.
+    // The account reads dedupe with the reference checks on the same accounts.
+    function isBridgeAccount(accountId) {
+      let account = get(accountPath(accountId));
+      return account != null && account.data.get('mirror', null) != null;
+    }
+
+    function referencesBridge(data) {
+      return (data.get('accountId', null) is string && isBridgeAccount(data.accountId)) ||
+        (data.get('toAccountId', null) is string && isBridgeAccount(data.toAccountId));
+    }
+
+    function hasMirrorLink(transactionId, data) {
+      return data.get('mirrorOf', null) is string && data.mirrorOf.matches('^[^/]+$') &&
+        data.mirrorOf != transactionId;
+    }
+
+    // Callers check hasMirrorLink first, so twinId is a valid document id.
+    function validMirrorLegCreate(transactionId, data, twinId) {
+      let twin = getAfter(transactionPath(twinId));
+      return twin != null && twin.data.get('mirrorOf', null) == transactionId &&
+        ((data.type == 'expense' && data.get('toAccountId', null) == null && twin.data.type == 'transfer') ||
+         (data.type == 'transfer' &&
+          (twin.data.type == 'expense' || data.get('settlementType', null) in ['settlement', 'reversal'])));
+    }
+
+    function validBridgeReferenceCreate(transactionId, data) {
+      return !referencesBridge(data) ||
+        (hasMirrorLink(transactionId, data) && validMirrorLegCreate(transactionId, data, data.mirrorOf));
+    }
+
+    // A movement without a twin cannot gain a mirror link or end up on a bridge. A mirror leg keeps
+    // its structure: besides budget-only writes, it only changes to mark a settlement reversed or as
+    // one side of a shared-expense edit.
+    function validMirrorAwareUpdate(transactionId, changed) {
+      return resource.data.get('mirrorOf', null) == null
+        ? !changed.hasAny(['mirrorOf', 'settlementType']) && !referencesBridge(request.resource.data)
+        : !changed.hasAny(['mirrorOf', 'settlementType', 'reversalOf', 'type', 'accountId', 'toAccountId', 'currency']) &&
+          (changed.hasOnly(['reversedBy', 'reversedAt']) || validSharedExpenseLegEdit(transactionId, changed));
+    }
+
+    // One leg of a shared expense (an expense on the bridge and its transfer twin) may change only
+    // while its twin, after the same commit, carries the same amount with the opposite sign, date and
+    // description. Settlement pairs are both positive transfers, so they never qualify.
+    function validSharedExpenseLegEdit(transactionId, changed) {
+      let after = request.resource.data;
+      let twin = getAfter(transactionPath(resource.data.mirrorOf));
+      return resource.data.get('settlementType', null) == null &&
+        changed.hasOnly(['amount', 'description', 'date', 'categoryId', 'notes', 'receiptUrl', 'installments', 'userId']) &&
+        twin != null && twin.data.get('mirrorOf', null) == transactionId &&
+        isFiniteNumber(after.amount) &&
+        ((after.type == 'expense' && after.amount < 0) || (after.type == 'transfer' && after.amount > 0)) &&
+        twin.data.amount == -after.amount &&
+        twin.data.date == after.date &&
+        twin.data.description == after.description;
+    }
+
     function validMovementChildEndpoint(accountId, workspaceId, data) {
       let parent = get(accountPath(data.parentAccountId));
       return data.parentAccountId is string && data.type == 'savings' && parent != null &&
@@ -635,7 +694,8 @@ service cloud.firestore {
         (changed.hasOnly(['budgetId']) ||
          validPocketMovementUpdate(transactionId, resource.data, request.resource.data) ||
          (safeExistingTransactionReferencesNoPocket(resource.data) &&
-          safeExistingTransactionReferencesNoPocket(request.resource.data)));
+          safeExistingTransactionReferencesNoPocket(request.resource.data) &&
+          validMirrorAwareUpdate(transactionId, changed)));
     }
 
     match /transactions/{transactionId} {
@@ -643,7 +703,8 @@ service cloud.firestore {
       allow create: if isWorkspaceMember(request.resource.data.workspaceId) &&
         isValidTransactionBudget(request.resource.data, false) &&
         satisfiesAccountBudgetLink(request.resource.data) &&
-        (normalTransactionReferencesRoots(request.resource.data) ||
+        ((normalTransactionReferencesRoots(request.resource.data) &&
+          validBridgeReferenceCreate(transactionId, request.resource.data)) ||
          validPocketMovementCreate(transactionId, request.resource.data) ||
          validPocketOpeningTransaction(transactionId));
       allow update: if isWorkspaceMember(resource.data.workspaceId) &&

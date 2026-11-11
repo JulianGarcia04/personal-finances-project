@@ -740,7 +740,7 @@
           <div class="grid grid-cols-3 gap-2 p-1 rounded-xl bg-slate-900/80 border border-border">
             <button
               type="button"
-              :disabled="isEditingOpeningAllocation"
+              :disabled="editLocksStructure"
               @click="editTx.type = 'expense'"
               :class="['min-h-11 px-1 py-2 rounded-lg text-xs font-semibold leading-tight transition-all cursor-pointer', editTx.type === 'expense' ? 'bg-accent-rose/10 text-accent-rose border border-accent-rose/20' : 'text-text-secondary hover:text-text-primary']"
             >
@@ -748,7 +748,7 @@
             </button>
             <button
               type="button"
-              :disabled="isEditingOpeningAllocation"
+              :disabled="editLocksStructure"
               @click="editTx.type = 'income'"
               :class="['min-h-11 px-1 py-2 rounded-lg text-xs font-semibold leading-tight transition-all cursor-pointer', editTx.type === 'income' ? 'bg-accent-emerald/10 text-accent-emerald border border-accent-emerald/20' : 'text-text-secondary hover:text-text-primary']"
             >
@@ -756,7 +756,7 @@
             </button>
             <button
               type="button"
-              :disabled="isEditingOpeningAllocation"
+              :disabled="editLocksStructure"
               @click="editTx.type = 'transfer'"
               :class="['min-h-11 px-1 py-2 rounded-lg text-xs font-semibold leading-tight transition-all cursor-pointer', editTx.type === 'transfer' ? 'bg-accent-amber/10 text-accent-amber border border-accent-amber/20' : 'text-text-secondary hover:text-text-primary']"
             >
@@ -764,7 +764,7 @@
             </button>
             <button
               type="button"
-              :disabled="isEditingOpeningAllocation"
+              :disabled="editLocksStructure"
               @click="editTx.type = 'loan'"
               title="Dinero que le presto a alguien (sale de la cuenta, no cuenta como gasto)"
               :class="['min-h-11 px-1 py-2 rounded-lg text-xs font-semibold leading-tight transition-all cursor-pointer', editTx.type === 'loan' ? 'bg-accent-violet/10 text-accent-violet border border-accent-violet/20' : 'text-text-secondary hover:text-text-primary']"
@@ -773,7 +773,7 @@
             </button>
             <button
               type="button"
-              :disabled="isEditingOpeningAllocation"
+              :disabled="editLocksStructure"
               @click="editTx.type = 'loan_payment'"
               title="Me pagaron un préstamo (entra a la cuenta, no cuenta como ingreso)"
               :class="['min-h-11 px-1 py-2 rounded-lg text-xs font-semibold leading-tight transition-all cursor-pointer', editTx.type === 'loan_payment' ? 'bg-accent-violet/10 text-accent-violet border border-accent-violet/20' : 'text-text-secondary hover:text-text-primary']"
@@ -783,6 +783,9 @@
           </div>
           <p v-if="isEditingOpeningAllocation" class="text-[11px] text-text-muted">
             La asignación inicial conserva sus cuentas y tipo; puedes editar su monto, fecha y descripción.
+          </p>
+          <p v-if="isEditingSharedExpense" class="text-[11px] text-text-muted" data-testid="edit-shared-expense-note">
+            Gasto compartido: el monto, la fecha y la descripción también se actualizan en el otro workspace. El tipo y las cuentas no se pueden cambiar.
           </p>
           <p v-if="editBudgetNoticeState && editBudgetNoticeState.kind !== 'linked'" role="status" class="flex items-start gap-1.5 rounded-lg border border-accent-amber/20 bg-accent-amber/10 px-3 py-2 text-[11px] text-accent-amber" data-testid="edit-budget-released">
             <LinkIcon class="w-3.5 h-3.5 mt-px shrink-0" />
@@ -803,7 +806,7 @@
               <select 
                 v-model="editTx.accountId"
                 required
-                :disabled="isEditingOpeningAllocation"
+                :disabled="editLocksStructure"
                 class="field"
               >
                 <option value="" disabled>Selecciona cuenta</option>
@@ -819,7 +822,7 @@
               <select 
                 v-model="editTx.toAccountId"
                 required
-                :disabled="isEditingOpeningAllocation"
+                :disabled="editLocksStructure"
                 class="field"
               >
                 <option value="" disabled>Selecciona cuenta</option>
@@ -1046,6 +1049,7 @@ import { getMonthlyInstallmentAmount } from '@/lib/installments'
 import { toDateValue, toLocalDateKey } from '@/lib/dates'
 import { getTransactionDisplay } from '@/lib/transactionDisplay'
 import { canTransferBetweenAccounts, getAccountDisplayLabel, isPocketAccount, isPocketRelatedAccount } from '@/lib/pockets'
+import { isSettlementCandidate } from '@/lib/mirror'
 import { 
   Plus as PlusIcon, 
   Trash2 as TrashIcon, 
@@ -1263,6 +1267,14 @@ const isEditingOpeningAllocation = computed(() => {
   return !!transaction && accountsStore.accounts.some(account => account.openingAllocationId === transaction.id)
 })
 
+// A shared expense keeps its type and accounts; settlements keep their own reversal flow.
+const isEditingSharedExpense = computed(() => {
+  const transaction = editingTransaction.value
+  return !!transaction?.mirrorOf && transaction.settlementType == null && !isSettlementCandidate(transaction)
+})
+
+const editLocksStructure = computed(() => isEditingOpeningAllocation.value || isEditingSharedExpense.value)
+
 // A linked account's movements only offer its budget (plus the current one, to move them there).
 const budgetOptionsForExpense = (currentBudgetId?: string | null, accountId = '') => {
   const resolvedBudgetId = resolveBudgetId(currentBudgetId)
@@ -1324,17 +1336,21 @@ const applyEditBudgetAssignment = async () => {
 }
 
 // Computed properties for Edit Modal
+// Bridges are left out, except the one the movement already uses so the form can show it.
+const editableAccounts = computed(() => accountsStore.accounts.filter(account => !account.mirror ||
+  account.id === editingTransaction.value?.accountId || account.id === editingTransaction.value?.toAccountId))
+
 const availableEditDestinationAccounts = computed(() => {
-  if (editTx.value.type !== 'transfer') return accountsStore.accounts.filter(account => account.id !== editTx.value.accountId)
+  if (editTx.value.type !== 'transfer') return editableAccounts.value.filter(account => account.id !== editTx.value.accountId)
   const source = accountsStore.getAccountById(editTx.value.accountId)
-  return accountsStore.accounts.filter(account => account.id !== editTx.value.accountId &&
+  return editableAccounts.value.filter(account => account.id !== editTx.value.accountId &&
     (!source || canTransferBetweenAccounts(source, account, accountsStore.accounts)))
 })
 
 const availableEditSourceAccounts = computed(() => {
-  if (editTx.value.type !== 'transfer') return accountsStore.accounts
+  if (editTx.value.type !== 'transfer') return editableAccounts.value
   const destination = accountsStore.getAccountById(editTx.value.toAccountId)
-  return accountsStore.accounts.filter(account => account.id !== editTx.value.toAccountId &&
+  return editableAccounts.value.filter(account => account.id !== editTx.value.toAccountId &&
     (!destination || canTransferBetweenAccounts(account, destination, accountsStore.accounts)))
 })
 
@@ -1378,18 +1394,26 @@ const pendingLoansByCurrency = computed(() => {
   return Object.fromEntries(Object.entries(totals).filter(([, v]) => Math.abs(v) > 0.005))
 })
 
+// A bridge account only holds shared expenses, so it is offered only as the account of an expense.
+const nonBridgeAccounts = computed(() => accountsStore.accounts.filter(account => !account.mirror))
+
 // Filtrar cuentas destino (transferencias) excluyendo la origen
 const availableDestinationAccounts = computed(() => {
   const source = accountsStore.getAccountById(newTx.value.accountId)
-  return accountsStore.accounts.filter(account => account.id !== newTx.value.accountId &&
+  return nonBridgeAccounts.value.filter(account => account.id !== newTx.value.accountId &&
     (!source || canTransferBetweenAccounts(source, account, accountsStore.accounts)))
 })
 
 const availableNewSourceAccounts = computed(() => {
-  if (newTx.value.type !== 'transfer') return accountsStore.accounts
+  if (newTx.value.type === 'expense') return accountsStore.accounts
+  if (newTx.value.type !== 'transfer') return nonBridgeAccounts.value
   const destination = accountsStore.getAccountById(newTx.value.toAccountId)
-  return accountsStore.accounts.filter(account => account.id !== newTx.value.toAccountId &&
+  return nonBridgeAccounts.value.filter(account => account.id !== newTx.value.toAccountId &&
     (!destination || canTransferBetweenAccounts(account, destination, accountsStore.accounts)))
+})
+
+watch(() => newTx.value.type, type => {
+  if (type !== 'expense' && accountsStore.getAccountById(newTx.value.accountId)?.mirror) newTx.value.accountId = ''
 })
 
 // Filtrar categorías según tipo seleccionado (ingreso o gasto)
