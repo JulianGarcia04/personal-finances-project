@@ -149,3 +149,39 @@ test("editing an expense between a pocket-related account and a credit card upda
   );
 });
 
+
+const bridgeAccount = {
+  workspaceId: "ws", type: "checking", balance: -50, currency: "USD",
+  mirror: { workspaceId: "personal", accountId: "receivable", sourceAccountId: "card" }
+};
+
+test("server movements cannot touch a bridge account: only app-mirrored shared expenses live there", async () => {
+  for (const movement of [
+    { accountId: "bridge", type: "income", amount: 20, categoryId: "salary" },
+    { accountId: "bridge", type: "expense", amount: -20, categoryId: "food" },
+    { accountId: "bridge", type: "loan", amount: -20, categoryId: "" },
+    { accountId: "bridge", type: "loan_payment", amount: 20, categoryId: "" },
+    { accountId: "bank", type: "transfer", amount: 20, toAccountId: "bridge" },
+    { accountId: "bridge", type: "transfer", amount: 20, toAccountId: "bank" }
+  ]) {
+    const { db, read } = fakeDb({ ...fixtures(null, {}), "accounts/bridge": bridgeAccount });
+    await assert.rejects(create(db, movement), /cuenta puente solo admite gastos compartidos/, JSON.stringify(movement));
+    assert.equal(read("accounts/bridge")?.balance, -50);
+    assert.equal(read("accounts/bank")?.balance, 100);
+    assert.equal(read("transactions/generated-1"), undefined);
+  }
+});
+
+test("an unmirrored movement left on a bridge can still be deleted, restoring the bridge balance", async () => {
+  const { db, read } = fakeDb({
+    ...fixtures(null, {}),
+    "accounts/bridge": { ...bridgeAccount, balance: -30 },
+    "transactions/legacy": {
+      workspaceId: "ws", userId: "u1", accountId: "bridge", amount: 20, type: "income", categoryId: "salary",
+      description: "Legacy income", currency: "USD", toAccountId: null
+    }
+  });
+  await mutateWorkspaceTransaction(db, { kind: "deleted", userId: "u1", workspaceId: "ws", transactionId: "legacy" });
+  assert.equal(read("transactions/legacy"), undefined);
+  assert.equal(read("accounts/bridge")?.balance, -50);
+});

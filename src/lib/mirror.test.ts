@@ -155,3 +155,21 @@ test('fails closed for ambiguous legacy pairs and already reversed settlements',
     first: { ...received, reversedBy: 'reversal-a' }, second: paid, accountsById
   }), /reverted|revertid/i)
 })
+
+test('a bridge account only accepts shared expenses; every other movement on, onto or to it is refused', async () => {
+  const mirror = await import('./mirror.ts')
+  assert.equal(typeof mirror.assertBridgeMovement, 'function', 'bridge movement guard is required')
+  const bridge = { mirror: { workspaceId: 'personal', accountId: 'receivable', sourceAccountId: 'card' } }
+  const bank = { mirror: null }
+
+  assert.doesNotThrow(() => mirror.assertBridgeMovement('expense', bridge))
+  for (const type of ['expense', 'income', 'loan', 'loan_payment']) {
+    assert.doesNotThrow(() => mirror.assertBridgeMovement(type, bank))
+  }
+  assert.doesNotThrow(() => mirror.assertBridgeMovement('transfer', bank, bank))
+
+  for (const type of ['income', 'transfer', 'loan', 'loan_payment']) {
+    assert.throws(() => mirror.assertBridgeMovement(type, bridge, bank), /cuenta puente solo admite gastos compartidos/)
+  }
+  assert.throws(() => mirror.assertBridgeMovement('transfer', bank, bridge), /cuenta puente solo admite gastos compartidos/)
+})

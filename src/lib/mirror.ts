@@ -47,6 +47,24 @@ export function planMirror({ amount, bridgeCurrency, sourceCurrency, receivableC
   return { bridge: spent, source: spent, receivable: -spent }
 }
 
+export const BRIDGE_EXPENSES_ONLY_MESSAGE =
+  'Una cuenta puente solo admite gastos compartidos. Para saldar la deuda usa «Liquidar puente» en Cuentas.'
+
+/**
+ * A bridge account only holds shared expenses: they are the only movement replicated into the
+ * mirror workspace, so any other movement on, onto or to a bridge would desync its debt.
+ * Settlements and their reversals use their own flow and never pass through here.
+ */
+export function assertBridgeMovement(
+  type: string,
+  source?: { mirror?: unknown } | null,
+  destination?: { mirror?: unknown } | null
+): void {
+  if ((source?.mirror && type !== 'expense') || destination?.mirror) {
+    throw new Error(BRIDGE_EXPENSES_ONLY_MESSAGE)
+  }
+}
+
 export interface SettlementDeltas {
   from: number // cuenta que paga la deuda, en el workspace del puente
   bridge: number // cuenta puente: sube hacia 0

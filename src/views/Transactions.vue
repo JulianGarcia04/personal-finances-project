@@ -1324,17 +1324,21 @@ const applyEditBudgetAssignment = async () => {
 }
 
 // Computed properties for Edit Modal
+// Bridges are left out, except the one the movement already uses so the form can show it.
+const editableAccounts = computed(() => accountsStore.accounts.filter(account => !account.mirror ||
+  account.id === editingTransaction.value?.accountId || account.id === editingTransaction.value?.toAccountId))
+
 const availableEditDestinationAccounts = computed(() => {
-  if (editTx.value.type !== 'transfer') return accountsStore.accounts.filter(account => account.id !== editTx.value.accountId)
+  if (editTx.value.type !== 'transfer') return editableAccounts.value.filter(account => account.id !== editTx.value.accountId)
   const source = accountsStore.getAccountById(editTx.value.accountId)
-  return accountsStore.accounts.filter(account => account.id !== editTx.value.accountId &&
+  return editableAccounts.value.filter(account => account.id !== editTx.value.accountId &&
     (!source || canTransferBetweenAccounts(source, account, accountsStore.accounts)))
 })
 
 const availableEditSourceAccounts = computed(() => {
-  if (editTx.value.type !== 'transfer') return accountsStore.accounts
+  if (editTx.value.type !== 'transfer') return editableAccounts.value
   const destination = accountsStore.getAccountById(editTx.value.toAccountId)
-  return accountsStore.accounts.filter(account => account.id !== editTx.value.toAccountId &&
+  return editableAccounts.value.filter(account => account.id !== editTx.value.toAccountId &&
     (!destination || canTransferBetweenAccounts(account, destination, accountsStore.accounts)))
 })
 
@@ -1378,18 +1382,26 @@ const pendingLoansByCurrency = computed(() => {
   return Object.fromEntries(Object.entries(totals).filter(([, v]) => Math.abs(v) > 0.005))
 })
 
+// A bridge account only holds shared expenses, so it is offered only as the account of an expense.
+const nonBridgeAccounts = computed(() => accountsStore.accounts.filter(account => !account.mirror))
+
 // Filtrar cuentas destino (transferencias) excluyendo la origen
 const availableDestinationAccounts = computed(() => {
   const source = accountsStore.getAccountById(newTx.value.accountId)
-  return accountsStore.accounts.filter(account => account.id !== newTx.value.accountId &&
+  return nonBridgeAccounts.value.filter(account => account.id !== newTx.value.accountId &&
     (!source || canTransferBetweenAccounts(source, account, accountsStore.accounts)))
 })
 
 const availableNewSourceAccounts = computed(() => {
-  if (newTx.value.type !== 'transfer') return accountsStore.accounts
+  if (newTx.value.type === 'expense') return accountsStore.accounts
+  if (newTx.value.type !== 'transfer') return nonBridgeAccounts.value
   const destination = accountsStore.getAccountById(newTx.value.toAccountId)
-  return accountsStore.accounts.filter(account => account.id !== newTx.value.toAccountId &&
+  return nonBridgeAccounts.value.filter(account => account.id !== newTx.value.toAccountId &&
     (!destination || canTransferBetweenAccounts(account, destination, accountsStore.accounts)))
+})
+
+watch(() => newTx.value.type, type => {
+  if (type !== 'expense' && accountsStore.getAccountById(newTx.value.accountId)?.mirror) newTx.value.accountId = ''
 })
 
 // Filtrar categorías según tipo seleccionado (ingreso o gasto)

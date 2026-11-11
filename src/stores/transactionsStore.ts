@@ -5,6 +5,7 @@ import { useAuthStore } from './authStore'
 import { Account, Transaction, Category, TransactionType } from '@/types'
 import { getTransactionReplacementDeltas, isPocketAccount, isPocketRelatedAccount } from '@/lib/pockets'
 import {
+  assertBridgeMovement,
   isSettlementCandidate,
   planMirror,
   planSettlement,
@@ -522,6 +523,7 @@ export const useTransactionsStore = defineStore('transactions', {
           throw new Error('La cuenta destino no existe en el workspace activo')
         }
       }
+      assertBridgeMovement(type, account, destination)
 
       // The default budget is the absence of a reference; only explicit budgets are stored.
       const persistedBudgetId = budgetIdToPersist(type, budgetId)
@@ -1520,6 +1522,9 @@ export const useTransactionsStore = defineStore('transactions', {
           const destination = accountsStore.getAccountById(updates.toAccountId)
           if (!destination || destination.workspaceId !== workspaceId) {
             throw new Error('La cuenta destino no existe en el workspace activo')
+          }
+          if (destination.mirror) {
+            throw new Error('No puedes mover o editar una transacción hacia una cuenta puente fuera de una operación espejo')
           }
         }
         const installmentCount = updates.type === 'expense' && account.type === 'credit'
