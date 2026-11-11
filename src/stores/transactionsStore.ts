@@ -841,38 +841,46 @@ export const useTransactionsStore = defineStore('transactions', {
     },
 
     // 4b. Borrar un par espejo (gasto compartido o liquidación): ambas patas y todos
-    // los saldos en un solo batch. Si la pata gemela no se puede leer, falla completo
+    // los saldos en una sola transacción. Si la pata gemela no se puede leer, falla completo
     // antes de escribir nada: preferible un borrado que no ocurre a media deuda colgando.
+    // Revierte lo guardado, no la copia local: el par pudo editarse en otra sesión.
     async deleteMirrorPair(tx: Transaction): Promise<void> {
       const accountsStore = useAccountsStore()
-      const twinSnap = await getDoc(doc(db, 'transactions', tx.mirrorOf as string))
-      if (!twinSnap.exists()) {
-        throw new Error('No se encontró la pata espejo; no se eliminó ninguna transacción.')
-      }
+      const legRef = doc(db, 'transactions', tx.id)
+      const twinRef = doc(db, 'transactions', tx.mirrorOf as string)
+      await runTransaction(db, async (transaction) => {
+        const [legSnap, twinSnap] = await Promise.all([transaction.get(legRef), transaction.get(twinRef)])
+        if (!legSnap.exists() || !twinSnap.exists()) {
+          throw new Error('No se encontró la pata espejo; no se eliminó ninguna transacción.')
+        }
 
-      const twin = twinSnap.data() as any
-      const legAccounts = await Promise.all([...accountIdsForTransaction(tx), ...accountIdsForTransaction(twin)]
-        .map(accountId => getDoc(doc(db, 'accounts', accountId))))
-      if (legAccounts.some(snap => snap.exists() && movementAccountIsPocketRelated(snap.data()))) {
-        await callBridgeSettlement({ action: 'delete', workspaceId: tx.workspaceId, transactionId: tx.id })
-      } else {
-        const batch = writeBatch(db)
+        const leg = legSnap.data() as any
+        const twin = twinSnap.data() as any
+        const legAccounts = await Promise.all([...accountIdsForTransaction(leg), ...accountIdsForTransaction(twin)]
+          .map(accountId => transaction.get(doc(db, 'accounts', accountId))))
+        if (legAccounts.some(snap => snap.exists() && movementAccountIsPocketRelated(snap.data()))) {
+          throw new SettlementMustUseServer()
+        }
+
         // Revierte una pata con la misma convención de signos que deleteTransaction.
-        const reverse = (leg: { type: string; accountId: string; toAccountId?: string | null; amount: number }) => {
-          if (leg.type === 'transfer' && leg.toAccountId) {
-            batch.update(doc(db, 'accounts', leg.accountId), { balance: increment(leg.amount) })
-            batch.update(doc(db, 'accounts', leg.toAccountId), { balance: increment(-leg.amount) })
+        const reverse = (stored: { type: string; accountId: string; toAccountId?: string | null; amount: number }) => {
+          if (stored.type === 'transfer' && stored.toAccountId) {
+            transaction.update(doc(db, 'accounts', stored.accountId), { balance: increment(stored.amount) })
+            transaction.update(doc(db, 'accounts', stored.toAccountId), { balance: increment(-stored.amount) })
           } else {
-            batch.update(doc(db, 'accounts', leg.accountId), { balance: increment(-leg.amount) })
+            transaction.update(doc(db, 'accounts', stored.accountId), { balance: increment(-stored.amount) })
           }
         }
 
-        batch.delete(doc(db, 'transactions', tx.id))
-        reverse(tx)
-        batch.delete(twinSnap.ref)
+        transaction.delete(legRef)
+        reverse(leg)
+        transaction.delete(twinRef)
         reverse(twin)
-        await batch.commit()
-      }
+      }).catch(async error => {
+        // Pocket balances only change through the server's version-checked movements.
+        if (!(error instanceof SettlementMustUseServer)) throw error
+        await callBridgeSettlement({ action: 'delete', workspaceId: tx.workspaceId, transactionId: tx.id })
+      })
 
       // Puede haber tocado varias cuentas locales: releer es más corto y más fiable
       // que parchear saldo por saldo a mano.

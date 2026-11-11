@@ -252,3 +252,25 @@ test('Firestore rules refuse editing one leg of a shared expense without its twi
   assert.equal((await storedTransaction(expense.id)).notes, 'Solo nota')
   assert.equal((await storedTransaction(expense.mirrorOf)).amount, 300)
 })
+
+test('deleting a shared expense reverses what is stored, even if another session edited it after this list loaded', async () => {
+  const { ids } = await seedBridge()
+  const { transactionsStore: store, adminDb } = fixture
+  const expense = await addSharedExpense(ids, 300)
+
+  // Another session edits the pair to 450; this session still holds the 300 copy.
+  const batch = adminDb.batch()
+  batch.update(adminDb.collection('transactions').doc(expense.id), { amount: -450 })
+  batch.update(adminDb.collection('transactions').doc(expense.mirrorOf), { amount: 450 })
+  for (const [id, balance] of [[ids.bridge, -450], [ids.source, -450], [ids.receivable, 450]]) {
+    batch.update(adminDb.collection('accounts').doc(id), { balance })
+  }
+  await batch.commit()
+  assert.equal(store.transactions.find(tx => tx.id === expense.id).amount, -300)
+
+  await store.deleteTransaction(expense.id)
+
+  assert.deepEqual(await balances(ids), { bank: 1_000, bridge: 0, source: 0, receivable: 0, to: 500 })
+  assert.equal(await storedTransaction(expense.id), undefined)
+  assert.equal(await storedTransaction(expense.mirrorOf), undefined)
+})
