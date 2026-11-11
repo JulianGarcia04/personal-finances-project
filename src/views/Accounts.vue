@@ -453,7 +453,8 @@
                 <h4 class="font-display font-semibold text-sm text-text-primary">Cuenta puente</h4>
                 <p class="text-[11px] text-text-secondary leading-relaxed mt-0.5">
                   Un gasto contra esta cuenta consume el presupuesto de acá, pero la plata sale de otro workspace.
-                  La contrapartida se registra allá sola, como transferencia.
+                  La contrapartida se registra allá sola, como transferencia. Solo admite gastos: si editas o
+                  borras uno, el cambio se aplica en los dos workspaces.
                 </p>
               </div>
             </div>

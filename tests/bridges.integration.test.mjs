@@ -2,7 +2,7 @@
 // Run through `node tests/pockets.imports.emulators.mjs`, which starts the emulators.
 import assert from 'node:assert/strict'
 import test, { after, before } from 'node:test'
-import { doc, setDoc, updateDoc } from 'firebase/firestore'
+import { doc, setDoc, updateDoc, writeBatch } from 'firebase/firestore'
 import { createPocketFixture } from './pockets.fixtures.mjs'
 
 let fixture
@@ -141,4 +141,114 @@ test('shared expenses, settlements and their reversals still reach the bridge th
     .find(tx => tx.settlementType === 'settlement' && tx.toAccountId === ids.bridge)
   await store.reverseSettlement(settlement.id)
   assert.deepEqual(await balances(ids), { bank: 1_000, bridge: -300, source: -300, receivable: 300, to: 500 })
+})
+
+const editedDate = new Date('2026-11-08T12:00:00')
+
+function editOf(leg, changes) {
+  return {
+    accountId: leg.accountId, toAccountId: leg.toAccountId ?? null, type: leg.type, amount: leg.amount,
+    description: leg.description, categoryId: leg.categoryId, date: leg.date, receiptUrl: leg.receiptUrl ?? null,
+    notes: leg.notes ?? null, installments: leg.installments ?? 1, ...changes
+  }
+}
+
+test('editing a shared expense updates both legs and the three balances in one write', async () => {
+  const { ids } = await seedBridge()
+  const { transactionsStore: store, accountsStore } = fixture
+  const expense = await addSharedExpense(ids, 300, { notes: 'Antes' })
+
+  await store.updateTransaction(expense.id, editOf(expense, {
+    amount: -450, description: 'Mercado grande', categoryId: 'home', date: editedDate, notes: 'Con domicilio'
+  }))
+
+  assert.deepEqual(await balances(ids), { bank: 1_000, bridge: -450, source: -450, receivable: 450, to: 500 })
+  const bridgeLeg = await storedTransaction(expense.id)
+  const mirrorLeg = await storedTransaction(expense.mirrorOf)
+  assert.equal(bridgeLeg.amount, -450)
+  assert.equal(bridgeLeg.description, 'Mercado grande')
+  assert.equal(bridgeLeg.categoryId, 'home')
+  assert.equal(bridgeLeg.notes, 'Con domicilio')
+  assert.equal(bridgeLeg.date.toMillis(), editedDate.getTime())
+  assert.equal(mirrorLeg.amount, 450)
+  assert.equal(mirrorLeg.description, 'Mercado grande')
+  assert.equal(mirrorLeg.date.toMillis(), editedDate.getTime())
+  assert.equal(mirrorLeg.categoryId, '')
+  assert.equal(mirrorLeg.notes, 'Gasto reembolsable registrado en "Bridge"')
+  assert.equal(mirrorLeg.mirrorOf, expense.id)
+  assert.equal(store.transactions.find(tx => tx.id === expense.id).amount, -450)
+  assert.equal(accountsStore.getAccountById(ids.bridge).balance, -450)
+})
+
+test('editing the mirror leg from the other workspace updates the pair the same way', async () => {
+  const { ids, mirrorWorkspaceId } = await seedBridge()
+  const { transactionsStore: store, accountsStore, authStore } = fixture
+  const expense = await addSharedExpense(ids, 300)
+
+  authStore.activeWorkspaceId = mirrorWorkspaceId
+  await Promise.all([accountsStore.fetchAccounts(), store.fetchTransactions()])
+  const mirrorLeg = store.transactions.find(tx => tx.id === expense.mirrorOf)
+  await store.updateTransaction(mirrorLeg.id, editOf(mirrorLeg, {
+    amount: 120, description: 'Mercado corregido', date: editedDate, notes: 'Pagado con la tarjeta'
+  }))
+
+  assert.deepEqual(await balances(ids), { bank: 1_000, bridge: -120, source: -120, receivable: 120, to: 500 })
+  const storedBridgeLeg = await storedTransaction(expense.id)
+  const storedMirrorLeg = await storedTransaction(expense.mirrorOf)
+  assert.equal(storedBridgeLeg.amount, -120)
+  assert.equal(storedBridgeLeg.description, 'Mercado corregido')
+  assert.equal(storedBridgeLeg.date.toMillis(), editedDate.getTime())
+  assert.equal(storedBridgeLeg.categoryId, 'food')
+  assert.equal(storedMirrorLeg.amount, 120)
+  assert.equal(storedMirrorLeg.notes, 'Pagado con la tarjeta')
+  assert.equal(accountsStore.getAccountById(ids.receivable).balance, 120)
+  authStore.activeWorkspaceId = fixture.workspaceId
+})
+
+test('a shared expense keeps its type and accounts; settlements and pocket pairs are not editable', async () => {
+  const { ids } = await seedBridge()
+  const store = fixture.transactionsStore
+  const expense = await addSharedExpense(ids, 300)
+  const refused = /no se puede cambiar el tipo ni las cuentas/
+
+  await assert.rejects(store.updateTransaction(expense.id, editOf(expense, { type: 'income', amount: 300 })), refused)
+  await assert.rejects(store.updateTransaction(expense.id, editOf(expense, { accountId: ids.bank })), refused)
+
+  await store.settleMirror({ bridgeAccountId: ids.bridge, amount: 100, fromAccountId: ids.bank, toAccountId: ids.to, date })
+  await store.fetchTransactions()
+  const settlement = store.transactions.find(tx => tx.settlementType === 'settlement' && tx.toAccountId === ids.bridge)
+  await assert.rejects(
+    store.updateTransaction(settlement.id, editOf(settlement, { amount: 50 })),
+    /liquidaciones no se editan/
+  )
+
+  await fixture.adminDb.collection('accounts').doc(ids.source).update({ childAccountIds: [`${ids.source}-pocket`] })
+  await assert.rejects(store.updateTransaction(expense.id, editOf(expense, { amount: -500 })), /bolsillos/)
+
+  assert.deepEqual(await balances(ids), { bank: 900, bridge: -200, source: -300, receivable: 200, to: 600 })
+  assert.equal((await storedTransaction(expense.id)).amount, -300)
+  assert.equal((await storedTransaction(expense.mirrorOf)).amount, 300)
+})
+
+test('Firestore rules refuse editing one leg of a shared expense without its twin', async () => {
+  const { ids } = await seedBridge()
+  const expense = await addSharedExpense(ids, 300)
+  const { db } = fixture
+  const bridgeLegRef = doc(db, 'transactions', expense.id)
+  const mirrorLegRef = doc(db, 'transactions', expense.mirrorOf)
+
+  await assert.rejects(updateDoc(bridgeLegRef, { amount: -999 }), denied)
+  await assert.rejects(updateDoc(mirrorLegRef, { description: 'Solo esta pata' }), denied)
+  await assert.rejects(updateDoc(bridgeLegRef, { date: editedDate }), denied)
+  const retype = writeBatch(db)
+  retype.update(bridgeLegRef, { type: 'income', amount: 300 })
+  retype.update(mirrorLegRef, { amount: -300 })
+  await assert.rejects(retype.commit(), denied)
+  await assert.rejects(updateDoc(bridgeLegRef, { mirrorOf: null }), denied)
+
+  // Fields of one leg alone, and budget-only classification, keep working.
+  await updateDoc(bridgeLegRef, { notes: 'Solo nota', categoryId: 'home' })
+  await updateDoc(bridgeLegRef, { budgetId: 'default-monthly' })
+  assert.equal((await storedTransaction(expense.id)).notes, 'Solo nota')
+  assert.equal((await storedTransaction(expense.mirrorOf)).amount, 300)
 })

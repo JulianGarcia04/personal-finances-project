@@ -10,8 +10,11 @@ import {
   planMirror,
   planSettlement,
   planSettlementReversal,
+  planSharedExpenseEdit,
+  sharedExpenseLegs,
   SettlementAccountRecord,
-  SettlementLegRecord
+  SettlementLegRecord,
+  SharedExpenseLeg
 } from '@/lib/mirror'
 import { createCardBillingLookup, expenseAmountForDate, getInstallmentCount } from '@/lib/installments'
 import { parseDateOnly, toDateValue } from '@/lib/dates'
@@ -37,6 +40,23 @@ import {
 import { httpsCallable } from 'firebase/functions'
 import { StatementImportBatchSchema } from '@/schemas'
 import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage'
+
+// What the edit form sends for a movement.
+type TransactionUpdate = {
+  accountId: string;
+  amount: number;
+  description: string;
+  categoryId: string;
+  date: Date;
+  type: TransactionType;
+  toAccountId?: string | null;
+  receiptUrl?: string | null;
+  notes?: string | null;
+  installments?: number | null;
+  userId?: string;
+  // Active budget the edited account is linked to, if any (its movements belong to it).
+  linkedBudgetId?: string | null;
+}
 
 // Categorías por defecto iniciales
 const DEFAULT_CATEGORIES = [
@@ -1419,21 +1439,7 @@ export const useTransactionsStore = defineStore('transactions', {
     },
 
     // 6. Editar / Actualizar Transacción
-    async updateTransaction(transactionId: string, updates: {
-      accountId: string;
-      amount: number;
-      description: string;
-      categoryId: string;
-      date: Date;
-      type: TransactionType;
-      toAccountId?: string | null;
-      receiptUrl?: string | null;
-      notes?: string | null;
-      installments?: number | null;
-      userId?: string;
-      // Active budget the edited account is linked to, if any (its movements belong to it).
-      linkedBudgetId?: string | null;
-    }): Promise<Transaction> {
+    async updateTransaction(transactionId: string, updates: TransactionUpdate): Promise<Transaction> {
       const user = auth.currentUser
       if (!user) throw new Error('Usuario no autenticado')
 
@@ -1442,11 +1448,8 @@ export const useTransactionsStore = defineStore('transactions', {
       if (txIndex === -1) throw new Error('Transacción no encontrada en el estado local')
       const oldTx = this.transactions[txIndex]
 
-      // Editar solo una pata desincronizaría el saldo del otro workspace en silencio.
-      // ponytail: bloquear en vez de sincronizar; borrar y recrear es 2 clics.
-      if (oldTx.mirrorOf) {
-        throw new Error('Este gasto tiene una pata espejo en otro workspace. Bórralo y vuelve a crearlo para modificarlo.')
-      }
+      // Una pata espejo nunca se edita sola: editarla así desincronizaría el otro workspace.
+      if (oldTx.mirrorOf) return this.updateSharedExpense(oldTx, updates)
 
       const authStore = useAuthStore()
       const workspaceId = authStore.activeWorkspaceId
@@ -1584,6 +1587,107 @@ export const useTransactionsStore = defineStore('transactions', {
         return updatedTx
       } catch (error) {
         console.error('Error al actualizar transacción:', error)
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+
+    // 6b. Editar un gasto compartido desde cualquiera de sus dos patas. Monto, fecha y descripción
+    // cambian en ambas y los tres saldos (puente, cuenta real y por cobrar) se mueven solo por la
+    // diferencia, todo en una sola transacción. Usa las cuentas guardadas en las patas, no el espejo
+    // actual del puente, que pudo cambiar después de registrar el gasto.
+    async updateSharedExpense(oldTx: Transaction, updates: TransactionUpdate): Promise<Transaction> {
+      const user = auth.currentUser
+      const authStore = useAuthStore()
+      const workspaceId = authStore.activeWorkspaceId
+      if (!user || !workspaceId) throw new Error('Usuario o Workspace no inicializado')
+      if (!oldTx.mirrorOf || oldTx.workspaceId !== workspaceId) {
+        throw new Error('La transacción no pertenece al workspace activo.')
+      }
+
+      const accountsStore = useAccountsStore()
+      const transactionDate = updates.date instanceof Date ? updates.date : new Date(updates.date)
+      const editedRef = doc(db, 'transactions', oldTx.id)
+      const twinRef = doc(db, 'transactions', oldTx.mirrorOf)
+      this.loading = true
+      try {
+        const patch = await runTransaction(db, async (transaction) => {
+          const [editedSnap, twinSnap] = await Promise.all([transaction.get(editedRef), transaction.get(twinRef)])
+          if (!editedSnap.exists()) throw new Error('La transacción ya no existe.')
+          if (!twinSnap.exists()) {
+            throw new Error('No se encontró la pata espejo de este gasto compartido; no se modificó nada.')
+          }
+          const edited = { ...editedSnap.data(), id: editedSnap.id } as SharedExpenseLeg & { userId?: string }
+          const twin = { ...twinSnap.data(), id: twinSnap.id } as SharedExpenseLeg
+          if (edited.workspaceId !== workspaceId) throw new Error('La transacción no pertenece al workspace activo.')
+          const { bridgeLeg, mirrorLeg } = sharedExpenseLegs(edited, twin)
+          if (updates.type !== edited.type || updates.accountId !== edited.accountId ||
+              (updates.toAccountId ?? null) !== (edited.toAccountId ?? null)) {
+            throw new Error('En un gasto compartido no se puede cambiar el tipo ni las cuentas. Si necesitas otra cuenta, bórralo y vuelve a crearlo.')
+          }
+
+          const accountRefs = [bridgeLeg.accountId, mirrorLeg.accountId, mirrorLeg.toAccountId as string]
+            .map(accountId => doc(db, 'accounts', accountId))
+          const accountSnaps = await Promise.all(accountRefs.map(ref => transaction.get(ref)))
+          if (accountSnaps.some(snap => !snap.exists())) {
+            throw new Error('Una cuenta del gasto compartido ya no existe; no se modificó nada.')
+          }
+          const [bridge, source, receivable] = accountSnaps.map(snap => snap.data()!)
+          if ([bridge, source, receivable].some(movementAccountIsPocketRelated)) {
+            throw new Error('Este gasto compartido toca cuentas con bolsillos y todavía no se puede editar: bórralo y vuelve a crearlo.')
+          }
+          const deltas = planSharedExpenseEdit({
+            previousAmount: bridgeLeg.amount,
+            amount: updates.amount,
+            bridgeCurrency: bridge.currency || 'USD',
+            sourceCurrency: source.currency || 'USD',
+            receivableCurrency: receivable.currency || 'USD'
+          })
+
+          // Shared by both legs; the rules require them to match.
+          const spent = -Math.abs(updates.amount)
+          const shared = { description: updates.description, date: Timestamp.fromDate(transactionDate) }
+          // Only the edited leg takes what the form shows of it.
+          const ownFields = {
+            receiptUrl: updates.receiptUrl ?? null,
+            notes: updates.notes ?? null,
+            ...(updates.userId ? { userId: updates.userId } : {})
+          }
+          const editingBridgeLeg = bridgeLeg.id === edited.id
+          const bridgePatch = {
+            ...shared,
+            amount: spent,
+            ...(editingBridgeLeg ? {
+              ...ownFields,
+              categoryId: updates.categoryId,
+              installments: bridge.type === 'credit' ? getInstallmentCount(updates.installments) : 1
+            } : {})
+          }
+          const mirrorPatch = { ...shared, amount: -spent, ...(editingBridgeLeg ? {} : ownFields) }
+          transaction.update(doc(db, 'transactions', bridgeLeg.id), bridgePatch)
+          transaction.update(doc(db, 'transactions', mirrorLeg.id), mirrorPatch)
+          if (deltas.bridge !== 0) {
+            const [bridgeRef, sourceRef, receivableRef] = accountRefs
+            transaction.update(bridgeRef, { balance: increment(deltas.bridge) })
+            transaction.update(sourceRef, { balance: increment(deltas.source) })
+            transaction.update(receivableRef, { balance: increment(deltas.receivable) })
+          }
+          return editingBridgeLeg ? bridgePatch : mirrorPatch
+        })
+
+        const updatedTx = { ...oldTx, ...patch, date: transactionDate } as Transaction
+        if (authStore.activeWorkspaceId === workspaceId) {
+          const currentIndex = this.transactions.findIndex(existing => existing.id === oldTx.id)
+          if (currentIndex !== -1) this.transactions[currentIndex] = updatedTx
+          this.transactions.sort((a, b) => b.date.getTime() - a.date.getTime())
+        }
+        // Up to three accounts changed, possibly in both workspaces: re-reading is simpler and
+        // more reliable than patching each local balance.
+        await accountsStore.fetchAccounts()
+        return updatedTx
+      } catch (error) {
+        console.error('Error al editar gasto compartido:', error)
         throw error
       } finally {
         this.loading = false

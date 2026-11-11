@@ -287,11 +287,30 @@ service cloud.firestore {
         (hasMirrorLink(transactionId, data) && validMirrorLegCreate(transactionId, data, data.mirrorOf));
     }
 
-    // A movement without a twin cannot gain a mirror link or end up on a bridge.
+    // A movement without a twin cannot gain a mirror link or end up on a bridge. A mirror leg keeps
+    // its structure: besides budget-only writes, it only changes to mark a settlement reversed or as
+    // one side of a shared-expense edit.
     function validMirrorAwareUpdate(transactionId, changed) {
       return resource.data.get('mirrorOf', null) == null
         ? !changed.hasAny(['mirrorOf', 'settlementType']) && !referencesBridge(request.resource.data)
-        : true;
+        : !changed.hasAny(['mirrorOf', 'settlementType', 'reversalOf', 'type', 'accountId', 'toAccountId', 'currency']) &&
+          (changed.hasOnly(['reversedBy', 'reversedAt']) || validSharedExpenseLegEdit(transactionId, changed));
+    }
+
+    // One leg of a shared expense (an expense on the bridge and its transfer twin) may change only
+    // while its twin, after the same commit, carries the same amount with the opposite sign, date and
+    // description. Settlement pairs are both positive transfers, so they never qualify.
+    function validSharedExpenseLegEdit(transactionId, changed) {
+      let after = request.resource.data;
+      let twin = getAfter(transactionPath(resource.data.mirrorOf));
+      return resource.data.get('settlementType', null) == null &&
+        changed.hasOnly(['amount', 'description', 'date', 'categoryId', 'notes', 'receiptUrl', 'installments', 'userId']) &&
+        twin != null && twin.data.get('mirrorOf', null) == transactionId &&
+        isFiniteNumber(after.amount) &&
+        ((after.type == 'expense' && after.amount < 0) || (after.type == 'transfer' && after.amount > 0)) &&
+        twin.data.amount == -after.amount &&
+        twin.data.date == after.date &&
+        twin.data.description == after.description;
     }
 
     function validMovementChildEndpoint(accountId, workspaceId, data) {

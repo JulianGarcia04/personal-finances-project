@@ -740,7 +740,7 @@
           <div class="grid grid-cols-3 gap-2 p-1 rounded-xl bg-slate-900/80 border border-border">
             <button
               type="button"
-              :disabled="isEditingOpeningAllocation"
+              :disabled="editLocksStructure"
               @click="editTx.type = 'expense'"
               :class="['min-h-11 px-1 py-2 rounded-lg text-xs font-semibold leading-tight transition-all cursor-pointer', editTx.type === 'expense' ? 'bg-accent-rose/10 text-accent-rose border border-accent-rose/20' : 'text-text-secondary hover:text-text-primary']"
             >
@@ -748,7 +748,7 @@
             </button>
             <button
               type="button"
-              :disabled="isEditingOpeningAllocation"
+              :disabled="editLocksStructure"
               @click="editTx.type = 'income'"
               :class="['min-h-11 px-1 py-2 rounded-lg text-xs font-semibold leading-tight transition-all cursor-pointer', editTx.type === 'income' ? 'bg-accent-emerald/10 text-accent-emerald border border-accent-emerald/20' : 'text-text-secondary hover:text-text-primary']"
             >
@@ -756,7 +756,7 @@
             </button>
             <button
               type="button"
-              :disabled="isEditingOpeningAllocation"
+              :disabled="editLocksStructure"
               @click="editTx.type = 'transfer'"
               :class="['min-h-11 px-1 py-2 rounded-lg text-xs font-semibold leading-tight transition-all cursor-pointer', editTx.type === 'transfer' ? 'bg-accent-amber/10 text-accent-amber border border-accent-amber/20' : 'text-text-secondary hover:text-text-primary']"
             >
@@ -764,7 +764,7 @@
             </button>
             <button
               type="button"
-              :disabled="isEditingOpeningAllocation"
+              :disabled="editLocksStructure"
               @click="editTx.type = 'loan'"
               title="Dinero que le presto a alguien (sale de la cuenta, no cuenta como gasto)"
               :class="['min-h-11 px-1 py-2 rounded-lg text-xs font-semibold leading-tight transition-all cursor-pointer', editTx.type === 'loan' ? 'bg-accent-violet/10 text-accent-violet border border-accent-violet/20' : 'text-text-secondary hover:text-text-primary']"
@@ -773,7 +773,7 @@
             </button>
             <button
               type="button"
-              :disabled="isEditingOpeningAllocation"
+              :disabled="editLocksStructure"
               @click="editTx.type = 'loan_payment'"
               title="Me pagaron un préstamo (entra a la cuenta, no cuenta como ingreso)"
               :class="['min-h-11 px-1 py-2 rounded-lg text-xs font-semibold leading-tight transition-all cursor-pointer', editTx.type === 'loan_payment' ? 'bg-accent-violet/10 text-accent-violet border border-accent-violet/20' : 'text-text-secondary hover:text-text-primary']"
@@ -783,6 +783,9 @@
           </div>
           <p v-if="isEditingOpeningAllocation" class="text-[11px] text-text-muted">
             La asignación inicial conserva sus cuentas y tipo; puedes editar su monto, fecha y descripción.
+          </p>
+          <p v-if="isEditingSharedExpense" class="text-[11px] text-text-muted" data-testid="edit-shared-expense-note">
+            Gasto compartido: el monto, la fecha y la descripción también se actualizan en el otro workspace. El tipo y las cuentas no se pueden cambiar.
           </p>
           <p v-if="editBudgetNoticeState && editBudgetNoticeState.kind !== 'linked'" role="status" class="flex items-start gap-1.5 rounded-lg border border-accent-amber/20 bg-accent-amber/10 px-3 py-2 text-[11px] text-accent-amber" data-testid="edit-budget-released">
             <LinkIcon class="w-3.5 h-3.5 mt-px shrink-0" />
@@ -803,7 +806,7 @@
               <select 
                 v-model="editTx.accountId"
                 required
-                :disabled="isEditingOpeningAllocation"
+                :disabled="editLocksStructure"
                 class="field"
               >
                 <option value="" disabled>Selecciona cuenta</option>
@@ -819,7 +822,7 @@
               <select 
                 v-model="editTx.toAccountId"
                 required
-                :disabled="isEditingOpeningAllocation"
+                :disabled="editLocksStructure"
                 class="field"
               >
                 <option value="" disabled>Selecciona cuenta</option>
@@ -1046,6 +1049,7 @@ import { getMonthlyInstallmentAmount } from '@/lib/installments'
 import { toDateValue, toLocalDateKey } from '@/lib/dates'
 import { getTransactionDisplay } from '@/lib/transactionDisplay'
 import { canTransferBetweenAccounts, getAccountDisplayLabel, isPocketAccount, isPocketRelatedAccount } from '@/lib/pockets'
+import { isSettlementCandidate } from '@/lib/mirror'
 import { 
   Plus as PlusIcon, 
   Trash2 as TrashIcon, 
@@ -1262,6 +1266,14 @@ const isEditingOpeningAllocation = computed(() => {
   const transaction = transactionsStore.transactions.find(item => item.id === editingTxId.value)
   return !!transaction && accountsStore.accounts.some(account => account.openingAllocationId === transaction.id)
 })
+
+// A shared expense keeps its type and accounts; settlements keep their own reversal flow.
+const isEditingSharedExpense = computed(() => {
+  const transaction = editingTransaction.value
+  return !!transaction?.mirrorOf && transaction.settlementType == null && !isSettlementCandidate(transaction)
+})
+
+const editLocksStructure = computed(() => isEditingOpeningAllocation.value || isEditingSharedExpense.value)
 
 // A linked account's movements only offer its budget (plus the current one, to move them there).
 const budgetOptionsForExpense = (currentBudgetId?: string | null, accountId = '') => {
