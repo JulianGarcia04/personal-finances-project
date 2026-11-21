@@ -614,8 +614,18 @@ service cloud.firestore {
       return [
         'expenseLimit', 'budgetIncome', 'budgetNeedsPercent', 'budgetWantsPercent',
         'budgetSavingsPercent', 'budgetAllocations', 'categoryBudgets', 'exchangeRates',
-        'categoryBudgetCurrency', 'budgetAlertsEnabled'
+        'exchangeRatesBaseCurrency', 'categoryBudgetCurrency', 'budgetAlertsEnabled'
       ];
+    }
+
+    function isValidExchangeRatesBaseCurrencyUpdate() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return !changed.hasAny(['exchangeRatesBaseCurrency']) || (
+        !('exchangeRatesBaseCurrency' in request.resource.data) ||
+        request.resource.data.exchangeRatesBaseCurrency == null ||
+        (request.resource.data.exchangeRatesBaseCurrency is string &&
+         request.resource.data.exchangeRatesBaseCurrency.matches('^[A-Z]{3}$'))
+      );
     }
 
     function isValidCategoryBudgetCurrencyUpdate() {
@@ -660,7 +670,8 @@ service cloud.firestore {
       allow read: if isAuthenticated() && request.auth.uid in resource.data.members;
       allow update: if isAuthenticated() && request.auth.uid in resource.data.members &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(workspaceSettingsKeys()) &&
-        isValidCategoryBudgetCurrencyUpdate();
+        isValidCategoryBudgetCurrencyUpdate() &&
+        isValidExchangeRatesBaseCurrencyUpdate();
       allow delete: if isAuthenticated() && resource.data.ownerId == request.auth.uid;
     }
 

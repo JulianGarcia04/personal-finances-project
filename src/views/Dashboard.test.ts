@@ -96,6 +96,7 @@ const estimateDependencies = (
   transactionsStore: { transactions },
   primaryCurrency: { value: currency },
   goalsStore: { exchangeRates },
+  activeExchangeRates: { value: exchangeRates },
   budgetBillingFor: billingDependency(accounts, basis)
 })
 
@@ -135,6 +136,7 @@ const legacyBudgetDependencies = (
     categoryBudgetCurrency,
     exchangeRates
   },
+  activeExchangeRates: { value: exchangeRates },
   transactionsStore: {
     transactions,
     spendingByCategoryThisMonth: (convert: (amount: number, currency: string) => number) => ({
@@ -397,6 +399,7 @@ test('S9: the per-budget panel lists active budgets with activity and their fund
   const breakdown = evaluateComputed<{ id: string; name: string; fundsAmount: number | null; spent: number | null; available: number | null }[]>('budgetBreakdown', {
     computed: computedDependency,
     goalsStore: { operatingBudgets: s9OperatingBudgets, exchangeRates: {} },
+    activeExchangeRates: { value: {} },
     transactionsStore: { transactions: s9Transactions() },
     primaryCurrency: { value: 'COP' },
     budgetBillingFor: billingDependency(),

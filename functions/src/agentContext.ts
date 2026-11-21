@@ -26,6 +26,7 @@ import {
   SummaryTransaction
 } from "./agentQueries";
 import { buildLegacyCategoryBudgetsPatch, parseLegacyCategoryBudgetCurrency } from "./legacyCategoryBudgets";
+import { effectiveWorkspaceExchangeRates } from "./budgetAlerts";
 import { cosineSimilarity, EMBEDDINGS_COLLECTION, isEmbeddable, queryEmbeddingInput, toVectorArray } from "./embeddings";
 
 // The chat agent's tools as plain definitions built from (db, context), with no
@@ -112,7 +113,11 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
   };
   // Fresh read: settings may change during the chat (saveCategoryBudgets, the app).
   const loadWorkspace = async () => (await db.collection('workspaces').doc(workspaceId).get()).data() ?? {};
-  const ratesOf = (ws: admin.firestore.DocumentData) => (ws.exchangeRates ?? {}) as Record<string, number>;
+  const ratesInfoOf = (ws: admin.firestore.DocumentData) => effectiveWorkspaceExchangeRates(ws, primaryCurrency);
+  const mismatchedFxNote = (mismatchedBase: string | null) =>
+    mismatchedBase
+      ? `Las tasas de cambio manuales del workspace están expresadas en ${mismatchedBase}, no en tu moneda principal (${primaryCurrency}); se ignoraron para evitar conversiones incorrectas. Actualízalas en Configuración → Región y moneda.`
+      : null;
 
   const movementTypes = ['income', 'expense', 'transfer', 'loan', 'loan_payment'] as const;
   const dateParam = (what: string) => z.string().optional()
@@ -147,7 +152,10 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
         if (data.mirror) account.bridge = true;
         return account;
       });
-      return computeNetWorth(accounts, primaryCurrency, ratesOf(ws));
+      const { rates, mismatchedBase } = ratesInfoOf(ws);
+      const result = computeNetWorth(accounts, primaryCurrency, rates);
+      const fxNote = mismatchedFxNote(mismatchedBase);
+      return fxNote ? { ...result, notes: [...result.notes, fxNote] } : result;
     }
   );
 
@@ -529,17 +537,20 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
         // byBudget is workspace-wide, so it is skipped for account/category filters.
         input.accountId || input.categoryId ? undefined : loadBudgetBreakdown()
       ]);
-      return summarize(rows, {
+      const { rates, mismatchedBase } = ratesInfoOf(ws);
+      const summary = summarize(rows, {
         ...input,
         period,
         now,
         timeZone,
         primaryCurrency,
-        exchangeRates: ratesOf(ws),
+        exchangeRates: rates,
         names,
         cardBilling,
         budgetBreakdown
       });
+      const fxNote = mismatchedFxNote(mismatchedBase);
+      return fxNote ? { ...summary, notes: [...summary.notes, fxNote] } : summary;
     }
   );
 
@@ -558,7 +569,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
         loadCardBilling()
       ]);
       const categoryBudgetCurrency = parseLegacyCategoryBudgetCurrency(ws);
-      const rates = ratesOf(ws);
+      const { rates, mismatchedBase } = ratesInfoOf(ws);
       const month = summarize(rows, {
         period, now, timeZone, primaryCurrency, exchangeRates: rates, names, cardBilling,
         groupBy: 'category', topN: 0
@@ -589,6 +600,8 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
       };
       const goalNames = new Map(goalsSnap.docs.map(docSnap => [docSnap.id, String(docSnap.data().name || 'Meta')]));
       const notes = [...month.notes];
+      const fxNote = mismatchedFxNote(mismatchedBase);
+      if (fxNote) notes.push(fxNote);
       if (budgets.categories.length > 0) {
         if (categoryBudgetCurrency === null) {
           notes.push('Moneda de los límites por categoría sin confirmar en Objetivos y Presupuestos: la comparación contra los límites está desactivada (campos en null).');

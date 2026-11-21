@@ -27,6 +27,7 @@ import { createBudgetPersistence, type BudgetLinkOptions } from '../lib/budgetPe
 import { createBudgetCategoryCapsPersistence } from '../lib/budgetCategoryCapsPersistence.ts'
 import { DEFAULT_MONTHLY_BUDGET_ID } from '../lib/budgets.ts'
 import { toDateValue } from '../lib/dates.ts'
+import { convertWithRates, normalizeFxBaseCurrency } from '../lib/fx.ts'
 
 interface GoalsState {
   goals: Goal[];
@@ -37,6 +38,7 @@ interface GoalsState {
   budgetAllocations: Record<string, number>;
   categoryBudgets: Record<string, number>;
   exchangeRates: Record<string, number>;
+  exchangeRatesBaseCurrency: string | null;
   operatingBudgets: BudgetWorkspaceBudgetSnapshot[];
   categoryBudgetCurrency: CategoryBudgetCurrencyState;
   budgetSettingsContextKey: string | null;
@@ -51,6 +53,7 @@ interface GoalsState {
 export interface GoalsBudgetSettingsDocument extends Partial<BudgetSettings> {
   categoryBudgetCurrency?: string
   budgetAlertsEnabled?: boolean
+  exchangeRatesBaseCurrency?: string | null
 }
 
 export type LegacyBudgetSettingsPatch = BudgetSettings
@@ -91,6 +94,7 @@ const resetWorkspaceBudgetState = (state: GoalsState): void => {
   state.budgetAllocations = {}
   state.categoryBudgets = {}
   state.exchangeRates = {}
+  state.exchangeRatesBaseCurrency = null
   state.operatingBudgets = []
   state.categoryBudgetCurrency = { ...defaultCategoryBudgetCurrency }
   state.budgetSettingsError = null
@@ -104,7 +108,10 @@ export const buildLegacyBudgetSettingsPatch = (settings: BudgetSettings): Legacy
   budgetSavingsPercent: Number(settings.budgetSavingsPercent),
   budgetAllocations: settings.budgetAllocations,
   categoryBudgets: settings.categoryBudgets,
-  exchangeRates: settings.exchangeRates
+  exchangeRates: settings.exchangeRates,
+  ...(settings.exchangeRatesBaseCurrency !== undefined
+    ? { exchangeRatesBaseCurrency: normalizeFxBaseCurrency(settings.exchangeRatesBaseCurrency) }
+    : {})
 })
 
 const budgetByName = (entries: readonly BudgetWorkspaceBudgetSnapshot[]): BudgetWorkspaceBudgetSnapshot[] =>
@@ -210,6 +217,7 @@ export const createGoalsBudgetActions = (
         state.budgetAllocations = ownNumericRecord(workspace?.budgetAllocations)
         state.categoryBudgets = ownNumericRecord(snapshot.legacy.categoryBudgets)
         state.exchangeRates = ownNumericRecord(snapshot.legacy.exchangeRates)
+        state.exchangeRatesBaseCurrency = normalizeFxBaseCurrency(workspace?.exchangeRatesBaseCurrency)
         state.categoryBudgetCurrency = snapshot.legacy.categoryBudgetCurrency
         state.budgetAlertsEnabled = workspace?.budgetAlertsEnabled !== false
         state.operatingBudgets = budgetByName(snapshot.budgets.map(entry => ({
@@ -241,6 +249,9 @@ export const createGoalsBudgetActions = (
       state.budgetAllocations = ownNumericRecord(patch.budgetAllocations)
       state.categoryBudgets = ownNumericRecord(patch.categoryBudgets)
       state.exchangeRates = ownNumericRecord(patch.exchangeRates)
+      if (patch.exchangeRatesBaseCurrency !== undefined) {
+        state.exchangeRatesBaseCurrency = normalizeFxBaseCurrency(patch.exchangeRatesBaseCurrency)
+      }
     },
 
     async createOperatingBudget(draft: OperatingBudgetDraft, options: BudgetLinkOptions = {}): Promise<OperatingBudget> {
@@ -371,6 +382,7 @@ export const useGoalsStore = defineStore('goals', {
     budgetAllocations: {},
     categoryBudgets: {},
     exchangeRates: {},
+    exchangeRatesBaseCurrency: null,
     operatingBudgets: [],
     categoryBudgetCurrency: { ...defaultCategoryBudgetCurrency },
     budgetSettingsContextKey: null,
@@ -382,13 +394,9 @@ export const useGoalsStore = defineStore('goals', {
   }),
   getters: {
     getGoalById: (state) => (id: string): Goal | undefined => state.goals.find(g => g.id === id),
-    // Convierte un monto a la moneda principal usando las tasas manuales.
-    // ponytail: si no hay tasa configurada, se suma tal cual (1:1) — el usuario configura las tasas en Objetivos & Presupuesto.
-    convertToPrimary: (state) => (amount: number, currency: string, primaryCurrency: string): number => {
-      if (!currency || currency === primaryCurrency) return amount
-      const rate = state.exchangeRates[currency]
-      return rate ? amount * rate : amount
-    }
+    // Convierte un monto a la moneda principal usando las tasas manuales solo cuando coinciden con la moneda base.
+    convertToPrimary: (state) => (amount: number, currency: string, primaryCurrency: string): number =>
+      convertWithRates(amount, currency, primaryCurrency, state.exchangeRates, state.exchangeRatesBaseCurrency)
   },
   actions: {
     // 1. Cargar Objetivos de Ahorro

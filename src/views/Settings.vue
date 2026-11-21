@@ -107,14 +107,16 @@
             <div class="p-4 sm:p-6 space-y-3">
               <div>
                 <h4 class="font-display font-medium text-sm text-text-primary">Límite de gastos mensual</h4>
-                <p class="text-text-muted text-xs mt-1">Tope de egresos para este workspace, en tu moneda principal ({{ currency }}).</p>
+                <p class="text-text-muted text-xs mt-1">Tope de egresos para este workspace, en tu moneda principal ({{ currency }}). Déjalo vacío para quitar el límite.</p>
               </div>
               <form @submit.prevent="handleUpdateLimit" class="flex flex-col sm:flex-row gap-3">
                 <input
                   type="number"
                   inputmode="decimal"
+                  min="0"
+                  step="any"
                   v-model="expenseLimitInput"
-                  placeholder="Ej. 1500000"
+                  placeholder="Sin límite (ej. 1500000)"
                   aria-label="Límite de gastos"
                   class="field flex-1"
                 />
@@ -126,6 +128,7 @@
                   <span>Guardar</span>
                 </button>
               </form>
+              <p v-if="limitMsg" :class="limitError ? 'text-accent-rose' : 'text-accent-emerald'" class="text-xs font-medium" role="status" aria-live="polite">{{ limitMsg }}</p>
             </div>
 
             <!-- Budget alert emails (workspace-wide). Whole row toggles the switch. -->
@@ -233,13 +236,31 @@
             <div>
               <h4 class="font-display font-medium text-sm text-text-primary">Tasas de cambio</h4>
               <p class="text-text-muted text-xs mt-1">
-                Cuántos <span class="font-semibold text-text-secondary">{{ currency }}</span> vale 1 unidad de cada otra moneda de tus cuentas.
+                Cuántos <span class="font-semibold text-text-secondary">{{ currency }}</span> vale 1 unidad de cada otra moneda usada en tus cuentas, movimientos o presupuestos.
                 Se usan para consolidar tu patrimonio y KPIs.
               </p>
             </div>
 
+            <div
+              v-if="fxBaseMismatch"
+              role="alert"
+              class="rounded-xl border border-accent-amber/30 bg-accent-amber/10 p-3 space-y-2 text-xs text-accent-amber"
+            >
+              <p>
+                Las tasas guardadas están expresadas en <strong>{{ fxBaseMismatch }}</strong>, pero tu moneda principal actual es <strong>{{ currency }}</strong>.
+                Se ignorarán hasta que ingreses las tasas hacia {{ currency }} o limpies las anteriores.
+              </p>
+              <button
+                type="button"
+                @click="clearStoredExchangeRates"
+                class="min-h-9 px-3 py-1.5 rounded-lg border border-accent-amber/40 text-accent-amber hover:bg-accent-amber/15 font-semibold cursor-pointer"
+              >
+                Limpiar tasas anteriores
+              </button>
+            </div>
+
             <div v-if="foreignCurrencies.length === 0" class="text-xs text-text-muted rounded-xl border border-dashed border-white/10 px-4 py-3">
-              Todas tus cuentas usan {{ currency }}. No se necesitan tasas de cambio.
+              Todas tus cuentas, movimientos y presupuestos usan {{ currency }}. No se necesitan tasas de cambio.
             </div>
 
             <div v-else class="space-y-3">
@@ -259,13 +280,21 @@
                     :placeholder="`Tasa a ${currency}`"
                     :aria-label="`Tasa de 1 ${cur} en ${currency}`"
                     class="field flex-1 min-w-0"
-                    @change="(e) => saveExchangeRate(cur, (e.target as HTMLInputElement).value)"
+                    @change="(e) => saveExchangeRate(cur, e.target as HTMLInputElement)"
                   />
                   <span class="text-xs font-semibold text-text-secondary shrink-0 pr-1">{{ currency }}</span>
                 </div>
               </div>
-              <p v-if="ratesMsg" class="text-xs text-accent-emerald font-medium">{{ ratesMsg }}</p>
             </div>
+            <p
+              v-if="ratesMsg"
+              :class="ratesError ? 'text-accent-rose' : 'text-accent-emerald'"
+              class="text-xs font-medium"
+              role="status"
+              aria-live="polite"
+            >
+              {{ ratesMsg }}
+            </p>
           </div>
         </template>
 
@@ -566,7 +595,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed, type Component } from 'vue'
+import { ref, reactive, onMounted, computed, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -578,6 +607,7 @@ import { ApiKeySchema, CategorySchema } from '@/schemas'
 import { getPushStatus, enablePush, disablePush, onForegroundMessage, type PushStatus } from '@/lib/push'
 import { CATEGORY_COLORS, CATEGORY_ICONS, getCategoryIconComponent } from '@/lib/categoryIcons'
 import { SUPPORTED_COUNTRIES, SUPPORTED_CURRENCIES } from '@/lib/currencies'
+import { effectiveExchangeRates } from '@/lib/fx'
 import { db } from '@/lib/firebase'
 import { exportFileName } from '@/lib/dataExport'
 import { fetchWorkspaceExport } from '@/lib/dataExportFetch'
@@ -756,21 +786,64 @@ const deleteCategory = async (id: string) => {
 // Exchange rates
 const rateInputs = reactive<Record<string, number | null>>({})
 const ratesMsg = ref('')
+const ratesError = ref(false)
+
+const fxEffective = computed(() =>
+  effectiveExchangeRates(goalsStore.exchangeRates, goalsStore.exchangeRatesBaseCurrency, currency.value)
+)
+const fxBaseMismatch = computed(() => fxEffective.value.mismatchedBase)
+
+const syncRateInputs = () => {
+  for (const key of Object.keys(rateInputs)) delete rateInputs[key]
+  if (!fxBaseMismatch.value) {
+    Object.assign(rateInputs, goalsStore.exchangeRates)
+  }
+}
 
 const foreignCurrencies = computed(() => {
   const set = new Set<string>()
-  accountsStore.accounts.forEach(a => {
-    if (a.currency && a.currency !== currency.value) set.add(a.currency)
+  const add = (cur?: string | null) => {
+    if (cur && cur !== currency.value) set.add(cur)
+  }
+  accountsStore.accounts.forEach(a => add(a.currency))
+  transactionsStore.transactions.forEach(t => add(t.currency))
+  goalsStore.operatingBudgets.forEach(entry => {
+    if (
+      !entry.budget.archived &&
+      (entry.budget.totalLimit !== undefined || Object.keys(entry.categoryCaps).length > 0)
+    ) {
+      add(entry.budget.capCurrency)
+    }
   })
+  if (
+    goalsStore.categoryBudgetCurrency.status === 'confirmed' &&
+    Object.keys(goalsStore.categoryBudgets).length > 0
+  ) {
+    add(goalsStore.categoryBudgetCurrency.code)
+  }
+  if (!fxBaseMismatch.value) {
+    Object.keys(goalsStore.exchangeRates).forEach(cur => add(cur))
+  }
   return Array.from(set).sort()
 })
 
-const saveExchangeRate = async (cur: string, rawValue: string) => {
-  const value = rawValue === '' ? null : Math.max(0, Number(rawValue))
-  rateInputs[cur] = value
+const saveExchangeRate = async (cur: string, inputEl: HTMLInputElement) => {
+  ratesMsg.value = ''
+  ratesError.value = false
+  const rawValue = inputEl.value.trim()
+  const parsed = rawValue === '' ? null : Number(rawValue)
+  if (parsed !== null && (!Number.isFinite(parsed) || parsed < 0)) {
+    syncRateInputs()
+    inputEl.value = rateInputs[cur] != null ? String(rateInputs[cur]) : ''
+    ratesError.value = true
+    ratesMsg.value = 'Ingresa una tasa válida mayor o igual a 0.'
+    return
+  }
+  const value = parsed === null || parsed === 0 ? null : parsed
 
-  const newRates = { ...goalsStore.exchangeRates }
-  if (value === null || value === 0) delete newRates[cur]
+  // When switching base currency, start fresh for the new target currency instead of keeping old-base rates.
+  const newRates: Record<string, number> = fxBaseMismatch.value ? {} : { ...goalsStore.exchangeRates }
+  if (value === null) delete newRates[cur]
   else newRates[cur] = value
 
   try {
@@ -781,12 +854,43 @@ const saveExchangeRate = async (cur: string, rawValue: string) => {
       budgetSavingsPercent: goalsStore.budgetSavingsPercent,
       budgetAllocations: goalsStore.budgetAllocations,
       categoryBudgets: goalsStore.categoryBudgets,
-      exchangeRates: newRates
+      exchangeRates: newRates,
+      exchangeRatesBaseCurrency: Object.keys(newRates).length > 0 ? currency.value : null
     })
+    syncRateInputs()
+    inputEl.value = rateInputs[cur] != null ? String(rateInputs[cur]) : ''
     ratesMsg.value = 'Tasas de cambio actualizadas.'
-    setTimeout(() => { ratesMsg.value = '' }, 2500)
+    setTimeout(() => { if (!ratesError.value) ratesMsg.value = '' }, 2500)
   } catch (err) {
     console.error('Error al guardar tasa de cambio:', err)
+    syncRateInputs()
+    inputEl.value = rateInputs[cur] != null ? String(rateInputs[cur]) : ''
+    ratesError.value = true
+    ratesMsg.value = 'No se pudo guardar la tasa de cambio. Inténtalo de nuevo.'
+  }
+}
+
+const clearStoredExchangeRates = async () => {
+  ratesMsg.value = ''
+  ratesError.value = false
+  try {
+    await goalsStore.saveBudgetSettings({
+      budgetIncome: goalsStore.budgetIncome,
+      budgetNeedsPercent: goalsStore.budgetNeedsPercent,
+      budgetWantsPercent: goalsStore.budgetWantsPercent,
+      budgetSavingsPercent: goalsStore.budgetSavingsPercent,
+      budgetAllocations: goalsStore.budgetAllocations,
+      categoryBudgets: goalsStore.categoryBudgets,
+      exchangeRates: {},
+      exchangeRatesBaseCurrency: null
+    })
+    syncRateInputs()
+    ratesMsg.value = 'Tasas anteriores eliminadas.'
+    setTimeout(() => { if (!ratesError.value) ratesMsg.value = '' }, 2500)
+  } catch (err) {
+    console.error('Error al limpiar tasas de cambio:', err)
+    ratesError.value = true
+    ratesMsg.value = 'No se pudieron eliminar las tasas anteriores. Inténtalo de nuevo.'
   }
 }
 
@@ -796,14 +900,19 @@ onMounted(async () => {
   useCustomKey.value = settingsStore.useCustomKey
   country.value = settingsStore.country
   currency.value = settingsStore.currency
-  await transactionsStore.fetchCategories()
-  await workspacesStore.fetchMyWorkspaces()
-  await accountsStore.fetchAccounts()
-  await goalsStore.loadBudgetSettings()
-  Object.assign(rateInputs, goalsStore.exchangeRates)
+  await Promise.all([
+    transactionsStore.fetchCategories(),
+    transactionsStore.fetchTransactions(),
+    workspacesStore.fetchMyWorkspaces(),
+    accountsStore.fetchAccounts(),
+    goalsStore.loadBudgetSettings()
+  ])
+  syncRateInputs()
   budgetAlertsEnabled.value = goalsStore.budgetAlertsEnabled
   await refreshPushStatus()
 })
+
+watch([currency, () => goalsStore.exchangeRates, () => goalsStore.exchangeRatesBaseCurrency], syncRateInputs, { deep: true })
 
 // Workspace Management
 const newWorkspaceName = ref('')
@@ -918,12 +1027,39 @@ const handlePushToggle = async (event: Event) => {
   }
 }
 
-// ponytail: simple handler
-const expenseLimitInput = ref<number | ''>('')
+// Límite mensual de gastos del workspace (hidratado desde Firestore y limpiable)
+const expenseLimitInput = ref<number | string>('')
+const limitMsg = ref('')
+const limitError = ref(false)
+
+const activeWorkspace = computed(() =>
+  workspacesStore.workspaces.find(w => w.id === authStore.activeWorkspaceId) ?? null
+)
+watch([() => authStore.activeWorkspaceId, () => activeWorkspace.value?.expenseLimit], () => {
+  const limit = activeWorkspace.value?.expenseLimit
+  expenseLimitInput.value = limit && limit > 0 ? limit : ''
+}, { immediate: true })
+
 const handleUpdateLimit = async () => {
-  if (authStore.activeWorkspaceId && expenseLimitInput.value !== '') {
-    await workspacesStore.updateWorkspaceLimit(authStore.activeWorkspaceId, Number(expenseLimitInput.value))
-    alert('Límite actualizado')
+  if (!authStore.activeWorkspaceId) return
+  limitMsg.value = ''
+  limitError.value = false
+  const raw = String(expenseLimitInput.value ?? '').trim()
+  const numeric = raw === '' ? 0 : Number(raw)
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    limitError.value = true
+    limitMsg.value = 'Ingresa un monto válido mayor o igual a 0.'
+    return
+  }
+  try {
+    await workspacesStore.updateWorkspaceLimit(authStore.activeWorkspaceId, numeric)
+    expenseLimitInput.value = numeric > 0 ? numeric : ''
+    limitMsg.value = numeric > 0 ? 'Límite mensual actualizado.' : 'Límite mensual eliminado.'
+    setTimeout(() => { limitMsg.value = '' }, 2500)
+  } catch (err: any) {
+    console.error('Error al actualizar límite mensual:', err)
+    limitError.value = true
+    limitMsg.value = err?.message || 'No se pudo actualizar el límite.'
   }
 }
 

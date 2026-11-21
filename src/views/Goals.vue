@@ -917,6 +917,7 @@ import { createCardBillingLookup, expenseAmountForDate } from '@/lib/installment
 import { BUDGET_BASIS_LABELS, budgetBasis } from '@/lib/budgetBasis'
 import BudgetBasisSwitch from '@/components/BudgetBasisSwitch.vue'
 import { parseDateOnly, toDateValue, toLocalDateKey } from '@/lib/dates'
+import { effectiveExchangeRates } from '@/lib/fx'
 import { getAccountDisplayLabel, isPocketRelatedAccount } from '@/lib/pockets'
 import {
   Target as TargetIcon,
@@ -1021,6 +1022,9 @@ let budgetChart: Chart | null = null
 
 // Computed
 const userCurrency = computed(() => settingsStore.currency || 'COP')
+const activeExchangeRates = computed(() =>
+  effectiveExchangeRates(goalsStore.exchangeRates, goalsStore.exchangeRatesBaseCurrency, userCurrency.value).rates
+)
 
 // Categorías de gasto para presupuestos
 const expenseCategories = computed(() =>
@@ -1047,7 +1051,7 @@ const budgetCards = computed(() => {
       transactions: transactionsStore.transactions,
       period: { year: now.getFullYear(), month: now.getMonth() },
       reportingCurrency: userCurrency.value,
-      exchangeRates: goalsStore.exchangeRates,
+      exchangeRates: activeExchangeRates.value,
       cardBilling: cardBillingFor.value
     })
     const { spent, fundsAmount, limitAmount } = figures
@@ -1093,7 +1097,7 @@ const baselineBudgetReport = computed(() => {
     transactions: transactionsStore.transactions,
     period: { year: now.getFullYear(), month: now.getMonth() },
     reportingCurrency: userCurrency.value,
-    exchangeRates: goalsStore.exchangeRates,
+    exchangeRates: activeExchangeRates.value,
     cardBilling: cardBillingFor.value
   })
 })

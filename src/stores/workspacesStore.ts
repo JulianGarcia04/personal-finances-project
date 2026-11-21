@@ -148,15 +148,15 @@ export const useWorkspacesStore = defineStore('workspaces', {
       }
     },
     
-    // ponytail: Minimum code to set limit
+    // Actualiza o limpia (0) el límite mensual de gastos del workspace.
     async updateWorkspaceLimit(workspaceId: string, limit: number) {
-      try {
-        await updateDoc(doc(db, 'workspaces', workspaceId), { expenseLimit: limit })
-        const ws = this.workspaces.find(w => w.id === workspaceId)
-        if (ws) ws.expenseLimit = limit
-      } catch (err) {
-        console.error("Error limit", err)
+      const normalized = Number(limit)
+      if (!Number.isFinite(normalized) || normalized < 0) {
+        throw new Error('El límite de gastos debe ser un número mayor o igual a 0.')
       }
+      await updateDoc(doc(db, 'workspaces', workspaceId), { expenseLimit: normalized })
+      const ws = this.workspaces.find(w => w.id === workspaceId)
+      if (ws) ws.expenseLimit = normalized
     }
   }
 })

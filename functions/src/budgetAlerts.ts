@@ -197,6 +197,26 @@ function manualRate(currency: unknown, reportingCurrency: string, rates: Record<
   return Number.isFinite(rate) && rate > 0 ? rate : null;
 }
 
+/**
+ * Returns workspace manual FX rates only when their explicit base currency matches `reportingCurrency`
+ * (or when legacy rates have no stored base). Prevents applying rates authored for another currency.
+ */
+export function effectiveWorkspaceExchangeRates(
+  workspace: Record<string, any> | null | undefined,
+  reportingCurrency: string
+): { rates: Record<string, number>; mismatchedBase: string | null } {
+  const raw = workspace?.exchangeRates && typeof workspace.exchangeRates === "object" && !Array.isArray(workspace.exchangeRates)
+    ? (workspace.exchangeRates as Record<string, number>)
+    : {};
+  const base = typeof workspace?.exchangeRatesBaseCurrency === "string" && /^[A-Z]{3}$/.test(workspace.exchangeRatesBaseCurrency)
+    ? workspace.exchangeRatesBaseCurrency
+    : null;
+  if (base && base !== reportingCurrency && Object.keys(raw).length > 0) {
+    return { rates: {}, mismatchedBase: base };
+  }
+  return { rates: raw, mismatchedBase: null };
+}
+
 /** Nominal cap in its stored denomination, converted to the reporting currency; null when not comparable. */
 export function capInReportingCurrency(
   amount: number,

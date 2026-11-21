@@ -67,7 +67,8 @@ import {
   FUNDS_ALERT_SUBJECT,
   scopeFundsTotal,
   skipsUnlinkedTransferWrite,
-  incomeChangeAlertScope
+  incomeChangeAlertScope,
+  effectiveWorkspaceExchangeRates
 } from "./budgetAlerts";
 import { cardBillingByAccount } from "./agentQueries";
 import { DEFAULT_MONTHLY_BUDGET_ID, parseLegacyCategoryBudgetCurrency } from "./legacyCategoryBudgets";
@@ -401,9 +402,10 @@ export const notifyBudgetThreshold = onDocumentWritten(
     const ownerData = ownerSnap?.exists ? ownerSnap.data() : null;
     const timeZone = timeZoneForCountry(ownerData?.country);
     const primaryCurrency = resolvePrimaryCurrency(ownerData);
-    const exchangeRates: Record<string, number> = workspace.exchangeRates && typeof workspace.exchangeRates === "object"
-      ? workspace.exchangeRates
-      : {};
+    const { rates: exchangeRates, mismatchedBase } = effectiveWorkspaceExchangeRates(workspace, primaryCurrency);
+    if (mismatchedBase) {
+      console.warn(`Budget alert FX rates for workspace ${workspaceId} are in ${mismatchedBase}, not ${primaryCurrency}; ignoring mismatched rates.`);
+    }
     const month = zonedYearMonth(new Date(event.time), timeZone);
     const accountsSnap = await db.collection("accounts").where("workspaceId", "==", workspaceId).get();
     const creditAccountIds = new Set(

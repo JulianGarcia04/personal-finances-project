@@ -50,6 +50,31 @@
 
     <!-- Dashboard Content when accounts exist -->
     <div v-else class="space-y-8 animate-fade-in">
+      <!-- FX rate mismatch / missing rate warning banner (S10) -->
+      <div
+        v-if="hasFxWarning"
+        role="alert"
+        data-testid="dashboard-fx-warning"
+        class="rounded-2xl border border-accent-amber/30 bg-accent-amber/10 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-accent-amber"
+      >
+        <p class="leading-relaxed">
+          <template v-if="fxWarning.mismatchedBase">
+            Tus tasas de cambio guardadas están expresadas en <strong>{{ fxWarning.mismatchedBase }}</strong>, pero tu moneda principal es <strong>{{ primaryCurrency }}</strong>. Se ignorarán hasta actualizarlas para evitar conversiones incorrectas.
+          </template>
+          <template v-else>
+            Faltan tasas de cambio válidas hacia <strong>{{ primaryCurrency }}</strong> para
+            <strong>{{ [...fxWarning.missingCurrencies, ...fxWarning.invalidCurrencies].join(', ') }}</strong>;
+            algunos indicadores consolidados podrían sumarse 1:1 hasta configurarlas.
+          </template>
+        </p>
+        <router-link
+          to="/settings?tab=regional"
+          class="shrink-0 inline-flex items-center justify-center min-h-9 px-3 py-1.5 rounded-lg border border-accent-amber/40 text-accent-amber hover:bg-accent-amber/15 font-semibold whitespace-nowrap"
+        >
+          Configurar tasas
+        </router-link>
+      </div>
+
       <!-- 0. Forward-looking KPIs (compact 2-column grid on mobile; spendable is the hero) -->
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
         <!-- Disponible para gastar (hero) -->
@@ -585,6 +610,7 @@ import {
 import { getNextOccurrence, daysUntil } from '@/lib/creditCycle'
 import { buildCardStatementLedger } from '@/lib/cardStatements'
 import { DEFAULT_MONTHLY_BUDGET_ID, budgetScopedMonthFilter, linkedBudgetForAccount, resolveBudgetId } from '@/lib/budgets'
+import { detectFxWarnings, effectiveExchangeRates } from '@/lib/fx'
 import { reportAllBudgetsEstimatedMonthly, reportBudgetScope } from '@/lib/budgetReporting'
 import { 
   Plus as PlusIcon, 
@@ -654,6 +680,44 @@ watch(
 
 // Moneda principal: la elegida por el usuario en Settings
 const primaryCurrency = computed(() => settingsStore.currency || 'COP')
+const activeExchangeRates = computed(() =>
+  effectiveExchangeRates(goalsStore.exchangeRates, goalsStore.exchangeRatesBaseCurrency, primaryCurrency.value).rates
+)
+const fxWarning = computed(() => {
+  const currencies: Array<string | null | undefined> = []
+  for (const acc of accountsStore.accounts) currencies.push(acc.currency)
+  for (const tx of transactionsStore.transactions) currencies.push(tx.currency)
+  for (const entry of goalsStore.operatingBudgets) {
+    if (
+      !entry.budget.archived &&
+      (entry.budget.totalLimit !== undefined || Object.keys(entry.categoryCaps).length > 0)
+    ) {
+      currencies.push(entry.budget.capCurrency)
+    }
+  }
+  if (
+    goalsStore.categoryBudgetCurrency.status === 'confirmed' &&
+    Object.keys(goalsStore.categoryBudgets).length > 0
+  ) {
+    currencies.push(goalsStore.categoryBudgetCurrency.code)
+  }
+  return detectFxWarnings({
+    currencies,
+    reportingCurrency: primaryCurrency.value,
+    exchangeRates: goalsStore.exchangeRates,
+    exchangeRatesBaseCurrency: goalsStore.exchangeRatesBaseCurrency
+  })
+})
+const hasFxWarning = computed(() => {
+  if (settingsStore.loading || goalsStore.budgetSettingsLoading || !goalsStore.budgetSettingsContextKey) {
+    return false
+  }
+  return Boolean(
+    fxWarning.value.mismatchedBase ||
+    fxWarning.value.missingCurrencies.length ||
+    fxWarning.value.invalidCurrencies.length
+  )
+})
 
 // Billing days per credit card: card expenses count when their statement is paid. Payments
 // already made to the card count in the month they were made and only the unpaid rest of a
@@ -673,7 +737,7 @@ const allBudgetsEstimatedMonthly = computed(() => {
     transactions: transactionsStore.transactions,
     period: { year: now.getFullYear(), month: now.getMonth() },
     reportingCurrency: primaryCurrency.value,
-    exchangeRates: goalsStore.exchangeRates,
+    exchangeRates: activeExchangeRates.value,
     cardBilling: budgetBillingFor.value
   })
 })
@@ -788,7 +852,7 @@ const budgetBreakdown = computed(() => {
         transactions: transactionsStore.transactions,
         period: { year: now.getFullYear(), month: now.getMonth() },
         reportingCurrency: primaryCurrency.value,
-        exchangeRates: goalsStore.exchangeRates,
+        exchangeRates: activeExchangeRates.value,
         cardBilling: budgetBillingFor.value
       })
     }))
@@ -986,7 +1050,7 @@ const budgetSummary = computed(() => {
     transactions: transactionsStore.transactions,
     period: { year: now.getFullYear(), month: now.getMonth() },
     reportingCurrency: primaryCurrency.value,
-    exchangeRates: goalsStore.exchangeRates,
+    exchangeRates: activeExchangeRates.value,
     cardBilling: budgetBillingFor.value
   })
 

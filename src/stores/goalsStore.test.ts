@@ -535,3 +535,36 @@ test('moving a linked account releases it from its previous budget in the same s
   assert.equal(linksOf('event-a'), undefined)
   assert.deepEqual(linksOf(created.id), ['cash-1', 'cash-2'])
 })
+
+test('S10: saveLegacySettings preserves exchangeRatesBaseCurrency when omitted, sets it when provided, and clears it to null', async () => {
+  const harness = makeHarness({
+    workspace: makeWorkspace({ exchangeRates: { USD: 4000 }, exchangeRatesBaseCurrency: 'COP' })
+  })
+  await harness.actions.loadBudgetSettings()
+  assert.equal(harness.state.exchangeRatesBaseCurrency, 'COP')
+
+  // Omitting exchangeRatesBaseCurrency leaves both Firestore and Pinia state intact.
+  await harness.actions.saveLegacySettings({
+    budgetIncome: 9000, budgetNeedsPercent: 50, budgetWantsPercent: 30, budgetSavingsPercent: 20,
+    budgetAllocations: {}, categoryBudgets: { food: 500 }, exchangeRates: { USD: 4000 }
+  })
+  assert.equal(harness.state.exchangeRatesBaseCurrency, 'COP')
+  assert.equal('exchangeRatesBaseCurrency' in harness.writes.at(-1)!.patch, false)
+
+  // Providing a new base updates it; passing null clears it.
+  await harness.actions.saveLegacySettings({
+    budgetIncome: 9000, budgetNeedsPercent: 50, budgetWantsPercent: 30, budgetSavingsPercent: 20,
+    budgetAllocations: {}, categoryBudgets: { food: 500 }, exchangeRates: { EUR: 1.1 },
+    exchangeRatesBaseCurrency: 'USD'
+  })
+  assert.equal(harness.state.exchangeRatesBaseCurrency, 'USD')
+  assert.equal(harness.writes.at(-1)!.patch.exchangeRatesBaseCurrency, 'USD')
+
+  await harness.actions.saveLegacySettings({
+    budgetIncome: 9000, budgetNeedsPercent: 50, budgetWantsPercent: 30, budgetSavingsPercent: 20,
+    budgetAllocations: {}, categoryBudgets: { food: 500 }, exchangeRates: {},
+    exchangeRatesBaseCurrency: null
+  })
+  assert.equal(harness.state.exchangeRatesBaseCurrency, null)
+  assert.equal(harness.writes.at(-1)!.patch.exchangeRatesBaseCurrency, null)
+})

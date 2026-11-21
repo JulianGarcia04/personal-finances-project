@@ -23,7 +23,8 @@ import {
   monthKey,
   resolveAlertBudgetId,
   spendFieldsChanged,
-  ALERT_CARD_BASIS
+  ALERT_CARD_BASIS,
+  effectiveWorkspaceExchangeRates
 } from "./budgetAlerts";
 
 const BOGOTA = "America/Bogota";
@@ -494,4 +495,19 @@ test("budget alerts count card purchases in their statement cycle month (consump
   const options = { timeZone: BOGOTA, billingFor: () => card };
   assert.equal(alertCategoryFor(purchase, DEFAULT_SCOPE, { year: 2026, month: 9 }, options), "food");
   assert.equal(alertCategoryFor(purchase, DEFAULT_SCOPE, { year: 2026, month: 10 }, options), null);
+});
+
+test("S10: effectiveWorkspaceExchangeRates disables stored rates when exchangeRatesBaseCurrency differs from reporting currency", () => {
+  assert.deepEqual(
+    effectiveWorkspaceExchangeRates({ exchangeRates: { USD: 4000 }, exchangeRatesBaseCurrency: "COP" }, "COP"),
+    { rates: { USD: 4000 }, mismatchedBase: null }
+  );
+  assert.deepEqual(
+    effectiveWorkspaceExchangeRates({ exchangeRates: { USD: 4000 }, exchangeRatesBaseCurrency: "COP" }, "USD"),
+    { rates: {}, mismatchedBase: "COP" }
+  );
+  assert.deepEqual(
+    effectiveWorkspaceExchangeRates({ exchangeRates: { USD: 4000 } }, "COP"),
+    { rates: { USD: 4000 }, mismatchedBase: null }
+  );
 });
