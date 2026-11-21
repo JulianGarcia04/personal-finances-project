@@ -79,8 +79,16 @@ export const StatementImportRowSchema = z.object({
   amount: z.number().finite().refine(value => value !== 0, {
     message: 'El monto no puede ser cero'
   }),
-  categorySuggestion: z.string()
-}).strict()
+  categorySuggestion: z.string(),
+  type: z.enum(['expense', 'income', 'transfer']).optional(),
+  counterpartyAccountId: z.string().nullable().optional()
+}).strict().refine(
+  row => row.type !== 'transfer' || (typeof row.counterpartyAccountId === 'string' && row.counterpartyAccountId.trim().length > 0),
+  {
+    message: 'Las transferencias importadas requieren una cuenta contraparte válida.',
+    path: ['counterpartyAccountId']
+  }
+)
 
 export const StatementImportBatchSchema = z.array(StatementImportRowSchema).min(1)
 

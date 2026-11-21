@@ -5,6 +5,7 @@ import ts from 'typescript'
 import { DEFAULT_MONTHLY_BUDGET_ID, resolveBudgetId } from '../../src/lib/budgets.ts'
 import { parseDateOnly } from '../../src/lib/dates.ts'
 import { roundMoney } from '../../src/lib/money.ts'
+import { planTransferDirection, resolveStatementImportId } from '../../src/lib/statementImport.ts'
 import { StatementImportBatchSchema } from '../../src/schemas.ts'
 
 const storeSource = readFileSync(new URL('../../src/stores/transactionsStore.ts', import.meta.url), 'utf8')
@@ -95,7 +96,9 @@ test('the actual batch import producer persists unassigned expenses to the defau
     },
     Timestamp: { fromDate: (date: Date) => date },
     parseDateOnly,
-    roundMoney
+    roundMoney,
+    planTransferDirection,
+    resolveStatementImportId
   })
   const store = {
     categories: [{ id: 'food', name: 'Food', workspaceId: null }],
@@ -120,4 +123,101 @@ test('the actual batch import producer persists unassigned expenses to the defau
     'a date-only statement row must stay on its local calendar day')
   assert.equal(Object.hasOwn(payload, 'budgetId'), false)
   assert.equal(resolveBudgetId(payload.budgetId as string | null | undefined), DEFAULT_MONTHLY_BUDGET_ID)
+})
+
+test('S11: keyed statement transfers use the receipt callable and replay without stale Pinia state', async () => {
+  const accountsList = [
+    { id: 'visa', workspaceId: 'workspace-1', currency: 'COP', balance: -1_000_000, type: 'credit' },
+    { id: 'bank', workspaceId: 'workspace-1', currency: 'COP', balance: 3_000_000, type: 'checking' }
+  ]
+  const accountsStore = {
+    accounts: accountsList,
+    getAccountById: (accountId: string) => accountsList.find(account => account.id === accountId),
+    fetchAccounts: async () => undefined
+  }
+  const requestPayloads: Record<string, unknown>[] = []
+  const createdAt = '2026-10-12T12:00:00.000Z'
+  const importedTransaction = {
+    id: 'receipt-transfer',
+    date: '2026-10-12T12:00:00.000Z',
+    amount: 1_000_000,
+    type: 'transfer',
+    accountId: 'bank',
+    toAccountId: 'visa',
+    categoryId: '',
+    description: 'ABONO PSE',
+    currency: 'COP',
+    createdAt,
+    userId: 'user-1'
+  }
+  const baseResult = {
+    accountId: 'visa',
+    balance: 0,
+    balances: { visa: 0, bank: 2_000_000 },
+    createdAt,
+    transactionIds: ['receipt-transfer'],
+    transactions: [importedTransaction]
+  }
+  let calls = 0
+  const producer = instantiateProducer({
+    auth: { currentUser: { uid: 'user-1' } },
+    useAuthStore: () => ({ activeWorkspaceId: 'workspace-1' }),
+    useAccountsStore: () => accountsStore,
+    StatementImportBatchSchema,
+    movementAccountIsPocketRelated: () => false,
+    importContextIsCurrent: () => true,
+    ImportMustUsePocketCallable: class ImportMustUsePocketCallable extends Error {},
+    functions: { kind: 'functions' },
+    httpsCallable: (_functions: unknown, name: string) => {
+      assert.equal(name, 'importPocketStatement')
+      return async (data: Record<string, unknown>) => {
+        requestPayloads.push(data)
+        calls += 1
+        return { data: calls === 1 ? baseResult : { ...baseResult, replayed: true } }
+      }
+    },
+    db: testDatabase,
+    runTransaction: async () => { throw new Error('keyed imports must not use the client transaction path') },
+    collection: (_database: unknown, name: string) => ({ collection: name }),
+    doc: (first: unknown) => {
+      if (typeof first === 'object' && first !== null && 'collection' in first) return transactionReference
+      throw new Error('Unexpected doc() call')
+    },
+    Timestamp: { fromDate: (date: Date) => date },
+    parseDateOnly,
+    roundMoney,
+    planTransferDirection,
+    resolveStatementImportId
+  })
+  const store = { categories: [], transactions: [] as unknown[], loading: false, sortTransactions: () => undefined }
+  const rows = [{
+    date: '2026-10-12',
+    description: 'ABONO PSE',
+    amount: 1_000_000,
+    categorySuggestion: '',
+    type: 'transfer' as const,
+    counterpartyAccountId: 'bank'
+  }]
+
+  const firstRun = await producer.call(store, 'visa', rows, { statementImportId: 'import-key-123456' })
+  assert.equal(firstRun.length, 1)
+  assert.equal(requestPayloads[0]?.statementImportId, 'import-key-123456')
+  assert.deepEqual(requestPayloads[0]?.rows, [{
+    date: '2026-10-12',
+    description: 'ABONO PSE',
+    amount: 1_000_000,
+    categoryId: '',
+    type: 'transfer',
+    counterpartyAccountId: 'bank'
+  }])
+  assert.equal(accountsStore.getAccountById('visa')?.balance, 0)
+  assert.equal(accountsStore.getAccountById('bank')?.balance, 2_000_000)
+  assert.equal((store.transactions[0] as { accountId: string }).accountId, 'bank')
+  assert.equal((store.transactions[0] as { toAccountId: string }).toAccountId, 'visa')
+
+  const retryRun = await producer.call(store, 'visa', rows, { statementImportId: 'import-key-123456' })
+  assert.equal(retryRun.length, 0)
+  assert.equal(accountsStore.getAccountById('visa')?.balance, 0)
+  assert.equal(accountsStore.getAccountById('bank')?.balance, 2_000_000)
+  assert.equal(store.transactions.length, 1)
 })

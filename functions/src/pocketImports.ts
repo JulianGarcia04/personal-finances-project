@@ -25,8 +25,21 @@ const rowSchema = z.object({
   date: z.string().min(1).refine(value => Number.isFinite(new Date(value).getTime())),
   description: z.string().min(1).refine(value => value.trim().length > 0),
   amount: z.number().finite().refine(value => value !== 0),
-  categoryId: z.string()
-}).strict()
+  categoryId: z.string(),
+  type: z.enum(['income', 'expense', 'transfer']).optional(),
+  counterpartyAccountId: z.string().optional()
+}).strict().superRefine((row, context) => {
+  if (row.type === 'transfer') {
+    if (!row.counterpartyAccountId?.trim()) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['counterpartyAccountId'], message: 'La transferencia requiere una cuenta contraparte.' })
+    }
+    if (row.categoryId) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['categoryId'], message: 'Las transferencias no admiten categoría.' })
+    }
+  } else if (row.counterpartyAccountId !== undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['counterpartyAccountId'], message: 'Solo las transferencias admiten una cuenta contraparte.' })
+  }
+})
 
 export const pocketStatementRequestSchema = z.object({
   workspaceId: z.string().min(1),
@@ -43,7 +56,46 @@ type PocketStatementResult = {
   balance: number
   delta: number
   createdAt: string
-  transactions: Array<{ id: string; date: string; amount: number; type: 'income' | 'expense' }>
+  balances: Record<string, number>
+  transactionIds: string[]
+  replayed?: boolean
+  transactions: Array<{
+    id: string
+    date: string
+    amount: number
+    type: 'income' | 'expense' | 'transfer'
+    accountId: string
+    toAccountId: string | null
+    categoryId: string
+    description: string
+    currency: string
+    createdAt: string
+    userId?: string
+    budgetId?: string
+  }>
+}
+
+/** Durable receipt stored on the marker; live rows are re-read by id on replay. */
+type StatementImportReceipt = Omit<PocketStatementResult, 'transactions' | 'replayed'>
+
+/** Receipts written before row ids were stored may still carry the full row payloads. */
+type StoredStatementImportReceipt = StatementImportReceipt & {
+  transactions?: PocketStatementResult['transactions']
+}
+
+/**
+ * Keeps only the ids and balances needed to replay an import, so a receipt stays far below
+ * Firestore's 1 MiB document limit regardless of row count or description length.
+ */
+export function statementImportReceipt(result: PocketStatementResult): StatementImportReceipt {
+  return {
+    accountId: result.accountId,
+    balance: result.balance,
+    delta: result.delta,
+    createdAt: result.createdAt,
+    balances: result.balances,
+    transactionIds: result.transactionIds
+  }
 }
 
 /** Server-only marker document id; scoped by workspace so ids never collide across tenants. */
@@ -57,7 +109,29 @@ export function statementRequestHash(request: PocketStatementRequest): string {
     request.workspaceId,
     request.accountId,
     request.expectedCurrency,
-    request.rows.map(row => [row.date, row.description, row.amount, row.categoryId])
+    request.rows.map(row => [
+      row.date,
+      row.description,
+      row.amount,
+      row.categoryId,
+      row.type ?? (row.amount > 0 ? 'income' : 'expense'),
+      row.counterpartyAccountId ?? null
+    ])
+  ])
+  return createHash('sha256').update(canonical).digest('hex')
+}
+
+function legacyStatementRequestHash(request: PocketStatementRequest, timeZone: string): string {
+  const canonical = JSON.stringify([
+    request.workspaceId,
+    request.accountId,
+    request.expectedCurrency,
+    request.rows.map(row => [
+      statementRowDate(row.date, timeZone).toISOString(),
+      row.description,
+      row.amount,
+      row.categoryId
+    ])
   ])
   return createHash('sha256').update(canonical).digest('hex')
 }
@@ -89,7 +163,10 @@ export function toImportHttpsError(error: unknown): HttpsError {
   return new HttpsError('internal', IMPORT_SERVER_ERROR)
 }
 
-type PreparedRow = z.infer<typeof rowSchema> & { dateValue: Date }
+type PreparedRow = z.infer<typeof rowSchema> & {
+  effectiveType: 'income' | 'expense' | 'transfer'
+  dateValue: Date
+}
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
 
@@ -105,11 +182,6 @@ export function statementRowDate(value: string, timeZone: string): Date {
     if (error instanceof AgentToolError) throw new ImportRejection('Una fecha del extracto no es válida.')
     throw error
   }
-}
-
-function isRelated(data: admin.firestore.DocumentData): boolean {
-  return typeof data.parentAccountId === 'string' ||
-    (Array.isArray(data.childAccountIds) && data.childAccountIds.length > 0)
 }
 
 function assertRegisteredChildren(
@@ -151,9 +223,6 @@ export async function importWorkspacePocketStatement(
   })
   if (!input.userId) throw new ImportRejection('El usuario es obligatorio.')
 
-  const delta = roundMoney(parsed.rows.reduce((sum, row) => sum + row.amount, 0))
-  if (!Number.isFinite(delta)) throw new ImportRejection('El total del extracto no es válido.')
-
   const { workspaceId, accountId, statementImportId } = parsed
   const requestHash = statementRequestHash(parsed)
   const markerRef = db.collection('statementImports').doc(statementImportMarkerId(workspaceId, statementImportId))
@@ -164,11 +233,10 @@ export async function importWorkspacePocketStatement(
   const createdAt = Timestamp.now()
 
   return db.runTransaction(async transaction => {
-    const [markerSnapshot, userSnapshot, workspaceSnapshot, accountSnapshot] = await Promise.all([
+    const [markerSnapshot, userSnapshot, workspaceSnapshot] = await Promise.all([
       transaction.get(markerRef),
       transaction.get(userRef),
-      transaction.get(workspaceRef),
-      transaction.get(accountRef)
+      transaction.get(workspaceRef)
     ])
     const workspace = workspaceSnapshot.data()
     if (!userSnapshot.exists || userSnapshot.data()?.activeWorkspaceId !== workspaceId ||
@@ -176,20 +244,81 @@ export async function importWorkspacePocketStatement(
         !workspace.members.includes(input.userId)) {
       throw new ImportRejection('El usuario no pertenece al workspace activo.')
     }
-    // A retry of an already committed import replays its stored result without writing again.
+    // The server-only receipt survives transaction deletion and account hierarchy changes.
     if (markerSnapshot.exists) {
       const marker = markerSnapshot.data()!
-      if (marker.requestHash !== requestHash) {
+      const legacyCompatible = parsed.rows.every(row =>
+        row.type === undefined ||
+        (row.type === 'income' && row.amount > 0) ||
+        (row.type === 'expense' && row.amount < 0)
+      )
+      const isLegacyPocketReceipt = legacyCompatible &&
+        marker.requestHash === legacyStatementRequestHash(parsed, timeZoneForCountry(userSnapshot.data()?.country))
+      if (marker.requestHash !== requestHash && !isLegacyPocketReceipt) {
         throw new ImportRejection('Este identificador de importación ya se usó con otro extracto.')
       }
-      return marker.result as PocketStatementResult
+      const { transactions: legacyTransactions, ...storedResult } = marker.result as StoredStatementImportReceipt
+      const transactionIds = storedResult.transactionIds ?? (legacyTransactions ?? []).map(row => row.id)
+      const accountIds = Object.keys(storedResult.balances ?? { [storedResult.accountId]: storedResult.balance })
+      const [accountSnapshots, transactionSnapshots] = await Promise.all([
+        Promise.all(accountIds.map(id => transaction.get(db.collection('accounts').doc(id)))),
+        Promise.all(transactionIds.map(id => transaction.get(db.collection('transactions').doc(id))))
+      ])
+      const balances: Record<string, number> = {}
+      accountSnapshots.forEach(snapshot => {
+        const balance = Number(snapshot.data()?.balance)
+        if (snapshot.exists && snapshot.data()?.workspaceId === workspaceId && Number.isFinite(balance)) {
+          balances[snapshot.id] = balance
+        }
+      })
+      const transactions = transactionSnapshots.flatMap(snapshot => {
+        if (!snapshot.exists || snapshot.data()?.workspaceId !== workspaceId) return []
+        const data = snapshot.data()!
+        const asIso = (value: unknown, fallback: string) => {
+          if (value && typeof (value as { toDate?: unknown }).toDate === 'function') {
+            return (value as { toDate: () => Date }).toDate().toISOString()
+          }
+          const date = new Date(value as string | number | Date)
+          return Number.isFinite(date.getTime()) ? date.toISOString() : fallback
+        }
+        return [{
+          id: snapshot.id,
+          date: asIso(data.date, storedResult.createdAt),
+          amount: Number(data.amount),
+          type: data.type,
+          accountId: data.accountId,
+          toAccountId: data.toAccountId ?? null,
+          categoryId: data.categoryId ?? '',
+          description: data.description ?? '',
+          currency: data.currency ?? parsed.expectedCurrency,
+          createdAt: asIso(data.createdAt, storedResult.createdAt),
+          ...(typeof data.userId === 'string' ? { userId: data.userId } : {}),
+          ...(typeof data.budgetId === 'string' ? { budgetId: data.budgetId } : {})
+        }]
+      })
+      return {
+        ...storedResult,
+        balance: balances[storedResult.accountId] ?? storedResult.balance,
+        balances,
+        transactionIds,
+        transactions,
+        replayed: true
+      }
     }
+    const accountSnapshot = await transaction.get(accountRef)
     const timeZone = timeZoneForCountry(userSnapshot.data()?.country)
-    const rows: PreparedRow[] = parsed.rows.map(row => ({ ...row, dateValue: statementRowDate(row.date, timeZone) }))
+    const rows: PreparedRow[] = parsed.rows.map(row => ({
+      ...row,
+      effectiveType: row.type ?? (row.amount > 0 ? 'income' : 'expense'),
+      dateValue: statementRowDate(row.date, timeZone)
+    }))
     if (!accountSnapshot.exists) throw new ImportRejection('La cuenta seleccionada no existe.')
 
     const account = accountSnapshot.data()!
     const parentId = typeof account.parentAccountId === 'string' ? account.parentAccountId : null
+    if (account.parentAccountId != null && !parentId) {
+      throw new ImportRejection('La relación del bolsillo con su cuenta principal no es válida.')
+    }
     const parentRef = parentId ? db.collection('accounts').doc(parentId) : null
     const selectedChildrenQuery = db.collection('accounts').where('parentAccountId', '==', accountId)
     const [parentSnapshot, selectedChildren] = await Promise.all([
@@ -198,37 +327,69 @@ export async function importWorkspacePocketStatement(
     ])
     const parent = parentSnapshot?.data()
     let parentChildren: admin.firestore.QuerySnapshot | null = null
+    let parentChildIds: string[] = []
     if (parentId) {
       parentChildren = await transaction.get(
         db.collection('accounts').where('parentAccountId', '==', parentId)
       )
     }
 
-    const categoryIds = [...new Set(rows.map(row => row.categoryId).filter(Boolean))]
-    const categorySnapshots = await Promise.all(categoryIds.map(categoryId =>
-      transaction.get(db.collection('categories').doc(categoryId))
-    ))
-
-    if (account.workspaceId !== workspaceId || !['checking', 'savings', 'cash'].includes(account.type) ||
-        account.mirror != null || account.currency !== parsed.expectedCurrency) {
-      throw new ImportRejection('La cuenta seleccionada no coincide con el workspace y la moneda esperados.')
-    }
-    if (!isRelated(account)) throw new ImportRejection('La importación autenticada solo admite cuentas con bolsillos.')
-
+    const selectedChildIds = assertRegisteredChildren(accountId, account, selectedChildren, workspaceId)
     if (parentId) {
       if (!parent || parent.workspaceId !== workspaceId || !['checking', 'savings'].includes(parent.type) ||
           parent.parentAccountId != null || parent.mirror != null || parent.currency !== account.currency ||
           account.type !== 'savings' || selectedChildren.size > 0 || !parentChildren) {
         throw new ImportRejection('La relación del bolsillo con su cuenta principal no es válida.')
       }
-      const childIds = assertRegisteredChildren(parentId, parent, parentChildren, workspaceId)
-      if (!childIds.includes(accountId)) throw new ImportRejection('El bolsillo no está registrado en su cuenta principal.')
-    } else {
-      if (!['checking', 'savings'].includes(account.type)) {
-        throw new ImportRejection('La cuenta principal debe ser corriente o de ahorros.')
-      }
-      assertRegisteredChildren(accountId, account, selectedChildren, workspaceId)
+      parentChildIds = assertRegisteredChildren(parentId, parent, parentChildren, workspaceId)
+      if (!parentChildIds.includes(accountId)) throw new ImportRejection('El bolsillo no está registrado en su cuenta principal.')
     }
+
+    const pocketRelated = Boolean(parentId || selectedChildIds.length > 0)
+    if (account.workspaceId !== workspaceId || account.mirror != null || account.currency !== parsed.expectedCurrency ||
+        (pocketRelated
+          ? !['checking', 'savings', 'cash'].includes(account.type)
+          : !['checking', 'savings', 'cash', 'credit'].includes(account.type))) {
+      throw new ImportRejection('La cuenta seleccionada no coincide con el workspace y la moneda esperados.')
+    }
+    if (pocketRelated && !parentId && !['checking', 'savings'].includes(account.type)) {
+      throw new ImportRejection('La cuenta principal debe ser corriente o de ahorros.')
+    }
+
+    if (pocketRelated && rows.some(row => row.effectiveType === 'transfer')) {
+      throw new ImportRejection('Las transferencias de cuentas con bolsillos deben registrarse desde el flujo de transferencias.')
+    }
+
+    const counterpartyIds = [...new Set(rows
+      .filter(row => row.effectiveType === 'transfer')
+      .map(row => row.counterpartyAccountId!.trim()))]
+    const counterpartyRefs = counterpartyIds.map(id => db.collection('accounts').doc(id))
+    const counterpartySnapshots = await Promise.all(counterpartyRefs.map(ref => transaction.get(ref)))
+    const counterpartyMap = new Map<string, admin.firestore.DocumentData>()
+    for (const [index, snapshot] of counterpartySnapshots.entries()) {
+      if (!snapshot.exists) throw new ImportRejection('Una cuenta contraparte de transferencia ya no existe.')
+      const counterparty = snapshot.data()!
+      const counterpartyId = counterpartyIds[index]
+      if (counterparty.workspaceId !== workspaceId || counterparty.currency !== account.currency ||
+          counterparty.mirror != null || typeof counterparty.parentAccountId === 'string' ||
+          (Array.isArray(counterparty.childAccountIds) && counterparty.childAccountIds.length > 0) ||
+          counterpartyId === accountId ||
+          !['checking', 'savings', 'cash', 'credit'].includes(counterparty.type)) {
+        throw new ImportRejection('Las transferencias requieren una cuenta contraparte válida en la misma moneda y workspace.')
+      }
+      const children = await transaction.get(
+        db.collection('accounts').where('parentAccountId', '==', counterpartyId)
+      )
+      if (assertRegisteredChildren(counterpartyId, counterparty, children, workspaceId).length > 0) {
+        throw new ImportRejection('Las transferencias importadas no admiten cuentas contraparte con bolsillos.')
+      }
+      counterpartyMap.set(counterpartyId, counterparty)
+    }
+
+    const categoryIds = [...new Set(rows.map(row => row.categoryId).filter(Boolean))]
+    const categorySnapshots = await Promise.all(categoryIds.map(categoryId =>
+      transaction.get(db.collection('categories').doc(categoryId))
+    ))
 
     const categories = new Map(categorySnapshots.map(snapshot => [snapshot.id, snapshot.data()]))
     for (const categoryId of categoryIds) {
@@ -238,44 +399,125 @@ export async function importWorkspacePocketStatement(
       }
     }
 
-    const currentBalance = Number(account.balance)
-    const nextBalance = roundMoney(currentBalance + delta)
-    if (!Number.isFinite(currentBalance) || !Number.isFinite(nextBalance) || nextBalance < 0) {
-      throw new ImportRejection('El saldo disponible no puede ser negativo.')
+    const accountDeltas = new Map<string, number>([[accountId, 0]])
+    for (const counterpartyId of counterpartyIds) accountDeltas.set(counterpartyId, 0)
+    const transactionPayloads = rows.map((row, index) => {
+      const id = transactionRefs[index].id
+      if (row.effectiveType === 'transfer') {
+        const counterpartyId = row.counterpartyAccountId!.trim()
+        const amount = Math.abs(row.amount)
+        const targetDelta = row.amount > 0 ? amount : -amount
+        const sourceAccountId = row.amount > 0 ? counterpartyId : accountId
+        const destinationAccountId = row.amount > 0 ? accountId : counterpartyId
+        accountDeltas.set(accountId, (accountDeltas.get(accountId) ?? 0) + targetDelta)
+        accountDeltas.set(counterpartyId, (accountDeltas.get(counterpartyId) ?? 0) - targetDelta)
+        return {
+          id,
+          payload: {
+            workspaceId,
+            userId: input.userId,
+            accountId: sourceAccountId,
+            amount,
+            description: row.description,
+            categoryId: '',
+            date: Timestamp.fromDate(row.dateValue),
+            type: 'transfer' as const,
+            toAccountId: destinationAccountId,
+            currency: account.currency,
+            statementImportId,
+            createdAt
+          },
+          local: {
+            id,
+            date: row.dateValue.toISOString(),
+            amount,
+            type: 'transfer' as const,
+            accountId: sourceAccountId,
+            toAccountId: destinationAccountId,
+            categoryId: ''
+          }
+        }
+      }
+
+      const signedAmount = row.effectiveType === 'expense' ? -Math.abs(row.amount) : Math.abs(row.amount)
+      accountDeltas.set(accountId, (accountDeltas.get(accountId) ?? 0) + signedAmount)
+      return {
+        id,
+        payload: {
+          workspaceId,
+          userId: input.userId,
+          accountId,
+          amount: signedAmount,
+          description: row.description,
+          categoryId: row.categoryId,
+          date: Timestamp.fromDate(row.dateValue),
+          type: row.effectiveType,
+          toAccountId: null,
+          currency: account.currency,
+          statementImportId,
+          createdAt
+        },
+        local: {
+          id,
+          date: row.dateValue.toISOString(),
+          amount: signedAmount,
+          type: row.effectiveType,
+          accountId,
+          toAccountId: null,
+          categoryId: row.categoryId
+        }
+      }
+    })
+
+    const balances: Record<string, number> = {}
+    const delta = roundMoney(accountDeltas.get(accountId) ?? 0)
+    for (const [changedAccountId, accountDelta] of accountDeltas.entries()) {
+      const source = changedAccountId === accountId ? account : counterpartyMap.get(changedAccountId)!
+      const balance = Number(source.balance)
+      const nextBalance = roundMoney(balance + accountDelta)
+      if (!Number.isFinite(balance) || !Number.isFinite(nextBalance) || (pocketRelated && nextBalance < 0)) {
+        throw new ImportRejection('El saldo disponible no puede ser negativo.')
+      }
+      balances[changedAccountId] = nextBalance
+    }
+
+    let linkedBudgetId: string | null = null
+    if (!pocketRelated && typeof account.linkedBudgetId === 'string' && account.linkedBudgetId) {
+      const budgetSnapshot = await transaction.get(db.collection('budgets').doc(account.linkedBudgetId))
+      const budget = budgetSnapshot.exists ? budgetSnapshot.data() : null
+      if (budget && budget.workspaceId === workspaceId && budget.archived === false) {
+        linkedBudgetId = budgetSnapshot.id
+      }
     }
 
     // Reads and validation are complete before any durable write begins.
-    rows.forEach((row, index) => {
+    transactionPayloads.forEach(({ payload }, index) => {
       transaction.create(transactionRefs[index], {
-        workspaceId,
-        userId: input.userId,
-        accountId,
-        amount: row.amount,
-        description: row.description,
-        categoryId: row.categoryId,
-        date: Timestamp.fromDate(row.dateValue),
-        type: row.amount > 0 ? 'income' : 'expense',
-        toAccountId: null,
-        currency: account.currency,
-        statementImportId,
-        createdAt
+        ...payload,
+        ...(payload.type === 'transfer' || !linkedBudgetId ? {} : { budgetId: linkedBudgetId })
       })
     })
-    transaction.update(accountRef, {
-      balance: nextBalance,
-      ...(parentId ? { pocketActivity: true } : {})
-    })
+    for (const [changedAccountId, balance] of Object.entries(balances)) {
+      transaction.update(db.collection('accounts').doc(changedAccountId), {
+        balance,
+        ...(parentId && changedAccountId === accountId ? { pocketActivity: true } : {})
+      })
+    }
 
     const result: PocketStatementResult = {
       accountId,
-      balance: nextBalance,
+      balance: balances[accountId],
       delta,
       createdAt: createdAt.toDate().toISOString(),
-      transactions: rows.map((row, index) => ({
-        id: transactionRefs[index].id,
-        date: row.dateValue.toISOString(),
-        amount: row.amount,
-        type: row.amount > 0 ? 'income' as const : 'expense' as const
+      balances,
+      transactionIds: transactionPayloads.map(({ id }) => id),
+      transactions: transactionPayloads.map(({ local, payload }) => ({
+        ...local,
+        description: payload.description,
+        currency: payload.currency,
+        createdAt: createdAt.toDate().toISOString(),
+        userId: payload.userId,
+        ...(payload.type !== 'transfer' && linkedBudgetId ? { budgetId: linkedBudgetId } : {})
       }))
     }
     transaction.create(markerRef, {
@@ -284,7 +526,7 @@ export async function importWorkspacePocketStatement(
       accountId,
       statementImportId,
       requestHash,
-      result,
+      result: statementImportReceipt(result),
       createdAt
     })
     return result

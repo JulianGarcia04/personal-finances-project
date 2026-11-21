@@ -21,6 +21,7 @@ import {
 import { createCardBillingLookup, expenseAmountForDate, getInstallmentCount } from '@/lib/installments'
 import { parseDateOnly, toDateValue } from '@/lib/dates'
 import { roundMoney } from '@/lib/money'
+import { planTransferDirection, resolveStatementImportId, type StatementImportType } from '@/lib/statementImport'
 import { createExpenseBudgetAssigner, selectBudgetExpenses } from '@/lib/transactionClassification'
 import { budgetChangeForEdit, budgetIdToPersist, type EditBudgetChange } from '@/lib/budgets'
 import { 
@@ -1373,6 +1374,8 @@ export const useTransactionsStore = defineStore('transactions', {
       description: string;
       amount: number;
       categorySuggestion: string;
+      type?: StatementImportType;
+      counterpartyAccountId?: string | null;
     }>, options: { statementImportId?: string } = {}): Promise<Transaction[]> {
       const user = auth.currentUser
       const authStore = useAuthStore()
@@ -1390,10 +1393,21 @@ export const useTransactionsStore = defineStore('transactions', {
       const initiatingWorkspaceId = workspaceId
       const initiatingAccountId = accountId
       const expectedCurrency = account.currency || 'USD'
+      const rawImportId = resolveStatementImportId(options.statementImportId)
       const eligibleCategories = this.categories.filter(category =>
         category.workspaceId === null || category.workspaceId === workspaceId
       )
       const preparedRows = parsedRows.map(row => {
+        const effectiveType: StatementImportType = row.type ?? (row.amount > 0 ? 'income' : 'expense')
+        const counterpartyAccountId = effectiveType === 'transfer' ? (row.counterpartyAccountId ?? '').trim() : null
+        if (effectiveType === 'transfer') {
+          if (!counterpartyAccountId) {
+            throw new Error('Las transferencias importadas requieren una cuenta contraparte.')
+          }
+          if (counterpartyAccountId === initiatingAccountId) {
+            throw new Error('La cuenta contraparte de una transferencia debe ser diferente a la cuenta destino.')
+          }
+        }
         const suggestion = row.categorySuggestion.toLowerCase()
         const matchedCategory = eligibleCategories.find(category =>
           category.name.toLowerCase() === suggestion
@@ -1403,18 +1417,19 @@ export const useTransactionsStore = defineStore('transactions', {
         )
         return {
           ...row,
+          effectiveType,
+          counterpartyAccountId,
           dateValue: parseDateOnly(row.date),
-          categoryId: matchedCategory?.id ?? fallbackCategory?.id ?? ''
+          categoryId: effectiveType === 'transfer' ? '' : (matchedCategory?.id ?? fallbackCategory?.id ?? '')
         }
       })
-      const totalAmountChange = preparedRows.reduce((total, row) => total + row.amount, 0)
-      if (!Number.isFinite(totalAmountChange)) throw new Error('El total del extracto no es válido.')
       const addedLocalTxs: Transaction[] = []
       const transactionRefs = preparedRows.map(() => doc(collection(db, 'transactions')))
       const createdAt = new Date()
-      let finalBalance: number | null = null
-      let usePocketCallable = movementAccountIsPocketRelated(account)
-      let linkedBudgetId: string | null = null
+      let updatedBalances = new Map<string, number>()
+      let alreadyCommitted = false
+      let replayedImportTransactionIds: string[] = []
+      let useStatementCallable = movementAccountIsPocketRelated(account) || rawImportId !== null
 
       const assertCurrentContext = () => {
         if (!importContextIsCurrent(initiatingUserId, initiatingWorkspaceId)) {
@@ -1422,21 +1437,68 @@ export const useTransactionsStore = defineStore('transactions', {
         }
       }
       try {
-        if (!usePocketCallable) {
+        if (!useStatementCallable) {
           const accountRef = doc(db, 'accounts', initiatingAccountId)
+          const counterpartyIds = [...new Set(
+            preparedRows
+              .map(row => row.counterpartyAccountId)
+              .filter((id): id is string => typeof id === 'string' && id.length > 0)
+          )]
+          const counterpartyRefs = counterpartyIds.map(id => doc(db, 'accounts', id))
           try {
-            finalBalance = await runTransaction(db, async transaction => {
+            const commitOutcome = await runTransaction(db, async transaction => {
               assertCurrentContext()
-              const accountSnapshot = await transaction.get(accountRef)
+              const [accountSnapshot, firstTxSnapshot, ...counterpartySnapshots] = await Promise.all([
+                transaction.get(accountRef),
+                rawImportId ? transaction.get(transactionRefs[0]) : Promise.resolve(null),
+                ...counterpartyRefs.map(ref => transaction.get(ref))
+              ])
               if (!accountSnapshot.exists()) throw new Error('Cuenta no encontrada')
               const storedAccount = accountSnapshot.data() as Account
               if (storedAccount.workspaceId !== initiatingWorkspaceId ||
                   (storedAccount.currency || 'USD') !== expectedCurrency) {
                 throw new Error('La cuenta cambió de workspace o moneda durante la importación.')
               }
+              if (storedAccount.mirror) {
+                throw new Error('No se pueden importar transacciones directamente a una cuenta puente.')
+              }
               if (movementAccountIsPocketRelated(storedAccount)) throw new ImportMustUsePocketCallable()
-              // Rows of a linked account belong to its active budget (the rules require it).
-              linkedBudgetId = null
+
+              // Idempotent retry: if this statementImportId already committed, do not write or mutate balances again.
+              if (rawImportId && firstTxSnapshot?.exists()) {
+                const existingFirst = firstTxSnapshot.data()
+                if (existingFirst?.workspaceId !== initiatingWorkspaceId ||
+                    existingFirst?.statementImportId !== rawImportId) {
+                  throw new Error('Este identificador de importación ya pertenece a otro extracto.')
+                }
+                return {
+                  alreadyCommitted: true,
+                  balances: new Map<string, number>([[initiatingAccountId, Number(storedAccount.balance)]]),
+                  committedTxs: [] as Transaction[]
+                }
+              }
+
+              const counterpartyMap = new Map<string, Account>()
+              counterpartyIds.forEach((id, idx) => {
+                const snap = counterpartySnapshots[idx]
+                if (!snap || !snap.exists()) {
+                  throw new Error('Una cuenta contraparte de transferencia ya no existe.')
+                }
+                const cp = snap.data() as Account
+                if (cp.workspaceId !== initiatingWorkspaceId) {
+                  throw new Error('La cuenta contraparte debe pertenecer al mismo workspace.')
+                }
+                if ((cp.currency || 'USD') !== expectedCurrency) {
+                  throw new Error('Las transferencias importadas deben ser entre cuentas de la misma moneda.')
+                }
+                if (cp.mirror || movementAccountIsPocketRelated(cp)) {
+                  throw new Error('Las transferencias importadas no admiten cuentas puente ni cuentas con bolsillos como contraparte.')
+                }
+                counterpartyMap.set(id, cp)
+              })
+
+              // Rows of a linked account belong to its active budget (the rules require it; transfers never carry budgetId).
+              let linkedBudgetId: string | null = null
               if (typeof storedAccount.linkedBudgetId === 'string' && storedAccount.linkedBudgetId) {
                 const budgetSnapshot = await transaction.get(doc(db, 'budgets', storedAccount.linkedBudgetId))
                 const budget = budgetSnapshot.exists() ? budgetSnapshot.data() : null
@@ -1445,50 +1507,73 @@ export const useTransactionsStore = defineStore('transactions', {
                 }
               }
               const budgetField = linkedBudgetId ? { budgetId: linkedBudgetId } : {}
-              const currentBalance = Number(storedAccount.balance)
-              const balanceAfter = roundMoney(currentBalance + totalAmountChange)
-              if (!Number.isFinite(currentBalance) || !Number.isFinite(balanceAfter)) {
-                throw new Error('El saldo de la cuenta no es válido.')
+              const importIdField = rawImportId ? { statementImportId: rawImportId } : {}
+
+              const accountDeltas = new Map<string, number>([[initiatingAccountId, 0]])
+              for (const id of counterpartyIds) accountDeltas.set(id, 0)
+
+              const committedTxs: Transaction[] = []
+              preparedRows.forEach((row, index) => {
+                const txId = transactionRefs[index].id
+                if (row.effectiveType === 'transfer') {
+                  const dir = planTransferDirection(initiatingAccountId, row.counterpartyAccountId!, row.amount)
+                  accountDeltas.set(initiatingAccountId, (accountDeltas.get(initiatingAccountId) ?? 0) + dir.targetDelta)
+                  accountDeltas.set(row.counterpartyAccountId!, (accountDeltas.get(row.counterpartyAccountId!) ?? 0) + dir.counterpartyDelta)
+                  const payload = {
+                    workspaceId: initiatingWorkspaceId,
+                    userId: initiatingUserId,
+                    accountId: dir.accountId,
+                    amount: dir.amount,
+                    description: row.description,
+                    categoryId: '',
+                    date: Timestamp.fromDate(row.dateValue),
+                    type: 'transfer' as TransactionType,
+                    toAccountId: dir.toAccountId,
+                    currency: expectedCurrency,
+                    createdAt,
+                    ...importIdField
+                  }
+                  transaction.set(doc(db, 'transactions', txId), payload)
+                  committedTxs.push({ id: txId, ...payload, date: row.dateValue })
+                } else {
+                  const signedAmount = row.effectiveType === 'expense' ? -Math.abs(row.amount) : Math.abs(row.amount)
+                  accountDeltas.set(initiatingAccountId, (accountDeltas.get(initiatingAccountId) ?? 0) + signedAmount)
+                  const payload = {
+                    workspaceId: initiatingWorkspaceId,
+                    userId: initiatingUserId,
+                    accountId: initiatingAccountId,
+                    amount: signedAmount,
+                    description: row.description,
+                    categoryId: row.categoryId,
+                    date: Timestamp.fromDate(row.dateValue),
+                    type: row.effectiveType as TransactionType,
+                    toAccountId: null,
+                    currency: expectedCurrency,
+                    createdAt,
+                    ...budgetField,
+                    ...importIdField
+                  }
+                  transaction.set(doc(db, 'transactions', txId), payload)
+                  committedTxs.push({ id: txId, ...payload, date: row.dateValue })
+                }
+              })
+
+              const balances = new Map<string, number>()
+              for (const [accId, delta] of accountDeltas.entries()) {
+                const stored = accId === initiatingAccountId ? storedAccount : counterpartyMap.get(accId)!
+                const currentBalance = Number(stored.balance)
+                const balanceAfter = roundMoney(currentBalance + delta)
+                if (!Number.isFinite(currentBalance) || !Number.isFinite(balanceAfter)) {
+                  throw new Error('El saldo de la cuenta no es válido.')
+                }
+                balances.set(accId, balanceAfter)
+                transaction.update(doc(db, 'accounts', accId), { balance: balanceAfter })
               }
-              const txData = preparedRows.map((row, index) => ({
-                workspaceId: initiatingWorkspaceId,
-                userId: initiatingUserId,
-                accountId: initiatingAccountId,
-                amount: row.amount,
-                description: row.description,
-                categoryId: row.categoryId,
-                date: Timestamp.fromDate(row.dateValue),
-                type: row.amount > 0 ? 'income' as TransactionType : 'expense' as TransactionType,
-                toAccountId: null,
-                currency: expectedCurrency,
-                createdAt,
-                ...budgetField,
-                id: transactionRefs[index].id
-              }))
-              for (const item of txData) {
-                const { id, ...data } = item
-                transaction.set(doc(db, 'transactions', id), data)
-              }
-              transaction.update(accountRef, { balance: balanceAfter })
-              return balanceAfter
+              return { alreadyCommitted: false, balances, committedTxs }
             })
-            for (const [index, row] of preparedRows.entries()) {
-              const txData = {
-                workspaceId: initiatingWorkspaceId,
-                userId: initiatingUserId,
-                accountId: initiatingAccountId,
-                amount: row.amount,
-                description: row.description,
-                categoryId: row.categoryId,
-                date: Timestamp.fromDate(row.dateValue),
-                type: row.amount > 0 ? 'income' as TransactionType : 'expense' as TransactionType,
-                toAccountId: null,
-                currency: expectedCurrency,
-                createdAt,
-                ...(linkedBudgetId ? { budgetId: linkedBudgetId } : {})
-              }
-              addedLocalTxs.push({ id: transactionRefs[index].id, ...txData, date: row.dateValue })
-            }
+            alreadyCommitted = commitOutcome.alreadyCommitted
+            updatedBalances = commitOutcome.balances
+            addedLocalTxs.push(...commitOutcome.committedTxs)
           } catch (error) {
             let relatedInFirestore = error instanceof ImportMustUsePocketCallable
             const firestoreCode = (error as { code?: string } | null)?.code
@@ -1507,59 +1592,116 @@ export const useTransactionsStore = defineStore('transactions', {
               }
             }
             if (!relatedInFirestore) throw error
-            usePocketCallable = true
+            useStatementCallable = true
           }
         }
 
-        if (usePocketCallable) {
+        if (useStatementCallable) {
           assertCurrentContext()
+          // Replay is decided before current pocket restrictions by the server receipt.
+          const callableImportId = rawImportId ?? crypto.randomUUID()
+          const callableRows = preparedRows.map(row => ({
+            date: row.date,
+            description: row.description,
+            amount: row.amount,
+            categoryId: row.effectiveType === 'transfer' ? '' : row.categoryId,
+            type: row.effectiveType,
+            ...(row.effectiveType === 'transfer' ? { counterpartyAccountId: row.counterpartyAccountId } : {})
+          }))
           const callable = httpsCallable(functions, 'importPocketStatement')
           const response = await callable({
             workspaceId: initiatingWorkspaceId,
             accountId: initiatingAccountId,
             expectedCurrency,
             // Idempotency key: callers reuse it when retrying the same statement import.
-            statementImportId: options.statementImportId ?? crypto.randomUUID(),
-            rows: preparedRows.map(row => ({
-              date: row.dateValue.toISOString(),
-              description: row.description,
-              amount: row.amount,
-              categoryId: row.categoryId
-            }))
+            statementImportId: callableImportId,
+            rows: callableRows
           })
-          const result = response.data as { balance: number; createdAt: string; transactions: Array<{ id: string }> }
-          if (!Number.isFinite(result.balance) || !Number.isFinite(new Date(result.createdAt).getTime()) ||
-              result.transactions.length !== preparedRows.length) {
+          const result = response.data as {
+            accountId: string
+            balance: number
+            balances?: Record<string, number>
+            createdAt: string
+            replayed?: boolean
+            transactionIds?: string[]
+            transactions: Array<{
+              id: string
+              date?: string
+              amount?: number
+              type?: string
+              accountId?: string
+              toAccountId?: string | null
+              categoryId?: string
+              description?: string
+              currency?: string
+              createdAt?: string
+              userId?: string
+              budgetId?: string
+            }>
+          }
+          const replayed = result.replayed === true
+          const receiptTransactionIds = result.transactionIds ?? result.transactions.map(transaction => transaction.id)
+          const balanceValues = Object.values(result.balances ?? {})
+          if ((!replayed && !Number.isFinite(result.balance)) ||
+              !Number.isFinite(new Date(result.createdAt).getTime()) ||
+              result.transactions.length > preparedRows.length ||
+              (!replayed && result.transactions.length !== preparedRows.length) ||
+              (replayed && receiptTransactionIds.length !== preparedRows.length) ||
+              balanceValues.some(balance => !Number.isFinite(balance))) {
             throw new Error('La respuesta del importador no coincide con las filas enviadas.')
           }
-          preparedRows.forEach((row, index) => {
-            const txData = {
+          alreadyCommitted = replayed
+          replayedImportTransactionIds = replayed ? receiptTransactionIds : []
+          if (result.balances && typeof result.balances === 'object') {
+            updatedBalances = new Map(Object.entries(result.balances).map(([id, balance]) => [id, Number(balance)]))
+          } else if (!replayed) {
+            updatedBalances = new Map([[initiatingAccountId, result.balance]])
+          }
+          for (const transaction of result.transactions) {
+            const rowIndex = receiptTransactionIds.indexOf(transaction.id)
+            const fallbackRow = preparedRows[rowIndex] ?? preparedRows[0]
+            const dateValue = typeof transaction.date === 'string' && Number.isFinite(new Date(transaction.date).getTime())
+              ? new Date(transaction.date)
+              : fallbackRow.dateValue
+            const createdAtValue = typeof transaction.createdAt === 'string' && Number.isFinite(new Date(transaction.createdAt).getTime())
+              ? new Date(transaction.createdAt)
+              : new Date(result.createdAt)
+            addedLocalTxs.push({
+              id: transaction.id,
               workspaceId: initiatingWorkspaceId,
-              userId: initiatingUserId,
-              accountId: initiatingAccountId,
-              amount: row.amount,
-              description: row.description,
-              categoryId: row.categoryId,
-              date: Timestamp.fromDate(row.dateValue),
-              type: row.amount > 0 ? 'income' as TransactionType : 'expense' as TransactionType,
-              toAccountId: null,
-              currency: expectedCurrency,
-              createdAt: new Date(result.createdAt)
-            }
-            addedLocalTxs.push({ id: result.transactions[index].id, ...txData, date: row.dateValue })
-          })
-          finalBalance = result.balance
+              ...(transaction.userId || initiatingUserId ? { userId: transaction.userId ?? initiatingUserId } : {}),
+              accountId: transaction.accountId ?? initiatingAccountId,
+              amount: Number(transaction.amount ?? fallbackRow.amount),
+              description: transaction.description ?? fallbackRow.description,
+              categoryId: transaction.categoryId ?? (fallbackRow.effectiveType === 'transfer' ? '' : fallbackRow.categoryId),
+              date: dateValue,
+              type: (transaction.type ?? fallbackRow.effectiveType) as TransactionType,
+              toAccountId: transaction.toAccountId ?? null,
+              currency: transaction.currency ?? expectedCurrency,
+              createdAt: createdAtValue,
+              statementImportId: callableImportId,
+              ...(transaction.budgetId ? { budgetId: transaction.budgetId } : {})
+            })
+          }
         }
 
         if (importContextIsCurrent(initiatingUserId, initiatingWorkspaceId)) {
-          const currentAccount = accountsStore.accounts.find(existing =>
-            existing.id === initiatingAccountId && existing.workspaceId === initiatingWorkspaceId
-          )
-          if (currentAccount && finalBalance !== null) currentAccount.balance = finalBalance
-          this.transactions = [...addedLocalTxs, ...this.transactions]
-          this.transactions.sort((a, b) => b.date.getTime() - a.date.getTime())
+          for (const [accId, nextBalance] of updatedBalances.entries()) {
+            const existingAccount = accountsStore.accounts.find(existing =>
+              existing.id === accId && existing.workspaceId === initiatingWorkspaceId
+            )
+            if (existingAccount) existingAccount.balance = nextBalance
+          }
+          if (alreadyCommitted && replayedImportTransactionIds.length > 0) {
+            const replayedIds = new Set(replayedImportTransactionIds)
+            this.transactions = this.transactions.filter(transaction => !replayedIds.has(transaction.id))
+          }
+          if (addedLocalTxs.length > 0) {
+            this.transactions = [...addedLocalTxs, ...this.transactions]
+            this.transactions.sort((a, b) => b.date.getTime() - a.date.getTime())
+          }
         }
-        return addedLocalTxs
+        return alreadyCommitted ? [] : addedLocalTxs
       } catch (error) {
         console.error('Error al importar lote de transacciones:', error)
         throw error

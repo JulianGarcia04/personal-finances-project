@@ -199,10 +199,12 @@ interface ParsedTx {
   description: string;
   amount: number;
   categorySuggestion: string;
+  type?: "expense" | "income" | "transfer";
 }
 
 interface GenkitParseResult {
   transactions: ParsedTx[];
+  detectedCurrency?: string | null;
 }
 
 // 2. Genkit-like Flow para procesar el extracto bancario con IA
@@ -219,15 +221,17 @@ const runParseStatementFlow = async (
   const systemInstruction = `
     Eres un asistente experto en finanzas personales. Tu tarea es extraer y estructurar todas las transacciones individuales contenidas en el extracto bancario o de tarjeta de crédito provisto (que puede ser en formato de texto o un archivo PDF).
     
-    Debes retornar estrictamente un objeto JSON con la lista de transacciones bajo la clave "transactions".
+    Debes retornar estrictamente un objeto JSON con las claves "detectedCurrency" y "transactions".
     
     El esquema del objeto retornado DEBE ser exactamente:
     {
+      "detectedCurrency": "COP", // Código ISO-3 en mayúsculas (ej. "COP", "USD", "EUR", "MXN") si el extracto indica claramente la moneda, o null si no es evidente.
       "transactions": [
         {
           "date": "YYYY-MM-DD",
           "description": "Establecimiento, comercio o descripción legible de la transacción",
-          "amount": -120.50, // Decimal. Negativo para compras, gastos, comisiones. Positivo para abonos, ingresos, pagos de deuda.
+          "amount": -120.50, // Decimal. Negativo para compras, gastos, comisiones o salidas. Positivo para ingresos, devoluciones o abonos/pagos recibidos por la tarjeta.
+          "type": "expense", // "expense" para compras/gastos/comisiones; "income" para nómina/intereses/ingresos reales; "transfer" para pagos o abonos a tarjeta de crédito (ej. PAGO TARJETA, ABONO PSE, PAYMENT THANK YOU) o transferencias entre cuentas propias.
           "categorySuggestion": "Categoría sugerida (Debe ser una de: Comida, Transporte, Entretenimiento, Servicios, Salud, Educación, Ingresos, Otros)"
         }
       ]
@@ -236,7 +240,8 @@ const runParseStatementFlow = async (
     Notas importantes:
     - Interpreta correctamente el formato de fecha del texto (por ejemplo, "15 Ene", "12/04/2026", "May 10").
     - Los montos de cargos a la tarjeta o retiros deben ser representados como valores NEGATIVOS.
-    - Los abonos o pagos a la tarjeta deben ser representados como valores POSITIVOS.
+    - Los abonos o pagos a una tarjeta de crédito deben llevar valor POSITIVO y "type": "transfer" (NUNCA "income").
+    - Las salidas desde una cuenta bancaria para pagar una tarjeta propia o mover dinero a otra cuenta propia deben llevar valor NEGATIVO y "type": "transfer".
   `;
 
   const parts: any[] = [];
