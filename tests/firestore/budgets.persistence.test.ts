@@ -183,6 +183,16 @@ test('saving links keeps each account linkedBudgetId in sync in one batch, and a
   assert.equal(archived.archived, true)
   assert.deepEqual(archived.linkedAccountIds, [b])
   assert.deepEqual([await linkOf(a), await linkOf(b)], [first.id, undefined])
+
+  // S6: credit cards cannot be linked to a budget through persistence either.
+  const creditId = id('link-credit')
+  await setDoc(doc(member, 'accounts', creditId), {
+    workspaceId: ws.member, userId: memberId, name: 'Credit fixture', type: 'credit',
+    balance: 0, limit: 500, currency: 'USD', createdAt: serverTimestamp()
+  })
+  await assert.rejects(() => service.create({ kind: 'event', name: 'Credit budget', capCurrency: 'USD', linkedAccountIds: [creditId] }))
+  await assert.rejects(() => service.patch(first.id, { linkedAccountIds: [a, creditId] }))
+  assert.equal(await linkOf(creditId), undefined)
 })
 
 test('budget operations leave synthetic settings and ledger records unchanged', async () => {

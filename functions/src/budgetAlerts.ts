@@ -104,29 +104,79 @@ function transferBudgetIds(tx: Record<string, any> | undefined, linkedBudgetOf?:
 }
 
 /**
- * Budgets paid by their own funds in the evaluated period, so their spending does not count
- * against the month's income: an event budget with any funding inflow (assigned income or a
- * transfer into a linked account), a monthly budget with one in that month. Unknown budgets
- * (kindOf returns undefined) never qualify.
+ * Budgets paid by their own dedicated income in the evaluated period, so their spending does not
+ * count against the month's regular income: a budget qualifies only when it has positive assigned
+ * income (`type === 'income'` with `budgetId === budget.id` — any time for event budgets, in the
+ * evaluated month for monthly budgets) AND its net funds in that period (assigned income plus
+ * transfers into its linked accounts minus transfers out) remain strictly positive.
+ *
+ * Transfers alone (moving regular monthly salary from an unlinked account into a linked budget
+ * account) fund the budget card ("Fondos") but do NOT make it self-funded, because that money
+ * remained in `monthlyIncome` and excluding its expenses would erase cash outflow.
+ * Unknown budgets (`kindOf` returns undefined) never qualify.
  */
 export function selfFundedBudgetIds(
   funding: Iterable<Record<string, any>>,
   month: YearMonth,
-  options: { timeZone: string },
+  options: { timeZone: string; reportingCurrency?: string; exchangeRates?: Record<string, number> },
   kindOf: (budgetId: string) => AlertScope["kind"] | undefined,
   linkedBudgetOf?: LinkedBudgetLookup
 ): Set<string> {
-  const funded = new Set<string>();
-  for (const tx of funding) {
-    // Funding inflows: assigned income, or a transfer into a budget's linked account.
-    const linkedTo = tx.type === "transfer" && linkedBudgetOf && typeof tx.toAccountId === "string"
-      ? linkedBudgetOf(tx.toAccountId) : null;
-    const budgetId = tx.type === "income" ? resolveAlertBudgetId(tx.budgetId)
-      : linkedTo && linkedBudgetOf && transferFundsDelta(tx, linkedTo, linkedBudgetOf) > 0 ? linkedTo
-      : DEFAULT_MONTHLY_BUDGET_ID;
-    if (budgetId === DEFAULT_MONTHLY_BUDGET_ID || funded.has(budgetId)) continue;
+  const hasAssignedIncome = new Set<string>();
+  const hasOutflow = new Set<string>();
+  const unknownRate = new Set<string>();
+  const netFunds = new Map<string, number>();
+
+  const appliesToPeriod = (budgetId: string, txDate: unknown): boolean => {
     const kind = kindOf(budgetId);
-    if (kind === "event" || (kind === "monthly" && inYearMonth(tx.date, month, options.timeZone))) funded.add(budgetId);
+    return kind === "event" || (kind === "monthly" && inYearMonth(txDate, month, options.timeZone));
+  };
+
+  const convertAmount = (amount: number, currency: unknown): number | null => {
+    if (!options.reportingCurrency) return amount;
+    const rate = manualRate(currency, options.reportingCurrency, options.exchangeRates ?? {});
+    return rate === null ? null : amount * rate;
+  };
+
+  const applyDelta = (budgetId: string, rawDelta: number, tx: Record<string, any>) => {
+    if (budgetId === DEFAULT_MONTHLY_BUDGET_ID || rawDelta === 0) return;
+    if (!appliesToPeriod(budgetId, tx.date)) return;
+    if (rawDelta < 0) hasOutflow.add(budgetId);
+    const converted = convertAmount(Math.abs(rawDelta), tx.currency);
+    if (converted === null) {
+      unknownRate.add(budgetId);
+      return;
+    }
+    netFunds.set(budgetId, (netFunds.get(budgetId) ?? 0) + (rawDelta > 0 ? converted : -converted));
+  };
+
+  for (const tx of funding) {
+    const rawAmount = Math.abs(Number(tx.amount) || 0);
+    if (rawAmount <= 0) continue;
+
+    if (tx.type === "income") {
+      const budgetId = resolveAlertBudgetId(tx.budgetId);
+      if (budgetId === DEFAULT_MONTHLY_BUDGET_ID) continue;
+      if (!appliesToPeriod(budgetId, tx.date)) continue;
+      hasAssignedIncome.add(budgetId);
+      applyDelta(budgetId, rawAmount, tx);
+    } else if (tx.type === "transfer" && linkedBudgetOf && typeof tx.accountId === "string" && typeof tx.toAccountId === "string") {
+      const from = linkedBudgetOf(tx.accountId);
+      const to = linkedBudgetOf(tx.toAccountId);
+      if (from === to) continue;
+      if (to) applyDelta(to, rawAmount, tx);
+      if (from) applyDelta(from, -rawAmount, tx);
+    }
+  }
+
+  const funded = new Set<string>();
+  for (const budgetId of hasAssignedIncome) {
+    // If a currency rate is missing and there are no outflows, net funds are still strictly positive.
+    if (unknownRate.has(budgetId)) {
+      if (!hasOutflow.has(budgetId)) funded.add(budgetId);
+      continue;
+    }
+    if (Math.round((netFunds.get(budgetId) ?? 0) * 100) / 100 > 0) funded.add(budgetId);
   }
   return funded;
 }

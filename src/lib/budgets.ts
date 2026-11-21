@@ -94,30 +94,68 @@ export const linkedAccountConflicts = (
 }
 
 /**
- * Budgets paid by their own funds in the period, so their spending does not count against the
- * month's income: an event budget with any funding inflow (assigned income or a transfer into a
- * linked account), a monthly budget with one in that month. Unknown budgets never qualify.
+ * Budgets paid by their own dedicated income in the period, so their spending does not count
+ * against the month's regular income: a budget qualifies only when it has positive assigned
+ * income (`type === 'income'` with `budgetId === budget.id` — any time for event budgets, in
+ * the calendar month for monthly budgets) AND its net funds in that period (assigned income
+ * plus transfers into its linked accounts minus transfers out) remain strictly positive.
+ *
+ * Transfers alone (moving regular monthly salary from an unlinked account into a linked budget
+ * account) fund the budget card ("Fondos") but do NOT make it self-funded, because that money
+ * remained in `monthlyIncome` and excluding its expenses would erase cash outflow.
+ * Unknown budgets (`kindOf` returns undefined) never qualify.
  */
 export const selfFundedBudgetIds = (
-  transactions: Iterable<Pick<BudgetExpenseTransaction, 'type' | 'amount' | 'budgetId' | 'date' | 'accountId' | 'toAccountId'>>,
+  transactions: Iterable<Pick<BudgetExpenseTransaction, 'type' | 'amount' | 'budgetId' | 'date' | 'accountId' | 'toAccountId'> & { currency?: string }>,
   period: {
     year: number
     month: number
     kindOf: (budgetId: string) => OperatingBudgetKind | undefined
     linkedBudgetOf?: LinkedBudgetLookup
+    convert?: BudgetCurrencyConverter
   }
 ): Set<string> => {
-  const funded = new Set<string>()
+  const hasAssignedIncome = new Set<string>()
+  const netFunds = new Map<string, number>()
+
+  const appliesToPeriod = (kind: OperatingBudgetKind | undefined, rawDate: Date | string): boolean => {
+    if (kind === 'event') return true
+    if (kind !== 'monthly') return false
+    const date = rawDate instanceof Date ? rawDate : new Date(rawDate)
+    return !Number.isNaN(date.getTime()) && date.getFullYear() === period.year && date.getMonth() === period.month
+  }
+
+  const addDelta = (budgetId: string, delta: number, rawDate: Date | string) => {
+    if (budgetId === DEFAULT_MONTHLY_BUDGET_ID || delta === 0) return
+    if (!appliesToPeriod(period.kindOf(budgetId), rawDate)) return
+    netFunds.set(budgetId, (netFunds.get(budgetId) ?? 0) + delta)
+  }
+
   for (const t of transactions) {
-    // Funding inflows: assigned income, or a transfer into a budget's linked account.
-    const linkedTo = t.type === 'transfer' && t.toAccountId && period.linkedBudgetOf ? period.linkedBudgetOf(t.toAccountId) : null
-    const budgetId = t.type === 'income' ? resolveBudgetId(t.budgetId)
-      : linkedTo && transferFundsDelta(t, linkedTo, period.linkedBudgetOf!) > 0 ? linkedTo
-      : DEFAULT_MONTHLY_BUDGET_ID
-    if (budgetId === DEFAULT_MONTHLY_BUDGET_ID || funded.has(budgetId)) continue
-    const kind = period.kindOf(budgetId)
-    const inPeriod = t.date.getFullYear() === period.year && t.date.getMonth() === period.month
-    if (kind === 'event' || (kind === 'monthly' && inPeriod)) funded.add(budgetId)
+    if (t.type !== 'income' && t.type !== 'transfer') continue
+    const rawAmount = Math.abs(Number(t.amount) || 0)
+    if (rawAmount <= 0) continue
+
+    if (t.type === 'income') {
+      const budgetId = resolveBudgetId(t.budgetId)
+      if (budgetId === DEFAULT_MONTHLY_BUDGET_ID) continue
+      if (!appliesToPeriod(period.kindOf(budgetId), t.date)) continue
+      const value = period.convert && t.currency ? period.convert(rawAmount, t.currency) : rawAmount
+      hasAssignedIncome.add(budgetId)
+      netFunds.set(budgetId, (netFunds.get(budgetId) ?? 0) + value)
+    } else if (period.linkedBudgetOf && t.accountId && t.toAccountId) {
+      const from = period.linkedBudgetOf(t.accountId)
+      const to = period.linkedBudgetOf(t.toAccountId)
+      if (from === to) continue
+      const value = period.convert && t.currency ? period.convert(rawAmount, t.currency) : rawAmount
+      if (to) addDelta(to, value, t.date)
+      if (from) addDelta(from, -value, t.date)
+    }
+  }
+
+  const funded = new Set<string>()
+  for (const budgetId of hasAssignedIncome) {
+    if (Math.round((netFunds.get(budgetId) ?? 0) * 100) / 100 > 0) funded.add(budgetId)
   }
   return funded
 }

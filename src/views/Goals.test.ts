@@ -260,6 +260,7 @@ test('saving a budget that takes a linked account removes the link from its prev
     openMoveSheet: () => undefined,
     isReservedBudgetName,
     track: () => undefined,
+    accountsStore: { getAccountById: () => undefined },
     goalsStore: {
       operatingBudgets: [] as unknown[],
       async createOperatingBudget(draft: Record<string, unknown>, options: unknown) { created.push([draft, options]); return { id: 'toro', ...draft, archived: false } },
@@ -270,7 +271,7 @@ test('saving a budget that takes a linked account removes the link from its prev
   const run = new Function('ctx', `const {
     editingOperatingBudget, budgetNameInput, budgetKindInput, budgetCapCurrencyInput,
     budgetTotalLimitInput, budgetStartDateInput, budgetEndDateInput, budgetCategoryCapInputs,
-    budgetManagementError, savingOperatingBudget, showBudgetModal, goalsStore,
+    budgetManagementError, savingOperatingBudget, showBudgetModal, goalsStore, accountsStore,
     budgetLinkConflicts, budgetLinkedAccountIds, linkableOperatingBudgets, openMoveSheet,
     isReservedBudgetName, track
   } = ctx;
@@ -306,6 +307,7 @@ test('the budget form rejects the name reserved for the default monthly budget, 
       linkableOperatingBudgets: { value: [] }, openMoveSheet: () => undefined,
       isReservedBudgetName,
       track: () => undefined,
+      accountsStore: { getAccountById: () => undefined },
       goalsStore: {
         operatingBudgets: [] as unknown[],
         async createOperatingBudget(draft: { name: string }) { writes.push(`create:${draft.name}`); return { id: 'b', ...draft, archived: false } },
@@ -316,7 +318,7 @@ test('the budget form rejects the name reserved for the default monthly budget, 
     await new Function('ctx', `const {
       editingOperatingBudget, budgetNameInput, budgetKindInput, budgetCapCurrencyInput,
       budgetTotalLimitInput, budgetStartDateInput, budgetEndDateInput, budgetCategoryCapInputs,
-      budgetManagementError, savingOperatingBudget, showBudgetModal, goalsStore,
+      budgetManagementError, savingOperatingBudget, showBudgetModal, goalsStore, accountsStore,
       budgetLinkConflicts, budgetLinkedAccountIds, linkableOperatingBudgets, openMoveSheet,
       isReservedBudgetName, track
     } = ctx;
@@ -425,9 +427,9 @@ test('moving existing movements uses budget-only updates and keeps failures sele
   assert.equal(closed, 1)
 })
 
-test('bridge and pocket accounts cannot be linked, and the contribution lock is announced', () => {
+test('bridge, pocket and credit accounts cannot be linked, and the contribution lock is announced', () => {
   assert.match(goalsView, /v-for="acc in linkableAccounts"/)
-  assert.match(goalsView, /accountsStore\.accounts\.filter\(account => !account\.mirror && !isPocketRelatedAccount\(account\)\)/)
+  assert.match(goalsView, /accountsStore\.accounts\.filter\(account =>\s*!account\.mirror && !isPocketRelatedAccount\(account\) && account\.type !== 'credit'\)/)
   assert.match(goalsView, /:aria-describedby="contributeLinkedBudget \? 'contribute-budget-lock' : undefined"/)
   assert.match(goalsView, /id="contribute-budget-lock"/)
 })

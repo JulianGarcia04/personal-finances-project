@@ -419,8 +419,13 @@ test("transfers move a budget's funds by the linked accounts they touch", () => 
   // Without links only assigned income counts, as before.
   assert.equal(scopeFundsTotal(funding, { id: "casa", kind: "event" }, OCTOBER, COP_OPTIONS), 50);
   const kindOf = () => "monthly" as const;
-  assert.deepEqual([...selfFundedBudgetIds([transfer("bank", "cash-viaje", 10)], OCTOBER, COP_OPTIONS, kindOf, linkedBudgetOf)], ["viaje"]);
+  // S7: transfer alone from an unlinked account never makes a budget self-funded (would erase cash outflow).
+  assert.deepEqual([...selfFundedBudgetIds([transfer("bank", "cash-viaje", 10)], OCTOBER, COP_OPTIONS, kindOf, linkedBudgetOf)], []);
   assert.deepEqual([...selfFundedBudgetIds([transfer("cash-viaje", "bank", 10)], OCTOBER, COP_OPTIONS, kindOf, linkedBudgetOf)], []);
+  // Assigned income makes it self-funded only while net funds stay strictly positive.
+  assert.deepEqual([...selfFundedBudgetIds([income(100, { budgetId: "viaje" })], OCTOBER, COP_OPTIONS, kindOf, linkedBudgetOf)], ["viaje"]);
+  assert.deepEqual([...selfFundedBudgetIds([income(100, { budgetId: "viaje" }), transfer("cash-viaje", "bank", 100)], OCTOBER, COP_OPTIONS, kindOf, linkedBudgetOf)], []);
+  assert.deepEqual([...selfFundedBudgetIds([income(100, { budgetId: "viaje" }), transfer("cash-viaje", "bank", 150)], OCTOBER, COP_OPTIONS, kindOf, linkedBudgetOf)], []);
 
   // A transfer write re-checks the budgets it touches.
   const scope = (before?: Record<string, unknown>, after?: Record<string, unknown>) =>

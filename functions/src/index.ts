@@ -406,6 +406,11 @@ export const notifyBudgetThreshold = onDocumentWritten(
       : {};
     const month = zonedYearMonth(new Date(event.time), timeZone);
     const accountsSnap = await db.collection("accounts").where("workspaceId", "==", workspaceId).get();
+    const creditAccountIds = new Set(
+      accountsSnap.docs.filter((d) => d.get("type") === "credit").map((d) => d.id)
+    );
+    const effectiveLinkedBudgetOf = (accountId: string) =>
+      creditAccountIds.has(accountId) ? null : linkedBudgetOf(accountId);
     const billing = cardBillingByAccount(accountsSnap.docs.map((d) => ({ ...d.data(), id: d.id })), ALERT_CARD_BASIS);
     const billingFor = (accountId?: string | null) => (accountId ? billing.get(accountId) ?? null : null);
 
@@ -418,7 +423,7 @@ export const notifyBudgetThreshold = onDocumentWritten(
       : 0;
     const scopeTotalApplies = budgetScope !== null && budgetScope.totalLimit !== null &&
       countsTowardScopeTotal(expense, budgetScope.scope, month, { timeZone, billingFor });
-    const incomeChange = incomeChangeAlertScope(before, after, month, { timeZone }, linkedBudgetOf);
+    const incomeChange = incomeChangeAlertScope(before, after, month, { timeZone }, effectiveLinkedBudgetOf);
     const incomeApplies = countsTowardMonthlySpend(expense, month, { timeZone, billingFor }) || incomeChange?.monthlyIncome === true;
     // Additional budgets' spending vs the income assigned to them (their funds): the expense's
     // budget, and every budget whose assigned income an income write changed.
@@ -468,7 +473,7 @@ export const notifyBudgetThreshold = onDocumentWritten(
     const incomes = incomeSnap.docs.map((d) => d.data());
     const fundingMovements = [...incomes, ...transferSnap.docs.map((d) => d.data())];
     for (const fundsScope of fundsScopes) {
-      const funds = scopeFundsTotal(fundingMovements, fundsScope.scope, month, spendOptions, linkedBudgetOf);
+      const funds = scopeFundsTotal(fundingMovements, fundsScope.scope, month, spendOptions, effectiveLinkedBudgetOf);
       const spent = scopeTotalSpend(transactions, fundsScope.scope, month, spendOptions);
       if (funds === null || spent === null) {
         console.warn(`Funds alert for workspace ${workspaceId} skipped: manual rate missing.`);
@@ -480,7 +485,7 @@ export const notifyBudgetThreshold = onDocumentWritten(
       const realIncome = monthlyIncomeTotal(incomes, month, spendOptions);
       const budget = incomeReference(workspace.budgetIncome, realIncome);
       const spent = monthlyExpenseTotal(transactions, month, spendOptions,
-        selfFundedBudgetIds(fundingMovements, month, { timeZone }, kindOf, linkedBudgetOf));
+        selfFundedBudgetIds(fundingMovements, month, spendOptions, kindOf, effectiveLinkedBudgetOf));
       if (budget === null || spent === null) {
         console.warn(`Income alert for workspace ${workspaceId} skipped: no income to compare or manual rate missing.`);
       } else {

@@ -408,7 +408,7 @@ export interface SummaryOptions {
    * extra rows outside the period that event budgets need (their all-time income, expenses and
    * transfers). Extra rows never feed the existing totals.
    */
-  budgetBreakdown?: { budgets: SummaryBudget[]; extraRows?: SummaryTransaction[] };
+  budgetBreakdown?: { budgets: SummaryBudget[]; extraRows?: SummaryTransaction[]; creditAccountIds?: ReadonlySet<string> };
 }
 
 const categoryName = (id: string | null | undefined, names: NameMaps) =>
@@ -639,14 +639,16 @@ function budgetBreakdown(
   for (const budget of active) {
     if (!Array.isArray(budget.linkedAccountIds)) continue;
     for (const accountId of budget.linkedAccountIds) {
-      if (typeof accountId === "string" && !links.has(accountId)) links.set(accountId, budget.id);
+      if (typeof accountId === "string" && !input.creditAccountIds?.has(accountId) && !links.has(accountId)) {
+        links.set(accountId, budget.id);
+      }
     }
   }
   const linkedBudgetOf: LinkedBudgetLookup = accountId => links.get(accountId) ?? null;
 
   const monthlyIncome = sumKnown(months.map(month => monthlyIncomeTotal(movements, month, spendOptions)));
   const monthlyExpense = sumKnown(months.map(month => monthlyExpenseTotal(movements, month, spendOptions,
-    selfFundedBudgetIds(funding, month, { timeZone }, kindOf, linkedBudgetOf))));
+    selfFundedBudgetIds(funding, month, spendOptions, kindOf, linkedBudgetOf))));
 
   const budgets: BudgetBreakdownRow[] = [];
   let fundsRateMissing = false;

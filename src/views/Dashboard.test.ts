@@ -296,7 +296,8 @@ const s9MonthFlow = (transactions: BudgetExpenseTransaction[]) => {
     budgetScopedMonthFilter,
     transactionsStore,
     budgetKinds: { value: new Map(s9OperatingBudgets.map(({ budget }) => [budget.id, budget.kind])) },
-    linkedBudgetOfAccount: () => null
+    linkedBudgetOfAccount: () => null,
+    convert: (amount: number) => amount
   })
   return evaluateComputed<never>('getMoMData', {
     alignedMonthPeriods,

@@ -621,7 +621,7 @@
               </h4>
               <p class="text-[10px] text-text-secondary mt-1">Los movimientos entran a este presupuesto cuando se lo asignas o cuando salen de una cuenta ligada. Todos los movimientos de estas cuentas pertenecen a este presupuesto y no se pueden pasar a otro.</p>
             </div>
-            <p v-if="linkableAccounts.length === 0" class="text-[11px] text-text-secondary">No tienes cuentas que se puedan ligar. Las cuentas con bolsillos y las cuentas puente no se ligan a un presupuesto.</p>
+            <p v-if="linkableAccounts.length === 0" class="text-[11px] text-text-secondary">No tienes cuentas que se puedan ligar. Las tarjetas de crédito, las cuentas con bolsillos y las cuentas puente no se ligan a un presupuesto.</p>
             <div v-else class="flex flex-wrap gap-2">
               <button
                 v-for="acc in linkableAccounts"
@@ -957,10 +957,11 @@ const baselineAddedCategoryIds = ref<string[]>([])
 const budgetManagementError = ref('')
 const savingOperatingBudget = ref(false)
 const budgetLinkedAccountIds = ref<string[]>([])
-// Bridge accounts replicate expenses into another workspace and pocket movements go through their
-// own flow, so neither can enforce a linked budget.
+// Bridge accounts replicate expenses into another workspace, pocket movements go through their
+// own flow, and credit cards are liabilities (repayments are debt settlement, not budget funds).
 const linkableAccounts = computed(() =>
-  accountsStore.accounts.filter(account => !account.mirror && !isPocketRelatedAccount(account)))
+  accountsStore.accounts.filter(account =>
+    !account.mirror && !isPocketRelatedAccount(account) && account.type !== 'credit'))
 const linkableOperatingBudgets = computed(() => goalsStore.operatingBudgets.map(({ budget }) => budget))
 const budgetLinkConflicts = computed(() => linkedAccountConflicts(
   linkableOperatingBudgets.value,
@@ -1030,8 +1031,11 @@ const activeOperatingBudgets = computed(() =>
   goalsStore.operatingBudgets.filter(entry => !entry.budget.archived)
 )
 // Budget each account is linked to: transfers into or out of linked accounts move funds.
-const linkedBudgetOfAccount = (accountId: string) =>
-  linkedBudgetForAccount(linkableOperatingBudgets.value, accountId)?.id ?? null
+// Credit cards never count as linked funding accounts (card repayments are debt settlement).
+const linkedBudgetOfAccount = (accountId: string) => {
+  if (accountsStore.getAccountById(accountId)?.type === 'credit') return null
+  return linkedBudgetForAccount(linkableOperatingBudgets.value, accountId)?.id ?? null
+}
 
 // Card view of each active budget: spending vs its funds (assigned income and transfers into its
 // linked accounts) and vs its total cap.
@@ -1103,7 +1107,8 @@ const realMonthTotals = computed(() => {
   // own income is paid by that income, so neither counts against the month.
   const scoped = budgetScopedMonthFilter(transactionsStore.transactions, {
     year: now.getFullYear(), month: now.getMonth(), kindOf: budgetId => kinds.get(budgetId),
-    linkedBudgetOf: linkedBudgetOfAccount
+    linkedBudgetOf: linkedBudgetOfAccount,
+    convert: (amount, currency) => goalsStore.convertToPrimary(amount, currency, userCurrency.value)
   })
   transactionsStore.transactions.forEach(t => {
     if (t.type === 'income') {
@@ -1412,7 +1417,9 @@ const handleSaveOperatingBudget = async () => {
   const caps = categoryCapDraft()
   // Accounts that move here leave their previous budget in the same write as this one.
   const movedLinks = budgetLinkConflicts.value
-  const linkedAccountIds = [...budgetLinkedAccountIds.value]
+  const linkedAccountIds = budgetLinkedAccountIds.value.filter(
+    accountId => accountsStore.getAccountById(accountId)?.type !== 'credit'
+  )
   const releases = [...new Set(movedLinks.map(conflict => conflict.budgetId))].flatMap(ownerId => {
     const owner = linkableOperatingBudgets.value.find(budget => budget.id === ownerId)
     if (!owner) return []

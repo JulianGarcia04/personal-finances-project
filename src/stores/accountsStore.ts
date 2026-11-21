@@ -322,6 +322,9 @@ export const useAccountsStore = defineStore('accounts', {
         const accountSnap = await getDoc(accountRef)
         if (!accountSnap.exists()) throw new Error('La cuenta no existe')
         const stored = accountSnap.data() as Account
+        if (stored.linkedBudgetId && updates.type === 'credit') {
+          throw new Error('Esta cuenta está ligada a un presupuesto. Quítala del presupuesto antes de cambiarla a tarjeta de crédito.')
+        }
 
         if (normalizedCurrency !== stored.currency) {
           const immediateReason = getAccountCurrencyLockReason(stored, false)
@@ -475,6 +478,9 @@ export const useAccountsStore = defineStore('accounts', {
       // por cobrar sin contrapartida y sin forma de liquidarlo desde la UI.
       if (account?.mirror) {
         throw new Error('Esta cuenta tiene un espejo activo. Liquida el saldo pendiente y quita el espejo antes de borrarla.')
+      }
+      if (account.linkedBudgetId) {
+        throw new Error('Esta cuenta está ligada a un presupuesto. Quítala del presupuesto antes de eliminarla.')
       }
 
       if (account.parentAccountId) {

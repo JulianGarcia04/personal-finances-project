@@ -1078,6 +1078,10 @@ const cycleChargeAmount = (account: Account) => {
 
 const handleDelete = async (id: string, name: string) => {
   const account = accountsStore.getAccountById(id)
+  if (account?.linkedBudgetId) {
+    alert(`La cuenta "${name}" está ligada a un presupuesto. Quítala del presupuesto en Metas y Presupuestos antes de eliminarla.`)
+    return
+  }
   const warning = account && isPocketAccount(account)
     ? `Solo se puede eliminar el bolsillo "${name}" si tiene saldo cero y no conserva movimientos; el historial no se borra.`
     : account?.childAccountIds?.length

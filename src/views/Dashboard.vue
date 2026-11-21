@@ -713,9 +713,12 @@ const setFlowView = (view: FlowView) => {
 }
 
 // Budget each account is linked to: transfers into or out of linked accounts move funds.
+// Credit cards never count as linked funding accounts (card repayments are debt settlement).
 const linkableOperatingBudgets = computed(() => goalsStore.operatingBudgets.map(({ budget }) => budget))
-const linkedBudgetOfAccount = (accountId: string) =>
-  linkedBudgetForAccount(linkableOperatingBudgets.value, accountId)?.id ?? null
+const linkedBudgetOfAccount = (accountId: string) => {
+  if (accountsStore.getAccountById(accountId)?.type === 'credit') return null
+  return linkedBudgetForAccount(linkableOperatingBudgets.value, accountId)?.id ?? null
+}
 const budgetKinds = computed(() => new Map(goalsStore.operatingBudgets.map(({ budget }) => [budget.id, budget.kind])))
 // Same rule as the Goals planner ("Ingreso real del mes"), judged per calendar month.
 const budgetMonthFilter = (period: { year: number; month: number }) =>
@@ -723,7 +726,8 @@ const budgetMonthFilter = (period: { year: number; month: number }) =>
     year: period.year,
     month: period.month,
     kindOf: budgetId => budgetKinds.value.get(budgetId),
-    linkedBudgetOf: linkedBudgetOfAccount
+    linkedBudgetOf: linkedBudgetOfAccount,
+    convert
   })
 
 // Ingresos del mes actual

@@ -369,6 +369,26 @@ test("byBudget counts a transfer from an unlinked account into a linked account 
   assert.equal(s.totals.income, 6_000_000);
 });
 
+test("byBudget never erases monthly expenses when a budget is funded only by transfers from unlinked accounts, and ignores credit cards in linkedAccountIds", () => {
+  const cardBudget = { id: "cardB", name: "Tarjeta", kind: "monthly", archived: false, linkedAccountIds: ["visaCard"] };
+  const rows = [
+    tx("salary", "income", 5_000_000, "2026-10-01T17:00:00Z", { categoryId: "salary" }),
+    tx("move", "transfer", 1_000_000, "2026-10-02T17:00:00Z", { accountId: "bank", toAccountId: "ventasAcct" }),
+    tx("spend", "expense", -1_000_000, "2026-10-03T17:00:00Z", { categoryId: "fun", budgetId: "ventas" }),
+    tx("repay", "transfer", 500_000, "2026-10-04T17:00:00Z", { accountId: "bank", toAccountId: "visaCard" }),
+    tx("cardSpend", "expense", -500_000, "2026-10-05T17:00:00Z", { categoryId: "food", budgetId: "cardB" })
+  ];
+  const s = runBudgets(rows, { preset: "this_month" }, {
+    budgetBreakdown: { budgets: [VENTAS, cardBudget], creditAccountIds: new Set(["visaCard"]) }
+  });
+  assert.equal(s.byBudget?.monthlyIncome, 5_000_000);
+  assert.equal(s.byBudget?.monthlyExpense, 1_500_000);
+  // Card repayment transfer must never show up as Fondos for cardBudget.
+  assert.deepEqual(s.byBudget?.budgets.find(b => b.id === "cardB"), {
+    id: "cardB", name: "Tarjeta", kind: "monthly", funds: null, spent: 500_000, available: null
+  });
+});
+
 test("byBudget uses all-time rows of event budgets and lists only active budgets with movements", () => {
   // Income assigned last month still funds the event budget and makes it self-funded this month.
   const older = [tx("saleSep", "income", 1_000_000, "2026-09-02T17:00:00Z", { budgetId: "ventas" })];

@@ -256,15 +256,15 @@ test('a monthly budget is self-funded only in months with assigned income; an ev
   const september = new Date(2026, 8, 10, 12)
   const october = new Date(2026, 9, 10, 12)
   const funded = selfFundedBudgetIds([
-    { type: 'income', budgetId: 'ventas-casa', date: september },
-    { type: 'income', budgetId: 'hogar', date: september },
-    { type: 'income', budgetId: DEFAULT_MONTHLY_BUDGET_ID, date: october },
-    { type: 'income', date: october },
-    { type: 'income', budgetId: 'gone', date: october },
-    { type: 'expense', budgetId: 'hogar', date: october }
+    { type: 'income', amount: 1000, budgetId: 'ventas-casa', date: september },
+    { type: 'income', amount: 1000, budgetId: 'hogar', date: september },
+    { type: 'income', amount: 1000, budgetId: DEFAULT_MONTHLY_BUDGET_ID, date: october },
+    { type: 'income', amount: 1000, date: october },
+    { type: 'income', amount: 1000, budgetId: 'gone', date: october },
+    { type: 'expense', amount: -500, budgetId: 'hogar', date: october }
   ], { year: 2026, month: 9, kindOf })
   assert.deepEqual([...funded], ['ventas-casa'])
-  assert.deepEqual([...selfFundedBudgetIds([{ type: 'income', budgetId: 'hogar', date: october }], { year: 2026, month: 9, kindOf })], ['hogar'])
+  assert.deepEqual([...selfFundedBudgetIds([{ type: 'income', amount: 1000, budgetId: 'hogar', date: october }], { year: 2026, month: 9, kindOf })], ['hogar'])
 })
 
 test('a movement of a linked account can only go to that account\'s budget', () => {
@@ -360,15 +360,23 @@ test('funds count their inflows, so a budget that only had money taken out has n
     { total: -200, count: 2, inflows: 1 })
 })
 
-test('a transfer into a linked account makes its budget self-funded in that period', () => {
+test('S7: a transfer from an unlinked account funds the card but never makes a budget self-funded, and draining net funds removes self-funded status', () => {
   const kindOf = () => 'monthly' as const
   const linkedBudgetOf = (accountId: string) => accountId === 'cash-casa' ? 'casa' : null
-  const transfers = [{ type: 'transfer', accountId: 'bank', toAccountId: 'cash-casa', amount: 100, date: new Date(2026, 9, 5, 12) }]
-  assert.deepEqual([...selfFundedBudgetIds(transfers, { year: 2026, month: 9, kindOf, linkedBudgetOf })], ['casa'])
-  assert.deepEqual([...selfFundedBudgetIds(transfers, { year: 2026, month: 8, kindOf, linkedBudgetOf })], [])
-  // A transfer out of the budget is not funding.
-  const out = [{ type: 'transfer', accountId: 'cash-casa', toAccountId: 'bank', amount: 100, date: new Date(2026, 9, 5, 12) }]
+  const october = new Date(2026, 9, 5, 12)
+  // Transferring regular monthly income into a linked account must NOT erase expenses from monthly cash flow.
+  const transfersOnly = [{ type: 'transfer', accountId: 'bank', toAccountId: 'cash-casa', amount: 1000, date: october, currency: 'COP' }]
+  assert.deepEqual([...selfFundedBudgetIds(transfersOnly, { year: 2026, month: 9, kindOf, linkedBudgetOf })], [])
+  // A transfer out of the budget is not funding either.
+  const out = [{ type: 'transfer', accountId: 'cash-casa', toAccountId: 'bank', amount: 1000, date: october, currency: 'COP' }]
   assert.deepEqual([...selfFundedBudgetIds(out, { year: 2026, month: 9, kindOf, linkedBudgetOf })], [])
+  // Assigned income makes it self-funded while net funds stay strictly positive.
+  const assignedIncome = { type: 'income', accountId: 'cash-casa', budgetId: 'casa', amount: 1000, date: october, currency: 'COP' }
+  assert.deepEqual([...selfFundedBudgetIds([assignedIncome], { year: 2026, month: 9, kindOf, linkedBudgetOf })], ['casa'])
+  assert.deepEqual([...selfFundedBudgetIds([assignedIncome, { type: 'transfer', accountId: 'cash-casa', toAccountId: 'bank', amount: 400, date: october, currency: 'COP' }], { year: 2026, month: 9, kindOf, linkedBudgetOf })], ['casa'])
+  // Draining net funds to 0 or negative removes self-funded status so deficit spending is never hidden.
+  assert.deepEqual([...selfFundedBudgetIds([assignedIncome, out[0]], { year: 2026, month: 9, kindOf, linkedBudgetOf })], [])
+  assert.deepEqual([...selfFundedBudgetIds([assignedIncome, { type: 'transfer', accountId: 'cash-casa', toAccountId: 'bank', amount: 1500, date: october, currency: 'COP' }], { year: 2026, month: 9, kindOf, linkedBudgetOf })], [])
 })
 
 

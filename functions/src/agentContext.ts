@@ -479,10 +479,16 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
   // for: all-time transactions of active event budgets and assigned income of archived ones
   // (budgetId in, chunks of 30), and the workspace's transfers when an active event budget links accounts.
   const loadBudgetBreakdown = async (): Promise<NonNullable<SummaryOptions['budgetBreakdown']>> => {
-    const snapshot = await db.collection('budgets').where('workspaceId', '==', workspaceId).get();
+    const [snapshot, accounts] = await Promise.all([
+      db.collection('budgets').where('workspaceId', '==', workspaceId).get(),
+      loadAccounts()
+    ]);
+    const creditAccountIds = new Set(
+      accounts.filter(docSnap => docSnap.data().type === 'credit').map(docSnap => docSnap.id)
+    );
     const budgets: SummaryBudget[] = snapshot.docs.map(docSnap => ({ ...docSnap.data(), id: docSnap.id }));
     const plan = budgetBreakdownQueries(budgets);
-    if (plan.eventIds.length === 0 && plan.archivedEventIds.length === 0) return { budgets };
+    if (plan.eventIds.length === 0 && plan.archivedEventIds.length === 0) return { budgets, creditAccountIds };
     const transactions = db.collection('transactions').where('workspaceId', '==', workspaceId);
     const chunksOf = (ids: string[]) =>
       Array.from({ length: Math.ceil(ids.length / 30) }, (_, index) => ids.slice(index * 30, index * 30 + 30));
@@ -491,7 +497,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
       ...chunksOf(plan.archivedEventIds).map(chunk => transactions.where('type', '==', 'income').where('budgetId', 'in', chunk).get()),
       ...(plan.transfers ? [transactions.where('type', '==', 'transfer').get()] : [])
     ]);
-    return { budgets, extraRows: toSummaryRows(snapshots.flatMap(result => result.docs)) };
+    return { budgets, extraRows: toSummaryRows(snapshots.flatMap(result => result.docs)), creditAccountIds };
   };
 
   define(

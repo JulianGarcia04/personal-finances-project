@@ -148,11 +148,16 @@ service cloud.firestore {
         request.resource.data.balance == resource.data.balance;
     }
 
-    // A budget link (S2) lives on root accounts that are neither bridges nor pocket-related, and
-    // points to an active budget of the same workspace that lists the account.
+    // Root accounts that are neither bridges nor pocket-related (used by mirrors and budgets).
     function isLinkableAccountShape(data) {
       return (!('mirror' in data) || data.mirror == null) && hasNoParent(data) &&
         validChildIds(childIds(data)) && childIds(data).size() == 0;
+    }
+
+    // A budget link (S2, S6) lives on root non-credit accounts that are neither bridges nor
+    // pocket-related, and points to an active budget of the same workspace that lists the account.
+    function isBudgetLinkableAccountShape(data) {
+      return isLinkableAccountShape(data) && data.get('type', null) != 'credit';
     }
 
     function isLinkedBudgetListingAccount(accountId, budgetId, workspaceId) {
@@ -167,7 +172,7 @@ service cloud.firestore {
     function isValidAccountBudgetLink(accountId, data) {
       return data.linkedBudgetId is string && data.linkedBudgetId.size() > 0 && data.linkedBudgetId.size() <= 1500 &&
         data.linkedBudgetId.matches('^[^/]+$') && !(data.linkedBudgetId in ['.', '..', 'default-monthly']) &&
-        isLinkableAccountShape(data) &&
+        isBudgetLinkableAccountShape(data) &&
         isLinkedBudgetListingAccount(accountId, data.linkedBudgetId, data.workspaceId);
     }
 
@@ -177,7 +182,7 @@ service cloud.firestore {
       return !('linkedBudgetId' in request.resource.data) ||
         (changed.hasAny(['linkedBudgetId', 'workspaceId'])
           ? isValidAccountBudgetLink(accountId, request.resource.data)
-          : isLinkableAccountShape(request.resource.data));
+          : isBudgetLinkableAccountShape(request.resource.data));
     }
 
     function validAccountMirror(data) {
@@ -683,7 +688,8 @@ service cloud.firestore {
           : validPocketUpdate(accountId));
       allow delete: if isWorkspaceMember(resource.data.workspaceId) &&
         (hasNoParent(resource.data)
-          ? validChildIds(childIds(resource.data)) && childIds(resource.data).size() == 0
+          ? validChildIds(childIds(resource.data)) && childIds(resource.data).size() == 0 &&
+            resource.data.get('linkedBudgetId', null) == null
           : validPocketDelete(accountId));
     }
 

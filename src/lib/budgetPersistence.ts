@@ -77,9 +77,9 @@ export interface BudgetLinkOptions {
   releases?: readonly BudgetLinkRelease[]
 }
 
-// Only root, non-bridge, childless accounts can carry a budget link (the rules reject the rest).
+// Only root, non-credit, non-bridge, childless accounts can carry a budget link (the rules reject the rest).
 const isLinkableAccount = (data: DocumentData, workspaceId: string): boolean =>
-  data.workspaceId === workspaceId && data.mirror == null && data.parentAccountId == null &&
+  data.workspaceId === workspaceId && data.type !== 'credit' && data.mirror == null && data.parentAccountId == null &&
   (!Array.isArray(data.childAccountIds) || data.childAccountIds.length === 0)
 
 const linkedAccountsWire = (ids: readonly string[]) => ids.length ? [...ids] : deleteField()
@@ -118,6 +118,9 @@ export const createBudgetPersistence = (db: Firestore, workspaceId: string) => {
     releases: readonly BudgetLinkRelease[] = []
   ) => {
     for (const account of await readAccounts(added)) {
+      if (account.data.type === 'credit') {
+        throw new Error('Las tarjetas de crédito no se pueden ligar a un presupuesto.')
+      }
       if (isLinkableAccount(account.data, workspaceId)) batch.update(account.ref, { linkedBudgetId: budgetId })
     }
     for (const account of await readAccounts(removed)) {
