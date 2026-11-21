@@ -650,6 +650,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { Account, AccountType } from '@/types'
 import { AccountSchema } from '@/schemas'
 import { getNextOccurrence, daysUntil, expenseAmountForCycle } from '@/lib/creditCycle'
+import { buildCardStatementLedger } from '@/lib/cardStatements'
 import { toLocalDateKey } from '@/lib/dates'
 import { splitMoney } from '@/lib/money'
 import { getAccountCurrencyLockReason } from '@/lib/accountRules'
@@ -706,7 +707,11 @@ const newAcc = ref<{
 })
 
 onMounted(async () => {
-  await Promise.all([accountsStore.fetchAccounts(), workspacesStore.fetchMyWorkspaces()])
+  await Promise.all([
+    accountsStore.fetchAccounts(),
+    workspacesStore.fetchMyWorkspaces(),
+    transactionsStore.fetchTransactions()
+  ])
 })
 
 const accountGroups = computed(() => groupAccountsByPocket(accountsStore.accounts, authStore.activeWorkspaceId || undefined))
@@ -1067,13 +1072,25 @@ const closingDaysUntil = (account: Account) =>
 const dueDaysUntil = (account: Account) =>
   account.paymentDueDay ? daysUntil(getNextOccurrence(account.paymentDueDay)) : 0
 
-// Total a pagar en el próximo corte: suma las cuotas de este ciclo de facturación
-// para todas las transacciones de la cuenta.
+// Total pendiente por pagar en el próximo corte: usa el mismo ledger de extractos que el Dashboard
+// (descuenta pagos ya hechos a la tarjeta y nunca supera la deuda actual).
 const cycleChargeAmount = (account: Account) => {
   if (!account.statementClosingDay) return 0
-  return transactionsStore.transactions
+  const debt = Math.max(0, -account.balance)
+  if (debt === 0) return 0
+  if (account.paymentDueDay) {
+    const dueDate = getNextOccurrence(account.paymentDueDay)
+    const billing = { statementClosingDay: account.statementClosingDay, paymentDueDay: account.paymentDueDay }
+    return Math.min(
+      buildCardStatementLedger(account, billing, transactionsStore.transactions)
+        .pendingThrough(dueDate.getFullYear() * 12 + dueDate.getMonth()),
+      debt
+    )
+  }
+  const cycleTotal = transactionsStore.transactions
     .filter(t => t.accountId === account.id)
     .reduce((sum, t) => sum + expenseAmountForCycle(t, account.statementClosingDay!), 0)
+  return Math.min(cycleTotal, debt)
 }
 
 const handleDelete = async (id: string, name: string) => {

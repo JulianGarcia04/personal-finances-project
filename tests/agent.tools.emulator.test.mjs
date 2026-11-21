@@ -149,7 +149,7 @@ test('getWorkspaceSettings reports budgets vs actual for the current month', asy
     { categoryId: ids.categories.tech, categoryName: 'Tecnología', limit: 50_000, spent: 100_000, remaining: -50_000, percentUsed: 200, exceeded: true },
     { categoryId: ids.categories.food, categoryName: 'Comida', limit: 300_000, spent: 460_000, remaining: -160_000, percentUsed: 153, exceeded: true }
   ])
-  assert.deepEqual(settings.currentMonth.categoryBudgetTotals, { budget: 350_000, spent: 560_000, percentUsed: 100 })
+  assert.deepEqual(settings.currentMonth.categoryBudgetTotals, { budget: 350_000, spent: 560_000, percentUsed: 160 })
   assert.deepEqual(settings.currentMonth.expenseLimit, { limit: 1_000_000, spent: 560_000, remaining: 440_000, percentUsed: 56, exceeded: false })
   assert.deepEqual(settings.budgetSplit.needs, { percent: 50, amount: 3_000_000 })
   assert.deepEqual(settings.goalAllocations, [{ goalId: ids.goal, goalName: 'Viaje a Japón', amount: 500_000 }])

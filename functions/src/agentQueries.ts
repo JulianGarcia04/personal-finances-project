@@ -2,6 +2,7 @@ import { AgentToolError, buildDateContext, NameMaps } from "./agentTools";
 import { CardBilling, cardBillingOf, ImputationBasis, paymentMonthIndex, YearMonth, zonedDateKey, zonedWallClockToInstant, zonedYearMonth } from "./http";
 import {
   AlertScope,
+  capInReportingCurrency,
   LinkedBudgetLookup,
   monthlyExpenseTotal,
   monthlyIncomeTotal,
@@ -511,8 +512,8 @@ function aggregate(rows: SummaryTransaction[], period: ResolvedPeriod, options: 
       income: round2(income),
       expenses: round2(expenses),
       net: round2(income - expenses),
-      // Dashboard.vue L544-548: 0 without income, never negative.
-      savingsRate: income === 0 ? 0 : Math.round(Math.max(0, ((income - expenses) / income) * 100) * 10) / 10,
+      // Dashboard.vue savingsRate: 0 without income; negative when expenses exceed income.
+      savingsRate: income === 0 ? 0 : Math.round(((income - expenses) / income) * 1000) / 10,
       upcomingInstallments: round2(upcoming)
     },
     groups: groupList,
@@ -702,33 +703,78 @@ export function monthlyAverages(
 // --- Budgets -------------------------------------------------------------------
 
 export interface BudgetStatus {
-  categories: { categoryId: string; categoryName: string; limit: number; spent: number; remaining: number; percentUsed: number; exceeded: boolean }[];
-  totals: { budget: number; spent: number; percentUsed: number };
+  categories: {
+    categoryId: string;
+    categoryName: string;
+    limit: number | null;
+    spent: number;
+    remaining: number | null;
+    percentUsed: number | null;
+    exceeded: boolean;
+  }[];
+  totals: { budget: number | null; spent: number; percentUsed: number | null };
   expenseLimit: { limit: number; spent: number; remaining: number; percentUsed: number; exceeded: boolean } | null;
 }
 
 /**
- * Budget vs actual for a month summary grouped by category. Port of the
- * Dashboard budgetSummary (Dashboard.vue L556-584): per-row percent is
- * spent/limit; the global percent caps each category at its limit.
+ * Budget vs actual for a month summary grouped by category. Aligns with Dashboard
+ * `budgetSummary`: per-row and global percents are uncapped `spent / limit`, caps are
+ * converted from `capCurrency` to `primaryCurrency` via manual FX (disabled when
+ * unconfirmed or rate missing), and `expenseLimit` uses all monthly expenses.
  */
-export function buildBudgetStatus({ categoryBudgets, expenseLimit, summary, names }: {
+export function buildBudgetStatus({
+  categoryBudgets,
+  expenseLimit,
+  summary,
+  allExpensesTotal,
+  capCurrency,
+  primaryCurrency,
+  exchangeRates,
+  names
+}: {
   categoryBudgets: Record<string, number>;
   expenseLimit: number | null | undefined;
   summary: FinancialSummary;
+  allExpensesTotal?: number;
+  capCurrency?: string | null;
+  primaryCurrency?: string;
+  exchangeRates?: Record<string, number>;
   names: NameMaps;
 }): BudgetStatus {
   const spentBy = new Map(summary.groups.map(g => [g.key, g.expenses]));
-  let budget = 0;
+  const convertCap = (rawLimit: number): number | null => {
+    if (capCurrency === undefined) return rawLimit;
+    if (!primaryCurrency) return capCurrency === null ? null : rawLimit;
+    const converted = capInReportingCurrency(rawLimit, capCurrency, primaryCurrency, exchangeRates ?? {});
+    return converted === null ? null : round2(converted);
+  };
+
+  let budgetTotal: number | null = 0;
   let spentTotal = 0;
-  let capped = 0;
+  let positiveLimitSpentTotal = 0;
   const categories = Object.entries(categoryBudgets)
-    .map(([categoryId, rawLimit]) => {
-      const limit = Number(rawLimit) || 0;
+    .map(([categoryId, raw]) => {
+      const parsed = Number(raw);
+      const rawLimit = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+      const limit = convertCap(rawLimit);
       const spent = spentBy.get(categoryId) ?? 0;
-      budget += limit;
       spentTotal += spent;
-      capped += Math.min(spent, limit);
+      if (limit === null) {
+        budgetTotal = null;
+        return {
+          categoryId,
+          categoryName: names.categories.get(categoryId) ?? "Categoría desconocida",
+          limit: null,
+          spent,
+          remaining: null,
+          percentUsed: null,
+          exceeded: false
+        };
+      }
+      if (limit > 0) {
+        if (budgetTotal !== null) budgetTotal += limit;
+        positiveLimitSpentTotal += spent;
+      }
       return {
         categoryId,
         categoryName: names.categories.get(categoryId) ?? "Categoría desconocida",
@@ -736,16 +782,23 @@ export function buildBudgetStatus({ categoryBudgets, expenseLimit, summary, name
         spent,
         remaining: round2(limit - spent),
         percentUsed: limit > 0 ? Math.round((spent / limit) * 100) : 0,
-        exceeded: spent > limit
+        exceeded: limit > 0 && spent > limit
       };
     })
-    .sort((a, b) => b.percentUsed - a.percentUsed);
+    .sort((a, b) => (b.percentUsed ?? -1) - (a.percentUsed ?? -1));
 
   const limit = Number(expenseLimit) || 0;
-  const monthSpent = summary.totals.expenses;
+  const monthSpent = allExpensesTotal ?? summary.totals.expenses;
+  const roundedBudget = budgetTotal === null ? null : round2(budgetTotal);
   return {
     categories,
-    totals: { budget: round2(budget), spent: round2(spentTotal), percentUsed: budget > 0 ? Math.round((capped / budget) * 100) : 0 },
+    totals: {
+      budget: roundedBudget,
+      spent: round2(spentTotal),
+      percentUsed: roundedBudget === null
+        ? null
+        : roundedBudget > 0 ? Math.round((positiveLimitSpentTotal / roundedBudget) * 100) : 0
+    },
     expenseLimit: limit > 0
       ? { limit, spent: monthSpent, remaining: round2(limit - monthSpent), percentUsed: Math.round((monthSpent / limit) * 100), exceeded: monthSpent > limit }
       : null

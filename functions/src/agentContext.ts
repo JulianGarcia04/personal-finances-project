@@ -122,7 +122,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
 
   define(
     'listAccounts',
-    `Obtiene las cuentas del workspace con saldo, moneda, tipo y saldo convertido a ${primaryCurrency} (balanceInPrimary), más totals.netWorth: el patrimonio neto calculado igual que el panel de control (incluye cupo disponible de tarjetas, bolsillos y cuentas puente). Úsalo para saldos, cupos y "¿cuál es mi patrimonio neto?".`,
+    `Obtiene las cuentas del workspace con saldo, moneda, tipo y saldo convertido a ${primaryCurrency} (balanceInPrimary), más totals.netWorth: el patrimonio neto calculado igual que el panel de control (activos menos deuda de tarjetas, bolsillos y cuentas puente; no incluye el cupo disponible de tarjetas). Úsalo para saldos, cupos y "¿cuál es mi patrimonio neto?".`,
     z.object({}),
     async () => {
       const [snapshot, ws] = await Promise.all([
@@ -574,6 +574,10 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
         categoryBudgets: (ws.categoryBudgets ?? {}) as Record<string, number>,
         expenseLimit: ws.expenseLimit,
         summary: defaultBudgetMonth,
+        allExpensesTotal: month.totals.expenses,
+        capCurrency: categoryBudgetCurrency,
+        primaryCurrency,
+        exchangeRates: rates,
         names
       });
       const budgetIncome = Number(ws.budgetIncome) || 0;
@@ -584,6 +588,14 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
         savings: ws.budgetSavingsPercent !== undefined ? Number(ws.budgetSavingsPercent) : 20
       };
       const goalNames = new Map(goalsSnap.docs.map(docSnap => [docSnap.id, String(docSnap.data().name || 'Meta')]));
+      const notes = [...month.notes];
+      if (budgets.categories.length > 0) {
+        if (categoryBudgetCurrency === null) {
+          notes.push('Moneda de los límites por categoría sin confirmar en Objetivos y Presupuestos: la comparación contra los límites está desactivada (campos en null).');
+        } else if (categoryBudgetCurrency !== primaryCurrency && budgets.totals.budget === null) {
+          notes.push(`Falta o es inválida la tasa de cambio manual para convertir los límites por categoría de ${categoryBudgetCurrency} a ${primaryCurrency}: la comparación contra los límites está desactivada (campos en null).`);
+        }
+      }
       return {
         currency: primaryCurrency,
         categoryBudgetCurrency,
@@ -602,7 +614,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
           categoryBudgets: budgets.categories,
           categoryBudgetTotals: budgets.totals
         },
-        notes: month.notes
+        notes
       };
     }
   );

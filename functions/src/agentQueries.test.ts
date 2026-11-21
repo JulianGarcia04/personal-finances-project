@@ -216,9 +216,68 @@ test("buildBudgetStatus compares category budgets and the expense limit with the
     { categoryId: "tech", categoryName: "Tecnología", limit: 150_000, spent: 100_000, remaining: 50_000, percentUsed: 67, exceeded: false },
     { categoryId: "ghost", categoryName: "Categoría desconocida", limit: 50_000, spent: 0, remaining: 50_000, percentUsed: 0, exceeded: false }
   ]);
-  assert.deepEqual(status.totals, { budget: 500_000, spent: 490_000, percentUsed: 80 });
+  assert.deepEqual(status.totals, { budget: 500_000, spent: 490_000, percentUsed: 98 });
   assert.deepEqual(status.expenseLimit, { limit: 400_000, spent: 490_020, remaining: -90_020, percentUsed: 123, exceeded: true });
   assert.equal(buildBudgetStatus({ categoryBudgets: {}, expenseLimit: 0, summary: month, names: NAMES }).expenseLimit, null);
+});
+
+test("S9: buildBudgetStatus converts categoryBudgets using categoryBudgetCurrency, disables comparison when unconfirmed/missing rate, and evaluates expenseLimit on all monthly expenses", () => {
+  const month = run({ preset: "this_month" }, { groupBy: "category" });
+  // Confirmed USD caps converted to COP at 4000; expenseLimit evaluated on allExpensesTotal (900_000), not default-only summary.totals.expenses.
+  const converted = buildBudgetStatus({
+    categoryBudgets: { food: 100 },
+    expenseLimit: 800_000,
+    summary: month,
+    allExpensesTotal: 900_000,
+    capCurrency: "USD",
+    primaryCurrency: "COP",
+    exchangeRates: { USD: 4000 },
+    names: NAMES
+  });
+  assert.equal(converted.categories[0].limit, 400_000);
+  assert.equal(converted.categories[0].percentUsed, 98);
+  assert.equal(converted.totals.budget, 400_000);
+  assert.equal(converted.expenseLimit?.spent, 900_000);
+  assert.equal(converted.expenseLimit?.exceeded, true);
+
+  // Unconfirmed capCurrency (null) or missing rate disables comparison instead of comparing 1:1.
+  const unconfirmed = buildBudgetStatus({
+    categoryBudgets: { food: 100 },
+    expenseLimit: null,
+    summary: month,
+    capCurrency: null,
+    primaryCurrency: "COP",
+    exchangeRates: { USD: 4000 },
+    names: NAMES
+  });
+  assert.equal(unconfirmed.categories[0].percentUsed, null);
+  assert.equal(unconfirmed.categories[0].remaining, null);
+  assert.equal(unconfirmed.totals.percentUsed, null);
+
+  const missingRate = buildBudgetStatus({
+    categoryBudgets: { food: 100 },
+    expenseLimit: null,
+    summary: month,
+    capCurrency: "EUR",
+    primaryCurrency: "COP",
+    exchangeRates: { USD: 4000 },
+    names: NAMES
+  });
+  assert.equal(missingRate.categories[0].percentUsed, null);
+  assert.equal(missingRate.totals.percentUsed, null);
+
+  // Zero-valued legacy caps do not inflate totals.percentUsed or mark exceeded.
+  const withZeroCap = buildBudgetStatus({
+    categoryBudgets: { tech: 200_000, food: 0 },
+    expenseLimit: null,
+    summary: month,
+    capCurrency: "COP",
+    primaryCurrency: "COP",
+    exchangeRates: {},
+    names: NAMES
+  });
+  assert.equal(withZeroCap.totals.percentUsed, 50);
+  assert.equal(withZeroCap.categories.find(c => c.categoryId === "food")?.exceeded, false);
 });
 
 test("computeNetWorth sums every account per currency and converts each currency total like the dashboard", () => {

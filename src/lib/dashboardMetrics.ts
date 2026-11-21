@@ -151,7 +151,9 @@ export const splitMonthEndExpenses = <T extends InstallmentTransaction & { curre
     const amount = expenseAmountForMonth(transaction, year, month, billingFor?.(transaction.accountId))
     if (amount === 0) continue
     const date = transaction.date
-    const key = date.getFullYear() === year && date.getMonth() === month ? 'pace' : 'committed'
+    const key = date.getFullYear() === year && date.getMonth() === month && date.getDate() <= now.getDate()
+      ? 'pace'
+      : 'committed'
     split[key] += convert(amount, transaction.currency)
   }
   return split

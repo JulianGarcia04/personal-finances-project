@@ -231,11 +231,11 @@
         <div class="glass-panel rounded-2xl p-4 sm:p-6 relative overflow-hidden group border border-white/5">
           <div class="absolute top-0 right-0 w-24 h-24 bg-accent-amber/5 rounded-full blur-xl pointer-events-none"></div>
           <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Tasa de Ahorro</span>
-          <h4 class="font-display font-bold text-xl sm:text-2xl mt-2 text-accent-amber tabular-nums truncate">
+          <h4 :class="['font-display font-bold text-xl sm:text-2xl mt-2 tabular-nums truncate', savingsRate < 0 || (monthlyIncome === 0 && monthlyExpenses > 0) ? 'text-accent-rose' : 'text-accent-amber']">
             {{ savingsRate.toFixed(1) }}%
           </h4>
           <span class="text-[10px] text-text-muted mt-1 block">
-            {{ savingsRate >= 0 ? 'Fondo acumulado del ingreso' : 'Estás gastando más de lo que ganas' }}
+            {{ savingsRate < 0 || (monthlyIncome === 0 && monthlyExpenses > 0) ? 'Estás gastando más de lo que ganas' : 'Fondo acumulado del ingreso' }}
           </span>
         </div>
       </div>
@@ -584,7 +584,7 @@ import {
 } from '@/lib/dashboardMetrics'
 import { getNextOccurrence, daysUntil } from '@/lib/creditCycle'
 import { buildCardStatementLedger } from '@/lib/cardStatements'
-import { DEFAULT_MONTHLY_BUDGET_ID, budgetScopedMonthFilter, linkedBudgetForAccount } from '@/lib/budgets'
+import { DEFAULT_MONTHLY_BUDGET_ID, budgetScopedMonthFilter, linkedBudgetForAccount, resolveBudgetId } from '@/lib/budgets'
 import { reportAllBudgetsEstimatedMonthly, reportBudgetScope } from '@/lib/budgetReporting'
 import { 
   Plus as PlusIcon, 
@@ -867,7 +867,11 @@ const monthEndProjection = computed(() => {
   const all = splitMonthEndExpenses(transactionsStore.transactions, now, options)
   const budgeted = splitMonthEndExpenses(transactionsStore.transactions, now, {
     ...options,
-    include: t => Boolean(t.categoryId && budgets[t.categoryId] !== undefined)
+    include: t => Boolean(
+      t.categoryId &&
+      budgets[t.categoryId] > 0 &&
+      resolveBudgetId(t.budgetId) === DEFAULT_MONTHLY_BUDGET_ID
+    )
   })
   return {
     total: projectMonthEndExpenses({ paceExpensesToDate: all.pace, committedExpenses: all.committed, now }),
@@ -878,7 +882,7 @@ const monthEndProjection = computed(() => {
 const projectionStatus = computed(() =>
   projectionChecks({
     budgetedProjection: monthEndProjection.value.budgeted,
-    budgetTotal: budgetSummary.value?.totalBudget ?? 0,
+    budgetTotal: budgetSummary.value?.totalLimitForReporting ?? 0,
     totalProjection: monthEndProjection.value.total,
     expenseLimit: currentExpenseLimit.value
   })
@@ -958,7 +962,7 @@ const currentExpenseLimit = computed(() => {
 const savingsRate = computed(() => {
   if (monthlyIncome.value === 0) return 0
   const savings = monthlyIncome.value - monthlyExpenses.value
-  return Math.max(0, (savings / monthlyIncome.value) * 100)
+  return (savings / monthlyIncome.value) * 100
 })
 
 // Lista de transacciones recientes
@@ -1033,15 +1037,15 @@ const budgetSummary = computed(() => {
     if (total === null || !comparison) return null
     return total + comparison.limitAmount
   }, capCurrency === null ? null : 0)
-  const cappedSpendForReporting = positiveCategoryIds.reduce<number | null>((total, catId) => {
+  const totalSpendForReporting = positiveCategoryIds.reduce<number | null>((total, catId) => {
     const comparison = report.categories[catId]?.comparison
     if (total === null || !comparison) return null
-    return total + Math.min(comparison.spentAmount, comparison.limitAmount)
+    return total + comparison.spentAmount
   }, capCurrency === null ? null : 0)
   const percent = positiveCategoryIds.length === 0
     ? capCurrency === null ? null : 0
-    : totalLimitForReporting !== null && totalLimitForReporting > 0 && cappedSpendForReporting !== null
-      ? Math.round((cappedSpendForReporting / totalLimitForReporting) * 100)
+    : totalLimitForReporting !== null && totalLimitForReporting > 0 && totalSpendForReporting !== null
+      ? Math.round((totalSpendForReporting / totalLimitForReporting) * 100)
       : null
 
   const allocations = ids.map(catId => report.categories[catId]?.monthlyAllocation)
@@ -1057,6 +1061,7 @@ const budgetSummary = computed(() => {
     rows: rows.slice(0, 4),
     percent,
     totalBudget,
+    totalLimitForReporting,
     totalSpentReal,
     capCurrency,
     reportingCurrency: report.reportingCurrency,
@@ -1083,10 +1088,12 @@ const expensesByCategory = computed(() => {
 
   const groups: Record<string, number> = {}
   currentMonthExpenses.forEach(t => {
+    const amount = expenseAmountForMonth(t, now.getFullYear(), now.getMonth(), cardBillingFor.value(t.accountId))
+    if (amount === 0) return
     const cat = getCategory(t.categoryId)
     const name = cat ? cat.name : 'Otros'
     if (!groups[name]) groups[name] = 0
-    groups[name] += convert(expenseAmountForMonth(t, now.getFullYear(), now.getMonth(), cardBillingFor.value(t.accountId)), t.currency)
+    groups[name] += convert(amount, t.currency)
   })
   return groups
 })
@@ -1272,7 +1279,7 @@ const getAccountIcon = (type: AccountType) => {
 // ordenados por el vencimiento más cercano. Cuentas sin paymentDueDay configurado no aparecen.
 const upcomingCardPayments = computed(() => {
   return accountsStore.accounts
-    .filter(acc => acc.type === 'credit' && acc.paymentDueDay)
+    .filter(acc => acc.type === 'credit' && !acc.mirror && acc.paymentDueDay)
     .map(acc => {
       const dueDate = getNextOccurrence(acc.paymentDueDay!)
       // Sin statementClosingDay no se puede saber qué cae en el corte: se muestra

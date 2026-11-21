@@ -361,7 +361,9 @@ export const useTransactionsStore = defineStore('transactions', {
       let list = [...state.transactions]
 
       if (filters.accountId) {
-        list = list.filter(t => t.accountId === filters.accountId)
+        list = list.filter(t =>
+          t.accountId === filters.accountId || (t.type === 'transfer' && t.toAccountId === filters.accountId)
+        )
       }
       if (filters.categoryId) {
         list = list.filter(t => t.categoryId === filters.categoryId)
