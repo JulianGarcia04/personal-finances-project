@@ -123,6 +123,7 @@ export interface Goal {
   targetAmount: number;
   currentAmount: number;
   currency: string;
+  linkedAccountId?: string;
   targetDate: Date;
   createdAt: Date;
 }

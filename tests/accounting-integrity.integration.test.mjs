@@ -480,3 +480,77 @@ test('S5: server-created pocket movements (nanosecond createdAt) stay editable a
   assert.equal(await storedBalance(usdPocket.id), 0)
   assert.equal(accountsStore.getAccountById(usdPocket.id)?.balance, 0)
 })
+
+test('S12: Firestore allows virtual and compatible linked goals, but rejects invalid linked-account shapes on create and update', async () => {
+  const { adminDb, db, identity, workspaceId, accountsStore, transactionsStore, goalsStore } = fixture
+  const sameCurrency = await seedAccount({ name: 'Goal checking', currency: 'COP', balance: 100 })
+  const source = await seedAccount({ name: 'Goal source', currency: 'COP', balance: 200 })
+  const credit = await seedAccount({ name: 'Goal card', type: 'credit', currency: 'COP', balance: -100 })
+  const bridge = await seedAccount({
+    name: 'Goal bridge', currency: 'COP', balance: 0,
+    mirror: { workspaceId: 'other-workspace', accountId: 'receivable', sourceAccountId: 'source' }
+  })
+  const wrongCurrency = await seedAccount({ name: 'Goal USD', currency: 'USD', balance: 100 })
+  const nonFinite = await seedAccount({ name: 'Goal invalid balance', balance: Number.NaN })
+  const foreign = await seedAccount({ name: 'Foreign goal account', workspaceId: 'other-workspace', currency: 'COP', balance: 100 })
+  const parent = await seedAccount({ name: 'Goal pocket parent', type: 'checking', currency: 'COP', balance: 100, childAccountIds: [] })
+  const pocketId = `goal-pocket-${Date.now()}-${++sequence}`
+  await adminDb.collection('accounts').doc(parent.id).update({ childAccountIds: [pocketId] })
+  await adminDb.collection('accounts').doc(pocketId).set({
+    workspaceId, userId: identity.user.uid, name: 'Goal pocket', type: 'savings', balance: 0,
+    limit: 0, currency: 'COP', parentAccountId: parent.id, childAccountIds: [], createdAt: new Date()
+  })
+
+  const goalData = {
+    workspaceId, userId: identity.user.uid, name: 'Goal', targetAmount: 1_000,
+    currentAmount: 0, currency: 'COP', targetDate: date, createdAt: new Date()
+  }
+  const validRootGoalId = `s12-root-goal-${++sequence}`
+  await setDoc(doc(db, 'goals', validRootGoalId), { ...goalData, linkedAccountId: sameCurrency.id })
+  assert.equal((await adminDb.collection('goals').doc(validRootGoalId).get()).data().linkedAccountId, sameCurrency.id)
+
+  await accountsStore.fetchAccounts()
+  const contribution = await transactionsStore.addTransaction({
+    accountId: source.id, toAccountId: sameCurrency.id, amount: 25,
+    description: 'Aporte a meta: Goal', categoryId: '', date, type: 'transfer'
+  })
+  const storedContribution = (await adminDb.collection('transactions').doc(contribution.id).get()).data()
+  assert.equal(storedContribution.type, 'transfer')
+  assert.equal(storedContribution.accountId, source.id)
+  assert.equal(storedContribution.toAccountId, sameCurrency.id)
+  assert.equal(await storedBalance(source.id), 175)
+  assert.equal(await storedBalance(sameCurrency.id), 125)
+  assert.equal((await adminDb.collection('goals').doc(validRootGoalId).get()).data().currentAmount, 0)
+
+  const validPocketGoalId = `s12-pocket-goal-${++sequence}`
+  await setDoc(doc(db, 'goals', validPocketGoalId), { ...goalData, linkedAccountId: pocketId })
+  assert.equal((await adminDb.collection('goals').doc(validPocketGoalId).get()).data().linkedAccountId, pocketId)
+
+  const virtualGoalId = `s12-virtual-goal-${++sequence}`
+  await setDoc(doc(db, 'goals', virtualGoalId), goalData)
+  assert.equal((await adminDb.collection('goals').doc(virtualGoalId).get()).data().currentAmount, 0)
+  const transactionCount = (await adminDb.collection('transactions').where('workspaceId', '==', workspaceId).get()).size
+  await goalsStore.contributeToGoal(virtualGoalId, 25)
+  assert.equal((await adminDb.collection('goals').doc(virtualGoalId).get()).data().currentAmount, 25)
+  assert.equal((await adminDb.collection('transactions').where('workspaceId', '==', workspaceId).get()).size, transactionCount)
+  assert.equal(await storedBalance(source.id), 175)
+
+  for (const [label, linkedAccountId] of [
+    ['missing', `s12-missing-${sequence}`],
+    ['foreign workspace', foreign.id],
+    ['wrong currency', wrongCurrency.id],
+    ['invalid balance', nonFinite.id],
+    ['credit card', credit.id],
+    ['bridge', bridge.id]
+  ]) {
+    const invalidGoalId = `s12-invalid-${label.replaceAll(' ', '-')}-${++sequence}`
+    await assert.rejects(setDoc(doc(db, 'goals', invalidGoalId), { ...goalData, linkedAccountId }), denied, label)
+    assert.equal((await adminDb.collection('goals').doc(invalidGoalId).get()).exists, false, `${label} link must not persist`)
+  }
+
+  await assert.rejects(
+    updateDoc(doc(db, 'goals', validRootGoalId), { linkedAccountId: credit.id }),
+    denied
+  )
+  assert.equal((await adminDb.collection('goals').doc(validRootGoalId).get()).data().linkedAccountId, sameCurrency.id)
+})

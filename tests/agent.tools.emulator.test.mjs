@@ -143,6 +143,48 @@ test('listAccounts returns balances in the primary currency and the dashboard ne
   assert.ok(result.notes.some(note => note.includes('EUR') && note.includes('1:1')))
 })
 
+test('goal tools read linked pocket balances live, validate Admin links, and preserve virtual tracking', async () => {
+  const goalRef = db.collection('goals').doc(ids.goal)
+  await goalRef.update({ linkedAccountId: ids.accounts.pocket })
+
+  const linkedGoals = await call('listGoals')
+  assert.equal(linkedGoals.find(goal => goal.id === ids.goal).currentAmount, 500_000)
+  assert.equal(linkedGoals.find(goal => goal.id === ids.goal).linkedAccountName, 'Bolsillo Viaje')
+
+  await db.collection('accounts').doc(ids.accounts.pocket).update({ balance: 450_000 })
+  const refreshedGoals = await call('listGoals')
+  assert.equal(refreshedGoals.find(goal => goal.id === ids.goal).currentAmount, 450_000)
+
+  const linkedCreate = await call('createGoal', {
+    name: 'Fondo de viaje', targetAmount: 800_000, currentAmount: 300_000,
+    currency: 'COP', linkedAccountId: ids.accounts.pocket, targetDate: '2027-01-01'
+  })
+  assert.equal(linkedCreate.currentAmount, 450_000)
+  const storedLinked = (await db.collection('goals').doc(linkedCreate.id).get()).data()
+  assert.equal(storedLinked.linkedAccountId, ids.accounts.pocket)
+  assert.equal(storedLinked.currentAmount, 0, 'linked progress is never duplicated in currentAmount')
+
+  const beforeInvalidCreate = (await db.collection('goals').where('workspaceId', '==', ids.workspaceId).get()).size
+  const invalidCreate = await call('createGoal', {
+    name: 'Tarjeta no elegible', targetAmount: 200_000,
+    currency: 'COP', linkedAccountId: ids.accounts.card, targetDate: '2027-01-01'
+  })
+  assert.match(invalidCreate.error, /misma moneda|tarjeta/i)
+  assert.equal((await db.collection('goals').where('workspaceId', '==', ids.workspaceId).get()).size, beforeInvalidCreate)
+
+  const forbiddenUpdate = await call('updateGoalAmount', { goalId: linkedCreate.id, currentAmount: 999_000 })
+  assert.match(forbiddenUpdate.error, /vinculada a una cuenta/i)
+  assert.equal((await db.collection('goals').doc(linkedCreate.id).get()).data().currentAmount, 0)
+
+  const virtualCreate = await call('createGoal', {
+    name: 'Seguimiento manual', targetAmount: 50_000, currentAmount: 10_000,
+    currency: 'COP', targetDate: '2027-01-01'
+  })
+  assert.equal(virtualCreate.currentAmount, 10_000)
+  await call('updateGoalAmount', { goalId: virtualCreate.id, currentAmount: 20_000 })
+  assert.equal((await db.collection('goals').doc(virtualCreate.id).get()).data().currentAmount, 20_000)
+})
+
 test('getWorkspaceSettings reports budgets vs actual for the current month', async () => {
   const settings = await call('getWorkspaceSettings')
   assert.deepEqual(settings.currentMonth.categoryBudgets, [

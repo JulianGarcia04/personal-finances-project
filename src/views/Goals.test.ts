@@ -6,6 +6,7 @@ import ts from 'typescript'
 import { toDateValue, toLocalDateKey } from '../lib/dates.ts'
 import { createCardBillingLookup, expenseAmountForDate } from '../lib/installments.ts'
 import { budgetScopedMonthFilter } from '../lib/budgets.ts'
+import { canTransferBetweenAccounts } from '../lib/pockets.ts'
 import { isReservedBudgetName } from '../schemas.ts'
 
 const goalsPath = fileURLToPath(new URL('./Goals.vue', import.meta.url))
@@ -228,15 +229,11 @@ test('the budget form links accounts, warns about links moving from another budg
   assert.match(source, /Los movimientos entran a este presupuesto cuando se lo asignas o cuando salen de una cuenta ligada\./)
 })
 
-test('a goal contribution inherits the budget of its linked account and saves it', () => {
+test('goal contributions do not use operating-budget expense assignment', () => {
   const source = readFileSync(new URL('./Goals.vue', import.meta.url), 'utf8')
-  assert.match(source, /data-testid="contribute-budget"/)
-  assert.match(source, /contributeBudgetId\.value = budgetIdForAccount\(linkableOperatingBudgets\.value, accountId\)/)
-  assert.match(source, /:disabled="!!contributeLinkedBudget"/)
-  assert.match(source, /type: 'expense',\s*budgetId: showContributeBudget\.value \? \(contributeLinkedBudget\.value\?\.id \?\? contributeBudgetId\.value\) : null/)
-  // Mirror-account contributions are replicated into another workspace with its own budgets.
-  assert.match(source, /v-if="showContributeBudget"[\s\S]{0,120}data-testid="contribute-budget"/)
-  assert.match(source, /!accountsStore\.getAccountById\(contributeAccountId\.value\)\?\.mirror/)
+  assert.doesNotMatch(source, /data-testid="contribute-budget"/)
+  assert.match(source, /type: 'transfer'/)
+  assert.doesNotMatch(source, /type: 'expense',[\s\S]{0,100}Aporte a meta/)
 })
 
 test('saving a budget that takes a linked account removes the link from its previous budget in the same write', async () => {
@@ -427,11 +424,20 @@ test('moving existing movements uses budget-only updates and keeps failures sele
   assert.equal(closed, 1)
 })
 
-test('bridge, pocket and credit accounts cannot be linked, and the contribution lock is announced', () => {
+test('linked goals show eligible accounts and report invalid links instead of stale progress', () => {
   assert.match(goalsView, /v-for="acc in linkableAccounts"/)
   assert.match(goalsView, /accountsStore\.accounts\.filter\(account =>\s*!account\.mirror && !isPocketRelatedAccount\(account\) && account\.type !== 'credit'\)/)
-  assert.match(goalsView, /:aria-describedby="contributeLinkedBudget \? 'contribute-budget-lock' : undefined"/)
-  assert.match(goalsView, /id="contribute-budget-lock"/)
+  assert.match(goalsView, /data-testid="goal-linked-account-field"/)
+  assert.match(goalsView, /v-for="account in linkableGoalAccounts"/)
+  assert.match(goalsView, /getSavingsGoalProgressAmount\(goal, accountsStore\.accounts, activeWorkspaceId\.value\)/)
+  assert.match(goalsView, /No disponible/)
+})
+
+test('Dashboard goal progress uses the same live resolver and suppresses invalid linked values', () => {
+  const dashboard = readFileSync(new URL('./Dashboard.vue', import.meta.url), 'utf8')
+  assert.match(dashboard, /getSavingsGoalProgressAmount\(goal, accountsStore\.accounts, authStore\.activeWorkspaceId\)/)
+  assert.match(dashboard, /goal\.current !== null/)
+  assert.match(dashboard, /La cuenta vinculada no está disponible; no se muestra progreso desactualizado/)
 })
 
 test('budget basis: Goals shows the consumption/payment switch and counts budgets with it', () => {
@@ -439,6 +445,174 @@ test('budget basis: Goals shows the consumption/payment switch and counts budget
   assertContains(/const cardBillingFor = computed\(\(\) => createCardBillingLookup\(accountsStore\.accounts, budgetBasis\.value, \{\s*transactions: transactionsStore\.transactions\s*\}\)\)/, 'budget figures must follow the chosen basis and apply card payments')
   assertContains(/vista «\{\{ BUDGET_BASIS_LABELS\[budgetBasis\] \}\}»/, 'the protected baseline must name the view it counts with')
   assertContains(/Gasto real del mes \(\{\{ BUDGET_BASIS_LABELS\[budgetBasis\] \}\}\)/, 'the 50/30/20 comparison must name the view it counts with')
+})
+
+function createGoalContributionHarness({ goal, sourceId = '', accounts = [] }: {
+  goal: Record<string, unknown>
+  sourceId?: string
+  accounts?: Array<Record<string, any>>
+}) {
+  const transactions: Array<Record<string, unknown>> = []
+  const virtualContributions: Array<[string, number]> = []
+  const goalAmountUpdates: Array<[string, number]> = []
+  const alerts: string[] = []
+  const hasGoalAccountLink = (candidate: Record<string, unknown> | null) =>
+    Boolean(candidate && Object.hasOwn(candidate, 'linkedAccountId') && candidate.linkedAccountId !== null)
+  const isLinkable = (account: Record<string, unknown>) =>
+    account.workspaceId === 'workspace-a' && account.currency === goal.currency &&
+    account.type !== 'credit' && !account.mirror && typeof account.balance === 'number' && Number.isFinite(account.balance)
+  const isSavingsGoalAccountLinkable = (account: Record<string, unknown>, all: Array<Record<string, unknown>>) =>
+    Boolean(all.find(candidate => candidate.id === account.id && isLinkable(candidate)))
+  const getGoalProgressAmount = (candidate: Record<string, unknown>) => {
+    const target = accounts.find(account => account.id === candidate.linkedAccountId)
+    return target && isLinkable(target) ? Number(target.balance) : null
+  }
+  const state = {
+    selectedGoal: { value: goal },
+    selectedGoalAccount: { value: accounts.find(account => account.id === goal.linkedAccountId) ?? null },
+    contributeAccountId: { value: sourceId },
+    contributeAmount: { value: 25 },
+    showContributeBudget: { value: false },
+    contributeLinkedBudget: { value: null },
+    contributeBudgetId: { value: 'monthly' },
+    DEFAULT_MONTHLY_BUDGET_ID: 'monthly',
+    activeWorkspaceId: { value: 'workspace-a' },
+    accountsStore: {
+      accounts,
+      getAccountById: (id: string) => accounts.find(account => account.id === id),
+      async fetchAccounts() {}
+    },
+    isPocketRelatedAccount: (account: Record<string, unknown>) => Boolean(account.parentAccountId),
+    isSavingsGoalAccountLinkable,
+    hasGoalAccountLink,
+    getGoalProgressAmount,
+    canTransferBetweenAccounts: (source: any, destination: any, all: any[]) =>
+      canTransferBetweenAccounts(source, destination, all),
+    roundMoney: (amount: number) => Math.round((amount + Number.EPSILON) * 100) / 100,
+    transactionsStore: {
+      categories: [],
+      async addTransaction(input: Record<string, unknown>) { transactions.push(input) }
+    },
+    goalsStore: {
+      async contributeToGoal(id: string, amount: number) { virtualContributions.push([id, amount]) },
+      async updateGoalAmount(id: string, amount: number) { goalAmountUpdates.push([id, amount]) }
+    },
+    alert: (message: string) => alerts.push(message),
+    confirm: () => true,
+    console: { error() {} },
+    Date
+  }
+  const block = goalsView.match(/const handleContribute = async \(\) => \{[\s\S]*?(?=\n\/\/ Save budget)/)?.[0]
+  assert.ok(block, 'Goals.vue must define the contribution handler')
+  const javascript = ts.transpileModule(block, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext }
+  }).outputText
+  const run = new Function('ctx', `const {
+    selectedGoal, selectedGoalAccount, contributeAccountId, contributeAmount,
+    activeWorkspaceId, accountsStore, isPocketRelatedAccount,
+    isSavingsGoalAccountLinkable, hasGoalAccountLink, getGoalProgressAmount,
+    canTransferBetweenAccounts, roundMoney,
+    transactionsStore, goalsStore, alert, confirm, console, Date
+  } = ctx;
+  ${javascript}
+  return handleContribute();`)
+
+  return { state, run, transactions, virtualContributions, goalAmountUpdates, alerts }
+}
+
+test('virtual goal contributions update only the virtual goal amount and do not create transactions', async () => {
+  const harness = createGoalContributionHarness({
+    goal: { id: 'virtual-goal', currentAmount: 10, targetAmount: 100, currency: 'COP' }
+  })
+
+  await harness.run(harness.state)
+
+  assert.deepEqual(harness.virtualContributions, [['virtual-goal', 25]])
+  assert.deepEqual(harness.transactions, [])
+  assert.deepEqual(harness.goalAmountUpdates, [])
+})
+
+test('linked goal contributions create a same-currency neutral transfer without changing goal amount', async () => {
+  const source = {
+    id: 'source', workspaceId: 'workspace-a', type: 'checking', currency: 'COP', balance: 100,
+    limit: 0, name: 'Source', createdAt: new Date()
+  }
+  const target = {
+    id: 'goal-account', workspaceId: 'workspace-a', type: 'savings', currency: 'COP', balance: 40,
+    limit: 0, name: 'Goal account', createdAt: new Date()
+  }
+  const harness = createGoalContributionHarness({
+    goal: { id: 'linked-goal', linkedAccountId: target.id, currentAmount: 0, targetAmount: 100, currency: 'COP' },
+    sourceId: source.id,
+    accounts: [source, target]
+  })
+
+  await harness.run(harness.state)
+
+  assert.equal(harness.transactions.length, 1)
+  assert.equal(harness.transactions[0].type, 'transfer')
+  assert.equal(harness.transactions[0].accountId, source.id)
+  assert.equal(harness.transactions[0].toAccountId, target.id)
+  assert.equal(harness.transactions[0].amount, 25)
+  assert.equal(harness.transactions[0].categoryId, '')
+  assert.deepEqual(harness.virtualContributions, [])
+  assert.deepEqual(harness.goalAmountUpdates, [])
+})
+
+test('linked goal contribution rejects a missing, cross-workspace, credit, or same-account endpoint before writes', async () => {
+  const source = {
+    id: 'source', workspaceId: 'workspace-a', type: 'checking', currency: 'COP', balance: 100,
+    limit: 0, name: 'Source', createdAt: new Date()
+  }
+  const invalidTargets = [
+    { id: 'missing', workspaceId: 'workspace-a', type: 'savings', currency: 'COP', balance: 0 },
+    { id: 'foreign', workspaceId: 'workspace-b', type: 'savings', currency: 'COP', balance: 0 },
+    { id: 'wrong-currency', workspaceId: 'workspace-a', type: 'savings', currency: 'USD', balance: 0 },
+    { id: 'credit', workspaceId: 'workspace-a', type: 'credit', currency: 'COP', balance: 0 },
+    { id: 'bridge', workspaceId: 'workspace-a', type: 'checking', currency: 'COP', balance: 0, mirror: { workspaceId: 'workspace-b' } },
+    { ...source }
+  ]
+
+  for (const target of invalidTargets) {
+    const accounts = target.id === 'missing' ? [source] : [source, target]
+    const harness = createGoalContributionHarness({
+      goal: { id: `linked-${target.id}`, linkedAccountId: target.id, currentAmount: 0, targetAmount: 100, currency: 'COP' },
+      sourceId: source.id,
+      accounts
+    })
+
+    await harness.run(harness.state)
+
+    assert.deepEqual(harness.transactions, [], `invalid target ${target.id} must not write a transaction`)
+    assert.deepEqual(harness.virtualContributions, [], `invalid target ${target.id} must not update virtual progress`)
+    assert.deepEqual(harness.goalAmountUpdates, [], `invalid target ${target.id} must not overwrite stored progress`)
+  }
+})
+
+test('linked goal contributions reject an invalid source before any account or goal write', async () => {
+  const target = {
+    id: 'goal-account', workspaceId: 'workspace-a', type: 'savings', currency: 'COP', balance: 40,
+    limit: 0, name: 'Goal', createdAt: new Date()
+  }
+  const invalidSources = [
+    { id: 'credit', workspaceId: 'workspace-a', type: 'credit', currency: 'COP', balance: 100 },
+    { id: 'bridge', workspaceId: 'workspace-a', type: 'checking', currency: 'COP', balance: 100, mirror: { workspaceId: 'workspace-b' } },
+    { id: 'wrong-currency', workspaceId: 'workspace-a', type: 'checking', currency: 'USD', balance: 100 }
+  ]
+
+  for (const source of invalidSources) {
+    const harness = createGoalContributionHarness({
+      goal: { id: 'linked-goal', linkedAccountId: target.id, currentAmount: 0, targetAmount: 100, currency: 'COP' },
+      sourceId: source.id,
+      accounts: [source, target]
+    })
+
+    await harness.run(harness.state)
+
+    assert.deepEqual(harness.transactions, [], `${source.id} source must not write a transfer`)
+    assert.deepEqual(harness.virtualContributions, [], `${source.id} source must not update virtual progress`)
+    assert.deepEqual(harness.goalAmountUpdates, [], `${source.id} source must not overwrite linked progress`)
+  }
 })
 
 test('budget planner labels show the configured percentages, not fixed 50/30/20', () => {

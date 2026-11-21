@@ -77,9 +77,10 @@
               <div class="flex items-center gap-2 shrink-0">
                 <button 
                   @click="openContributeModal(goal)"
+                  :disabled="hasGoalAccountLink(goal) && getGoalProgressAmount(goal) === null"
                   title="Aportar saldo"
                   aria-label="Aportar saldo"
-                  class="tap flex items-center justify-center rounded-xl bg-accent-emerald/10 border border-accent-emerald/20 text-accent-emerald hover:bg-accent-emerald/20 transition-colors cursor-pointer"
+                  class="tap flex items-center justify-center rounded-xl bg-accent-emerald/10 border border-accent-emerald/20 text-accent-emerald hover:bg-accent-emerald/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <PiggyBankIcon class="w-4 h-4" />
                 </button>
@@ -98,14 +99,15 @@
             <div class="space-y-1.5">
               <div class="flex justify-between text-xs font-semibold">
                 <span class="text-text-secondary">Progreso</span>
-                <span class="text-accent-emerald">{{ getProgressPercent(goal) }}%</span>
+                <span v-if="getProgressPercent(goal) !== null" class="text-accent-emerald">{{ getProgressPercent(goal) }}%</span>
+                <span v-else class="text-accent-amber">No disponible</span>
               </div>
               
               <!-- Progress Bar -->
-              <div class="w-full h-2.5 rounded-full bg-slate-950/60 overflow-hidden border border-white/5">
+              <div v-if="getProgressPercent(goal) !== null" class="w-full h-2.5 rounded-full bg-slate-950/60 overflow-hidden border border-white/5">
                 <div 
                   class="h-full rounded-full bg-gradient-to-r from-accent-emerald to-accent-violet transition-all duration-500"
-                  :style="{ width: `${Math.min(getProgressPercent(goal), 100)}%` }"
+                  :style="{ width: `${Math.min(getProgressPercent(goal) ?? 0, 100)}%` }"
                 ></div>
               </div>
 
@@ -113,7 +115,8 @@
               <div class="grid grid-cols-2 gap-2 text-xs pt-1">
                 <div class="min-w-0">
                   <span class="block text-text-muted">Ahorrado</span>
-                  <span class="block text-text-primary font-semibold tabular-nums whitespace-nowrap truncate" :title="formatCurrency(goal.currentAmount, goal.currency)">{{ formatCurrency(goal.currentAmount, goal.currency) }}</span>
+                  <span v-if="getGoalProgressAmount(goal) !== null" class="block text-text-primary font-semibold tabular-nums whitespace-nowrap truncate" :title="formatCurrency(getGoalProgressAmount(goal) ?? 0, goal.currency)">{{ formatCurrency(getGoalProgressAmount(goal) ?? 0, goal.currency) }}</span>
+                  <span v-else class="block text-accent-amber text-[11px]" role="status">Cuenta no disponible</span>
                 </div>
                 <div class="min-w-0 text-right">
                   <span class="block text-text-muted">Objetivo</span>
@@ -124,7 +127,8 @@
 
             <!-- Goal Footer info -->
             <div class="text-[11px] text-text-secondary bg-slate-950/30 p-2.5 rounded-lg border border-white/5 flex flex-wrap justify-between gap-x-3 gap-y-1">
-              <span class="tabular-nums">Restante: {{ formatCurrency(Math.max(goal.targetAmount - goal.currentAmount, 0), goal.currency) }}</span>
+              <span v-if="getGoalProgressAmount(goal) !== null" class="tabular-nums">Restante: {{ formatCurrency(Math.max(goal.targetAmount - (getGoalProgressAmount(goal) ?? 0), 0), goal.currency) }}</span>
+              <span v-else class="text-accent-amber">La cuenta vinculada no está disponible; no se usa progreso desactualizado.</span>
               <span class="text-accent-violet font-semibold uppercase">{{ getDaysRemainingText(goal.targetDate) }}</span>
             </div>
           </div>
@@ -734,9 +738,25 @@
             </div>
           </div>
 
+          <div class="space-y-1.5" data-testid="goal-linked-account-field">
+            <label for="goal-linked-account" class="block text-xs font-semibold text-text-secondary">Cuenta para esta meta (opcional)</label>
+            <select id="goal-linked-account" v-model="newGoalLinkedAccountId" class="field cursor-pointer">
+              <option value="">Seguimiento virtual (sin cuenta)</option>
+              <option v-for="account in linkableGoalAccounts" :key="account.id" :value="account.id">
+                {{ getAccountDisplayLabel(account, accountsStore.accounts) }} · {{ formatCurrency(account.balance, account.currency) }}
+              </option>
+            </select>
+            <p v-if="newGoalLinkedAccount" class="text-[11px] text-text-muted">
+              El progreso usará el saldo actual de esta cuenta. Los aportes serán transferencias entre cuentas, no gastos.
+            </p>
+            <p v-else class="text-[11px] text-text-muted">
+              La meta solo llevará un seguimiento virtual; los aportes no cambiarán saldos ni crearán movimientos.
+            </p>
+          </div>
+
           <div class="grid grid-cols-1 min-[400px]:grid-cols-2 gap-4">
             <!-- Current Amount (Optional) -->
-            <div class="space-y-1.5">
+            <div v-if="!newGoalLinkedAccountId" class="space-y-1.5">
               <label for="goal-current" class="block text-xs font-semibold text-text-secondary">Monto Inicial (Opcional)</label>
               <input 
                 id="goal-current"
@@ -778,38 +798,33 @@
     <!-- Sheet: Contribute funds -->
     <BaseSheet :open="showContributeModal" :title="`Aportar a: ${selectedGoal?.name ?? ''}`" :close-on-backdrop="false" @close="showContributeModal = false">
         <form id="contribute-goal-form" @submit.prevent="handleContribute" class="space-y-4">
-          <!-- Selected Account -->
-          <div class="space-y-1.5">
-            <label for="contribute-account" class="block text-xs font-semibold text-text-secondary">Deducir de la Cuenta</label>
+          <div v-if="selectedGoal && hasGoalAccountLink(selectedGoal)" class="space-y-1.5" data-testid="goal-contribution-source">
+            <label for="contribute-account" class="block text-xs font-semibold text-text-secondary">Transferir desde</label>
             <select 
               id="contribute-account"
               v-model="contributeAccountId"
-              required
+              :required="goalContributionSources.length > 0"
               class="field font-semibold cursor-pointer"
             >
               <option value="" disabled>Selecciona una cuenta</option>
-              <option 
-                v-for="acc in accountsStore.accounts" 
+              <option
+                v-for="acc in goalContributionSources"
                 :key="acc.id" 
                 :value="acc.id"
               >
                 {{ getAccountDisplayLabel(acc, accountsStore.accounts) }} (Saldo disponible: {{ formatCurrency(acc.balance, acc.currency) }})
               </option>
             </select>
-          </div>
-
-          <!-- Budget the contribution counts against (inherited from a linked account) -->
-          <div v-if="showContributeBudget" class="space-y-1.5 animate-fade-in" data-testid="contribute-budget">
-            <label for="contribute-budget" class="block text-xs font-semibold text-text-secondary">Presupuesto</label>
-            <select id="contribute-budget" v-model="contributeBudgetId" class="field cursor-pointer disabled:opacity-70 disabled:cursor-not-allowed" :disabled="!!contributeLinkedBudget" :aria-describedby="contributeLinkedBudget ? 'contribute-budget-lock' : undefined" @change="contributeBudgetTouched = true">
-              <option :value="DEFAULT_MONTHLY_BUDGET_ID">Presupuesto mensual predeterminado</option>
-              <option v-for="budget in activeOperatingBudgets" :key="budget.budget.id" :value="budget.budget.id">{{ budget.budget.name }}</option>
-            </select>
-            <p v-if="contributeLinkedBudget" id="contribute-budget-lock" class="flex items-start gap-1 text-[11px] text-accent-emerald">
-              <LinkIcon class="w-3 h-3 mt-0.5 shrink-0" />
-              <span>Esta cuenta está ligada a «{{ contributeLinkedBudget.name }}»: todos sus movimientos van a ese presupuesto.</span>
+            <p v-if="getGoalProgressAmount(selectedGoal) === null" role="alert" class="text-[11px] text-accent-amber">
+              La cuenta vinculada no está disponible o ya no cumple los requisitos; no se registró ningún aporte.
+            </p>
+            <p v-else-if="goalContributionSources.length === 0" role="status" class="text-[11px] text-accent-amber">
+              No hay otra cuenta compatible en la misma moneda para transferir este aporte.
             </p>
           </div>
+          <p v-else class="text-[11px] text-text-muted" data-testid="goal-virtual-contribution">
+            Este aporte solo actualizará el seguimiento virtual; no cambiará saldos ni creará un gasto.
+          </p>
 
           <!-- Contribute Amount -->
           <div class="space-y-1.5">
@@ -829,7 +844,9 @@
                 placeholder="0"
               />
             </div>
-            <p class="text-[11px] text-text-muted mt-1">Este aporte se registrará automáticamente como un movimiento en tus transacciones.</p>
+            <p class="text-[11px] text-text-muted mt-1">
+              {{ selectedGoal && hasGoalAccountLink(selectedGoal) ? 'Se registrará una transferencia entre tus cuentas, sin crear un gasto.' : 'El saldo virtual aumentará de forma segura sin modificar tus cuentas.' }}
+            </p>
           </div>
         </form>
 
@@ -838,7 +855,7 @@
             <button type="button" @click="showContributeModal = false" class="flex-1 min-h-11 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all cursor-pointer">
               Cancelar
             </button>
-            <button type="submit" form="contribute-goal-form" class="flex-1 min-h-11 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer">
+            <button type="submit" form="contribute-goal-form" :disabled="!selectedGoal || (hasGoalAccountLink(selectedGoal) && (getGoalProgressAmount(selectedGoal) === null || goalContributionSources.length === 0))" class="flex-1 min-h-11 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
               Realizar Aporte
             </button>
           </div>
@@ -902,13 +919,14 @@ import { useGoalsStore } from '@/stores/goalsStore'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { useAuthStore } from '@/stores/authStore'
 import { SUPPORTED_CURRENCIES, currencyOptionsWith, defaultCurrencyCode } from '@/lib/currencies'
 import type { Goal, OperatingBudgetDraft, OperatingBudgetPatch } from '@/types'
 import BaseSheet from '@/components/ui/BaseSheet.vue'
 import CategoryPicker from '@/components/CategoryPicker.vue'
 import { suggestCategoriesBySpending, visibleBaselineCategories } from '@/lib/categoryPicker'
 import { getCategoryIconComponent } from '@/lib/categoryIcons'
-import { DEFAULT_MONTHLY_BUDGET_ID, budgetIdForAccount, budgetMoveCandidates, budgetScopedMonthFilter, canAssignBudget, linkedAccountConflicts, linkedBudgetForAccount } from '@/lib/budgets'
+import { DEFAULT_MONTHLY_BUDGET_ID, budgetMoveCandidates, budgetScopedMonthFilter, canAssignBudget, linkedAccountConflicts, linkedBudgetForAccount } from '@/lib/budgets'
 import { budgetCardFigures } from '@/lib/dashboardMetrics'
 import { isReservedBudgetName } from '@/schemas'
 import { reportBudgetScope } from '@/lib/budgetReporting'
@@ -918,7 +936,8 @@ import { BUDGET_BASIS_LABELS, budgetBasis } from '@/lib/budgetBasis'
 import BudgetBasisSwitch from '@/components/BudgetBasisSwitch.vue'
 import { parseDateOnly, toDateValue, toLocalDateKey } from '@/lib/dates'
 import { effectiveExchangeRates } from '@/lib/fx'
-import { getAccountDisplayLabel, isPocketRelatedAccount } from '@/lib/pockets'
+import { canTransferBetweenAccounts, getAccountDisplayLabel, isPocketRelatedAccount } from '@/lib/pockets'
+import { getSavingsGoalProgressAmount, isSavingsGoalAccountLinkable } from '@/lib/savingsGoals'
 import {
   Target as TargetIcon,
   PiggyBank as PiggyBankIcon,
@@ -938,6 +957,7 @@ const goalsStore = useGoalsStore()
 const accountsStore = useAccountsStore()
 const transactionsStore = useTransactionsStore()
 const settingsStore = useSettingsStore()
+const authStore = useAuthStore()
 
 // State
 const showCreateModal = ref(false)
@@ -988,23 +1008,40 @@ const newGoalTargetAmount = ref<number | null>(null)
 const newGoalCurrentAmount = ref(0)
 const newGoalCurrency = ref('USD')
 const newGoalTargetDate = ref('')
+const newGoalLinkedAccountId = ref('')
+const activeWorkspaceId = computed(() => authStore.activeWorkspaceId)
+const linkableGoalAccounts = computed(() => accountsStore.accounts.filter(account =>
+  isSavingsGoalAccountLinkable(account, accountsStore.accounts, activeWorkspaceId.value, newGoalCurrency.value)
+))
+const newGoalLinkedAccount = computed(() =>
+  linkableGoalAccounts.value.find(account => account.id === newGoalLinkedAccountId.value) ?? null
+)
+watch(linkableGoalAccounts, accounts => {
+  if (newGoalLinkedAccountId.value && !accounts.some(account => account.id === newGoalLinkedAccountId.value)) {
+    newGoalLinkedAccountId.value = ''
+  }
+})
 
 // Contribute inputs
 const contributeAccountId = ref('')
 const contributeAmount = ref<number | null>(null)
-const contributeBudgetId = ref(DEFAULT_MONTHLY_BUDGET_ID)
-const contributeBudgetTouched = ref(false)
-// Bridge-account expenses are replicated into the mirror workspace, which has its own budgets.
-const showContributeBudget = computed(() =>
-  !!contributeAccountId.value && !accountsStore.getAccountById(contributeAccountId.value)?.mirror)
-// Every movement of a linked account belongs to its budget, so the selector is locked.
-const contributeLinkedBudget = computed(() =>
-  linkedBudgetForAccount(linkableOperatingBudgets.value, contributeAccountId.value))
-watch(contributeAccountId, (accountId, previousAccountId) => {
-  const leftLinkedAccount = linkedBudgetForAccount(linkableOperatingBudgets.value, previousAccountId ?? '')
-  if (contributeBudgetTouched.value && !contributeLinkedBudget.value && !leftLinkedAccount) return
-  contributeBudgetTouched.value = false
-  contributeBudgetId.value = budgetIdForAccount(linkableOperatingBudgets.value, accountId)
+const hasGoalAccountLink = (goal: Goal | null | undefined): boolean =>
+  !!goal && Object.hasOwn(goal, 'linkedAccountId') && goal.linkedAccountId !== null
+const getGoalProgressAmount = (goal: Goal): number | null =>
+  getSavingsGoalProgressAmount(goal, accountsStore.accounts, activeWorkspaceId.value)
+const selectedGoalAccount = computed(() => {
+  const goal = selectedGoal.value
+  return hasGoalAccountLink(goal) ? accountsStore.getAccountById(goal?.linkedAccountId ?? '') ?? null : null
+})
+const goalContributionSources = computed(() => {
+  const goal = selectedGoal.value
+  const target = selectedGoalAccount.value
+  if (!goal || !target || getGoalProgressAmount(goal) === null) return []
+  return accountsStore.accounts.filter(source =>
+    source.id !== target.id &&
+    isSavingsGoalAccountLinkable(source, accountsStore.accounts, activeWorkspaceId.value, goal.currency) &&
+    canTransferBetweenAccounts(source, target, accountsStore.accounts)
+  )
 })
 
 // Budget Planner inputs
@@ -1503,9 +1540,11 @@ const confirmLegacyCategoryBudgetCurrency = async () => {
   }
 }
 
-const getProgressPercent = (goal: Goal) => {
+const getProgressPercent = (goal: Goal): number | null => {
+  const currentAmount = getGoalProgressAmount(goal)
+  if (currentAmount === null) return null
   if (!goal.targetAmount) return 0
-  return Math.round((goal.currentAmount / goal.targetAmount) * 100)
+  return Math.round((currentAmount / goal.targetAmount) * 100)
 }
 
 const getDaysRemainingText = (targetDate: any) => {
@@ -1616,7 +1655,8 @@ const handleCreateGoal = async () => {
       targetAmount: newGoalTargetAmount.value,
       currentAmount: newGoalCurrentAmount.value || 0,
       currency: newGoalCurrency.value,
-      targetDate: parseDateOnly(newGoalTargetDate.value)
+      targetDate: parseDateOnly(newGoalTargetDate.value),
+      ...(newGoalLinkedAccountId.value ? { linkedAccountId: newGoalLinkedAccountId.value } : {})
     })
     track('goal_created')
 
@@ -1627,6 +1667,7 @@ const handleCreateGoal = async () => {
     newGoalCurrentAmount.value = 0
     newGoalCurrency.value = 'USD'
     newGoalTargetDate.value = ''
+    newGoalLinkedAccountId.value = ''
   } catch (err) {
     alert('Error al crear objetivo de ahorro')
   }
@@ -1648,57 +1689,50 @@ const openContributeModal = (goal: Goal) => {
   selectedGoal.value = goal
   contributeAccountId.value = ''
   contributeAmount.value = null
-  contributeBudgetId.value = DEFAULT_MONTHLY_BUDGET_ID
-  contributeBudgetTouched.value = false
   showContributeModal.value = true
 }
 
 const handleContribute = async () => {
-  if (!selectedGoal.value || !contributeAccountId.value || !contributeAmount.value) return
-
-  const amount = Number(contributeAmount.value)
   const goal = selectedGoal.value
-  
-  // Buscar cuenta seleccionada
-  const account = accountsStore.getAccountById(contributeAccountId.value)
-  if (!account) return
-
-  if (account.balance < amount) {
-    if (isPocketRelatedAccount(account)) {
-      alert('El saldo disponible de esta cuenta no alcanza para el aporte. No se registró ningún movimiento.')
-      return
-    }
-    if (!confirm('El saldo de la cuenta es menor que el aporte. ¿Deseas continuar de todos modos?')) {
-      return
-    }
-  }
+  const amount = Number(contributeAmount.value)
+  if (!goal || !Number.isFinite(amount) || amount <= 0) return
 
   try {
-    // Categoría para el aporte: 'Ahorro' si existe, si no 'Otros', si no vacío
-    const savingsCat = transactionsStore.categories.find(c => c.name.toLowerCase() === 'ahorro')
-      || transactionsStore.categories.find(c => c.name === 'Otros')
+    if (!hasGoalAccountLink(goal)) {
+      await goalsStore.contributeToGoal(goal.id, amount)
+    } else {
+      const source = accountsStore.getAccountById(contributeAccountId.value)
+      const target = selectedGoalAccount.value
+      if (!source || !target || getGoalProgressAmount(goal) === null ||
+          !isSavingsGoalAccountLinkable(source, accountsStore.accounts, activeWorkspaceId.value, goal.currency) ||
+          !canTransferBetweenAccounts(source, target, accountsStore.accounts)) {
+        alert('La cuenta vinculada o la cuenta de origen no están disponibles para esta transferencia.')
+        return
+      }
 
-    // 1. Agregar transacción como Gasto (Aporte a meta)
-    // El store de transacciones actualizará el saldo de la cuenta origen automáticamente
-    await transactionsStore.addTransaction({
-      accountId: contributeAccountId.value,
-      amount: -amount, // Negativo para indicar salida de dinero de la cuenta
-      description: `Aporte a meta: ${goal.name}`,
-      categoryId: savingsCat?.id || '',
-      date: new Date(),
-      type: 'expense',
-      budgetId: showContributeBudget.value ? (contributeLinkedBudget.value?.id ?? contributeBudgetId.value) : null
-    })
+      if (source.balance < amount) {
+        if (isPocketRelatedAccount(source)) {
+          alert('El saldo disponible de esta cuenta no alcanza para el aporte. No se registró ningún movimiento.')
+          return
+        }
+        if (!confirm('El saldo de la cuenta es menor que el aporte. ¿Deseas continuar de todos modos?')) return
+      }
 
-    // 2. Sumar al saldo acumulado del objetivo de ahorro
-    const newCurrentAmount = goal.currentAmount + amount
-    await goalsStore.updateGoalAmount(goal.id, newCurrentAmount)
-
-    // Recargar cuentas para reflejar saldos
-    await accountsStore.fetchAccounts()
+      await transactionsStore.addTransaction({
+        accountId: source.id,
+        toAccountId: target.id,
+        amount,
+        description: `Aporte a meta: ${goal.name}`,
+        categoryId: '',
+        date: new Date(),
+        type: 'transfer'
+      })
+    }
 
     showContributeModal.value = false
-    alert('¡Aporte registrado y descontado exitosamente!')
+    alert(hasGoalAccountLink(goal)
+      ? '¡Aporte registrado como transferencia entre tus cuentas!'
+      : '¡Aporte virtual registrado sin modificar los saldos de tus cuentas!')
   } catch (err) {
     console.error(err)
     alert('Error al realizar el aporte de ahorro.')

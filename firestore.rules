@@ -40,6 +40,38 @@ service cloud.firestore {
       return value is number && value == value && value - value == 0;
     }
 
+    function validGoalLinkedAccount(accountId, workspaceId, currency) {
+      let targetPath = accountPath(accountId);
+      let target = accountId is string && accountId.matches('^[^/]+$') && exists(targetPath)
+        ? get(targetPath)
+        : null;
+      let targetData = target == null ? {} : target.data;
+      let parentId = targetData.get('parentAccountId', null);
+      let parent = parentId is string && parentId != accountId && parentId.matches('^[^/]+$') &&
+          exists(accountPath(parentId))
+        ? get(accountPath(parentId))
+        : null;
+      return target != null && accountId.size() > 0 &&
+        targetData.workspaceId == workspaceId && targetData.currency == currency &&
+        targetData.type in ['checking', 'savings', 'cash'] &&
+        isFiniteNumber(targetData.balance) &&
+        targetData.get('mirror', null) == null &&
+        (parentId == null ||
+          (targetData.type == 'savings' && parent != null &&
+           parent.data.workspaceId == workspaceId && parent.data.currency == currency &&
+           parent.data.type in ['checking', 'savings'] && hasNoParent(parent.data) &&
+           parent.data.get('mirror', null) == null && validChildIds(childIds(parent.data)) &&
+           accountId in childIds(parent.data)));
+    }
+
+    function validGoalLinkedAccountData(data) {
+      let linkedAccountId = data.get('linkedAccountId', null);
+      return linkedAccountId == null ||
+        (linkedAccountId is string && linkedAccountId.size() > 0 &&
+         data.workspaceId is string && data.currency is string &&
+         validGoalLinkedAccount(linkedAccountId, data.workspaceId, data.currency));
+    }
+
     function rootAccountForWorkspace(accountId, workspaceId) {
       let account = get(accountPath(accountId));
       return account != null && account.data.workspaceId == workspaceId && hasNoParent(account.data) &&
@@ -822,8 +854,11 @@ service cloud.firestore {
 
     match /goals/{goalId} {
       allow read: if isWorkspaceMember(resource.data.workspaceId);
-      allow create: if isWorkspaceMember(request.resource.data.workspaceId);
-      allow update, delete: if isWorkspaceMember(resource.data.workspaceId);
+      allow create: if isWorkspaceMember(request.resource.data.workspaceId) &&
+        validGoalLinkedAccountData(request.resource.data);
+      allow update: if isWorkspaceMember(resource.data.workspaceId) &&
+        validGoalLinkedAccountData(request.resource.data);
+      allow delete: if isWorkspaceMember(resource.data.workspaceId);
     }
 
     match /chats/{chatId} {

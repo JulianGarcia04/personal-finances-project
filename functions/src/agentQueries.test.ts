@@ -7,10 +7,13 @@ import {
   cardBillingByAccount,
   computeNetWorth,
   convertToPrimary,
+  getSavingsGoalProgressAmount,
+  isSavingsGoalAccountLinkable,
   monthlyAverages,
   resolvePeriod,
   summarize,
-  SummaryTransaction
+  SummaryTransaction,
+  type SavingsGoalAccountSnapshot
 } from "./agentQueries";
 import { AgentToolError, NameMaps } from "./agentTools";
 
@@ -22,6 +25,47 @@ const NAMES: NameMaps = {
   accounts: new Map([["bank", "Banco"], ["usd", "Cuenta USD"], ["card", "Visa"], ["bridge", "Puente"], ["eur", "Cuenta EUR"]]),
   categories: new Map([["food", "Comida"], ["tech", "Tecnología"], ["fun", "Ocio"], ["salary", "Salario"]])
 };
+
+test("agent goal progress keeps legacy goals virtual and reads a validated linked account's live balance", () => {
+  const accounts = new Map([
+    ["goal-account", { workspaceId: "workspace-a", type: "savings", balance: 84, currency: "COP" }],
+    ["checking", { workspaceId: "workspace-a", type: "checking", balance: 100, currency: "COP" }],
+    ["rounding", { workspaceId: "workspace-a", type: "checking", balance: 1.005, currency: "COP" }]
+  ]);
+  const legacyGoal = { currentAmount: 12, currency: "COP" };
+  const linkedGoal = { currentAmount: 1, currency: "COP", linkedAccountId: "goal-account" };
+
+  assert.equal(getSavingsGoalProgressAmount(legacyGoal, "workspace-a", accounts), 12);
+  assert.equal(getSavingsGoalProgressAmount(linkedGoal, "workspace-a", accounts), 84);
+  assert.equal(getSavingsGoalProgressAmount(linkedGoal, "workspace-b", accounts), null);
+  assert.equal(getSavingsGoalProgressAmount({ linkedAccountId: "rounding", currency: "COP" }, "workspace-a", accounts), 1.01);
+  assert.equal(getSavingsGoalProgressAmount({ currentAmount: 1.005 }, "workspace-a", accounts), 1.01);
+});
+
+test("agent goal links accept valid pockets and reject wrong-workspace, wrong-currency, credit, bridge, and malformed pockets", () => {
+  const parent = { workspaceId: "workspace-a", type: "checking", currency: "COP", childAccountIds: ["pocket"] };
+  const pocket = { workspaceId: "workspace-a", type: "savings", currency: "COP", parentAccountId: "parent", balance: 60 };
+  const accounts = new Map<string, SavingsGoalAccountSnapshot>([["parent", parent], ["pocket", pocket]]);
+
+  assert.equal(isSavingsGoalAccountLinkable("pocket", "COP", "workspace-a", accounts), true);
+  assert.equal(isSavingsGoalAccountLinkable("pocket", "USD", "workspace-a", accounts), false);
+  assert.equal(isSavingsGoalAccountLinkable("pocket", "COP", "workspace-b", accounts), false);
+  assert.equal(isSavingsGoalAccountLinkable("pocket", "COP", "workspace-a", new Map<string, SavingsGoalAccountSnapshot>([
+    ["pocket", { ...pocket, balance: Number.NaN }]
+  ])), false);
+  assert.equal(isSavingsGoalAccountLinkable("pocket", "COP", "workspace-a", new Map<string, SavingsGoalAccountSnapshot>([
+    ["pocket", { ...pocket, balance: "60" }]
+  ])), false);
+  assert.equal(isSavingsGoalAccountLinkable("card", "COP", "workspace-a", new Map<string, SavingsGoalAccountSnapshot>([
+    ["card", { workspaceId: "workspace-a", type: "credit", currency: "COP", balance: -60 }]
+  ])), false);
+  assert.equal(isSavingsGoalAccountLinkable("bridge", "COP", "workspace-a", new Map<string, SavingsGoalAccountSnapshot>([
+    ["bridge", { workspaceId: "workspace-a", type: "checking", currency: "COP", mirror: { workspaceId: "workspace-b" } }]
+  ])), false);
+  assert.equal(isSavingsGoalAccountLinkable("pocket", "COP", "workspace-a", new Map<string, SavingsGoalAccountSnapshot>([
+    ["pocket", { ...pocket, parentAccountId: "missing" }]
+  ])), false);
+});
 
 const tx = (id: string, type: string, amount: number, iso: string, extra: Partial<SummaryTransaction> = {}): SummaryTransaction => ({
   id, type, amount, date: new Date(iso), currency: "COP", accountId: "bank", categoryId: "", description: id, ...extra

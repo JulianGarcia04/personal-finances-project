@@ -1,4 +1,5 @@
 import { AgentToolError, buildDateContext, NameMaps } from "./agentTools";
+import { roundMoney } from "./money";
 import { CardBilling, cardBillingOf, ImputationBasis, paymentMonthIndex, YearMonth, zonedDateKey, zonedWallClockToInstant, zonedYearMonth } from "./http";
 import {
   AlertScope,
@@ -51,6 +52,73 @@ const MONTHS = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", 
 const DAY_MS = 86_400_000;
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
+
+export type SavingsGoalAccountSnapshot = Record<string, unknown> & {
+  workspaceId?: unknown;
+  currency?: unknown;
+  balance?: unknown;
+  type?: unknown;
+  mirror?: unknown;
+  parentAccountId?: unknown;
+  childAccountIds?: unknown;
+};
+
+export function isSavingsGoalAccountLinkable(
+  accountId: string,
+  currency: string,
+  workspaceId: string,
+  accounts: ReadonlyMap<string, SavingsGoalAccountSnapshot>
+): boolean {
+  const account = accounts.get(accountId);
+  if (!account || account.workspaceId !== workspaceId || account.currency !== currency ||
+      !["checking", "savings", "cash"].includes(String(account.type)) || account.mirror != null ||
+      typeof account.balance !== "number" || !Number.isFinite(account.balance)) return false;
+
+  const parentId = account.parentAccountId;
+  if (parentId !== undefined && parentId !== null) {
+    if (typeof parentId !== "string" || !parentId.trim() || account.type !== "savings") return false;
+    const parent = accounts.get(parentId);
+    const childIds = parent?.childAccountIds;
+    if (!parent || parent.workspaceId !== workspaceId || parent.currency !== currency ||
+        !["checking", "savings"].includes(String(parent.type)) || parent.mirror != null ||
+        parent.parentAccountId != null || !Array.isArray(childIds) || !childIds.includes(accountId)) return false;
+  }
+
+  if (parentId != null) {
+    if (account.parentAccountId !== parentId || account.childAccountIds != null &&
+        (!Array.isArray(account.childAccountIds) || account.childAccountIds.length > 0)) return false;
+  } else if (account.childAccountIds != null) {
+    if (!Array.isArray(account.childAccountIds) || new Set(account.childAccountIds).size !== account.childAccountIds.length) return false;
+    for (const childId of account.childAccountIds) {
+      if (typeof childId !== "string") return false;
+      const child = accounts.get(childId);
+      if (!child || child.workspaceId !== workspaceId || child.currency !== currency ||
+          child.type !== "savings" || child.parentAccountId !== accountId || child.mirror != null ||
+          childId === accountId || child.childAccountIds != null &&
+          (!Array.isArray(child.childAccountIds) || child.childAccountIds.length > 0)) return false;
+    }
+  }
+
+  return true;
+}
+
+/** Resolve virtual progress from the goal, and linked progress from a validated live account. */
+export function getSavingsGoalProgressAmount(
+  goal: Record<string, unknown>,
+  workspaceId: string,
+  accounts: ReadonlyMap<string, SavingsGoalAccountSnapshot>
+): number | null {
+  const linkedAccountId = goal.linkedAccountId;
+  if (!Object.hasOwn(goal, "linkedAccountId") || linkedAccountId === null) {
+    const currentAmount = Number(goal.currentAmount ?? 0);
+    return Number.isFinite(currentAmount) ? roundMoney(currentAmount) : 0;
+  }
+  if (typeof linkedAccountId !== "string" || !linkedAccountId.trim() || typeof goal.currency !== "string" ||
+      !isSavingsGoalAccountLinkable(linkedAccountId, goal.currency, workspaceId, accounts)) return null;
+
+  const balance = Number(accounts.get(linkedAccountId)?.balance);
+  return Number.isFinite(balance) ? roundMoney(balance) : null;
+}
 
 // --- Currency ------------------------------------------------------------------
 

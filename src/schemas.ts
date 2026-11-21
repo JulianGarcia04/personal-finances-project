@@ -106,6 +106,7 @@ export const GoalSchema = z.object({
     invalid_type_error: 'El monto objetivo debe ser un número'
   }).min(1, 'El monto objetivo debe ser mayor a 0'),
   currentAmount: z.number().default(0),
+  linkedAccountId: z.string().trim().min(1).optional(),
   currency: z.string()
     .trim()
     .regex(/^[A-Z]{3}$/, 'El código de moneda debe tener 3 letras mayúsculas (ej. COP, USD, EUR)'),

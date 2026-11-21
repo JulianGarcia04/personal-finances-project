@@ -453,16 +453,20 @@
             <div v-for="goal in goalProgress" :key="goal.id" class="space-y-1.5">
               <div class="flex justify-between gap-2 text-xs">
                 <span class="min-w-0 text-text-primary font-semibold truncate">{{ goal.name }}</span>
-                <span class="shrink-0 text-accent-emerald font-semibold">{{ goal.percent }}%</span>
+                <span v-if="goal.percent !== null" class="shrink-0 text-accent-emerald font-semibold">{{ goal.percent }}%</span>
+                <span v-else class="shrink-0 text-accent-amber font-semibold">No disponible</span>
               </div>
-              <div class="w-full h-2 rounded-full bg-slate-950/60 overflow-hidden border border-white/5">
+              <div v-if="goal.percent !== null" class="w-full h-2 rounded-full bg-slate-950/60 overflow-hidden border border-white/5">
                 <div
                   class="h-full rounded-full bg-gradient-to-r from-accent-emerald to-accent-violet transition-all"
                   :style="{ width: Math.min(goal.percent, 100) + '%' }"
                 ></div>
               </div>
-              <p class="text-[10px] text-text-muted">
+              <p v-if="goal.current !== null" class="text-[10px] text-text-muted">
                 {{ formatCurrency(goal.current, goal.currency) }} / {{ formatCurrency(goal.target, goal.currency) }}
+              </p>
+              <p v-else class="text-[10px] text-accent-amber" role="status">
+                La cuenta vinculada no está disponible; no se muestra progreso desactualizado.
               </p>
             </div>
           </div>
@@ -580,6 +584,7 @@ import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useGoalsStore } from '@/stores/goalsStore'
+import { getSavingsGoalProgressAmount } from '@/lib/savingsGoals'
 import { Account, AccountType, Transaction } from '@/types'
 import { createCardBillingLookup, expenseAmountForMonth } from '@/lib/installments'
 import { BUDGET_BASIS_HINTS, BUDGET_BASIS_LABELS, budgetBasis } from '@/lib/budgetBasis'
@@ -1135,14 +1140,17 @@ const budgetSummary = computed(() => {
 
 // Progreso de metas (widget)
 const goalProgress = computed(() =>
-  goalsStore.goals.slice(0, 4).map(g => ({
-    id: g.id,
-    name: g.name,
-    currency: g.currency,
-    current: g.currentAmount,
-    target: g.targetAmount,
-    percent: g.targetAmount > 0 ? Math.round((g.currentAmount / g.targetAmount) * 100) : 0
-  }))
+  goalsStore.goals.slice(0, 4).map(goal => {
+    const current = getSavingsGoalProgressAmount(goal, accountsStore.accounts, authStore.activeWorkspaceId)
+    return {
+      id: goal.id,
+      name: goal.name,
+      currency: goal.currency,
+      current,
+      target: goal.targetAmount,
+      percent: current === null ? null : goal.targetAmount > 0 ? Math.round((current / goal.targetAmount) * 100) : 0
+    }
+  })
 )
 
 // Agrupación de gastos por categoría para el gráfico de dona
