@@ -1,9 +1,14 @@
 // Accounting integrity integration tests against real stores and Firestore rules (emulators).
 // Run through `node tests/pockets.imports.emulators.mjs`, which starts the emulators.
 import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
 import test, { after, before } from 'node:test'
 import { deleteDoc, doc, setDoc, updateDoc } from 'firebase/firestore'
+import { canTransferBetweenAccounts } from '../src/lib/pockets.ts'
 import { createPocketFixture } from './pockets.fixtures.mjs'
+
+const requireFunctions = createRequire(new URL('../functions/package.json', import.meta.url))
+const { Timestamp: AdminTimestamp } = requireFunctions('firebase-admin/firestore')
 
 let fixture
 let sequence = 0
@@ -350,4 +355,128 @@ test('S3: setAccountMirror enforces zero balance, distinct workspaces, matching 
     /saldo distinto de cero/i
   )
   await assert.rejects(accountsStore.setAccountMirror(clean.id, null), /saldo distinto de cero/i)
+})
+
+test('S4: ordinary transaction updates are atomic, concurrent/stale deletes do not double-reverse, and balances round cleanly', async () => {
+  const { adminDb, identity, workspaceId, accountsStore, transactionsStore } = fixture
+  const userId = identity.user.uid
+  const accA = await seedAccount({ name: 'Atomic A', balance: 1_000, currency: 'COP' })
+  const linkedAcc = await seedAccount({ name: 'Atomic Linked', balance: 500, currency: 'COP' })
+  const budgetId = `s4-budget-${Date.now()}-${++sequence}`
+  await adminDb.collection('budgets').doc(budgetId).set({
+    workspaceId, kind: 'monthly', name: 'S4 Linked', capCurrency: 'COP',
+    archived: false, linkedAccountIds: [linkedAcc.id], createdAt: new Date(), updatedAt: new Date()
+  })
+  await adminDb.collection('accounts').doc(linkedAcc.id).update({ linkedBudgetId: budgetId })
+  await accountsStore.fetchAccounts()
+
+  // 1. Failed updateTransaction (Firestore rule rejects moving into linked account without its budget)
+  // MUST leave all balances completely unchanged (no pre-write balance corruption).
+  const tx = await transactionsStore.addTransaction({
+    accountId: accA.id, amount: -100, description: 'Compra inicial', categoryId: 'food', date, type: 'expense'
+  })
+  assert.equal(await storedBalance(accA.id), 900)
+
+  await assert.rejects(
+    transactionsStore.updateTransaction(tx.id, {
+      accountId: linkedAcc.id, amount: -250, description: 'Movida sin presupuesto',
+      categoryId: 'food', date, type: 'expense', receiptUrl: null
+    }),
+    denied
+  )
+  assert.equal(await storedBalance(accA.id), 900)
+  assert.equal(await storedBalance(linkedAcc.id), 500)
+
+  // 2. Stale-cache delete reverses the STORED amount, and deleting an already-deleted tx is a no-op
+  await adminDb.collection('transactions').doc(tx.id).update({ amount: -300 })
+  await adminDb.collection('accounts').doc(accA.id).update({ balance: 700 })
+  // Pinia still caches amount -100; deleteTransaction must reverse stored -300 -> 1000.
+  await transactionsStore.deleteTransaction(tx.id)
+  assert.equal(await storedBalance(accA.id), 1_000)
+
+  // Re-insert stale copy in Pinia and delete again (already gone in Firestore -> must NOT double-reverse)
+  transactionsStore.transactions.push({ ...tx, amount: -300 })
+  await transactionsStore.deleteTransaction(tx.id)
+  assert.equal(await storedBalance(accA.id), 1_000)
+
+  // 3. Fractional cent arithmetic produces exact 0 without IEEE-754 float drift
+  const floatAcc = await seedAccount({ name: 'Float USD', balance: 0.3, currency: 'USD' })
+  await accountsStore.fetchAccounts()
+  await transactionsStore.addTransaction({
+    accountId: floatAcc.id, amount: -0.1, description: 'Fee 1', categoryId: 'food', date, type: 'expense'
+  })
+  await transactionsStore.addTransaction({
+    accountId: floatAcc.id, amount: -0.2, description: 'Fee 2', categoryId: 'food', date, type: 'expense'
+  })
+  assert.equal(await storedBalance(floatAcc.id), 0)
+  assert.equal(accountsStore.getAccountById(floatAcc.id)?.balance, 0)
+  void userId
+})
+
+test('S5: server-created pocket movements (nanosecond createdAt) stay editable and deleting an empty pocket updates parent cache', async () => {
+  const { adminDb, identity, workspaceId, accountsStore, transactionsStore } = fixture
+  const userId = identity.user.uid
+  const parent = await seedAccount({ name: 'Parent S5', type: 'savings', balance: 500, currency: 'COP' })
+  const otherBank = await seedAccount({ name: 'Other S5', type: 'checking', balance: 200, currency: 'COP' })
+  await accountsStore.fetchAccounts()
+
+  // Empty pocket delete must remove pocket ID from parent.childAccountIds in Pinia immediately
+  const emptyPocket = await accountsStore.addPocket({
+    name: 'Empty S5', balance: 0, currency: 'COP', parentAccountId: parent.id
+  })
+  assert.ok(accountsStore.getAccountById(parent.id)?.childAccountIds?.includes(emptyPocket.id))
+  await accountsStore.deleteAccount(emptyPocket.id)
+  assert.equal(accountsStore.getAccountById(emptyPocket.id), undefined)
+  assert.equal(accountsStore.getAccountById(parent.id)?.childAccountIds?.includes(emptyPocket.id), false)
+  assert.equal(
+    canTransferBetweenAccounts(
+      accountsStore.getAccountById(parent.id),
+      accountsStore.getAccountById(otherBank.id),
+      accountsStore.accounts
+    ),
+    true
+  )
+
+  // Pocket transaction created with microsecond precision Timestamp (Firestore stores µs; JS Date truncates to ms)
+  const fundedPocket = await accountsStore.addPocket({
+    name: 'Funded S5', balance: 200, currency: 'COP', parentAccountId: parent.id
+  })
+  const nanoTxId = `s5-nano-tx-${Date.now()}-${++sequence}`
+  const nanoCreatedAt = new AdminTimestamp(1_760_000_000, 123_456_000)
+  await adminDb.collection('transactions').doc(nanoTxId).set({
+    workspaceId, userId, accountId: fundedPocket.id, amount: -50,
+    description: 'Server imported pocket expense', categoryId: 'food',
+    date: AdminTimestamp.fromDate(date), type: 'expense', toAccountId: null,
+    receiptUrl: null, notes: null, installments: 1, currency: 'COP',
+    createdAt: nanoCreatedAt
+  })
+  await adminDb.collection('accounts').doc(fundedPocket.id).update({ balance: 150 })
+  await accountsStore.fetchAccounts()
+  await transactionsStore.fetchTransactions()
+
+  // Client edit must preserve original sub-millisecond createdAt instead of failing permission-denied
+  await transactionsStore.updateTransaction(nanoTxId, {
+    accountId: fundedPocket.id, amount: -75, description: 'Edited pocket expense',
+    categoryId: 'food', date, type: 'expense', receiptUrl: null, notes: 'Fixed'
+  })
+  const afterSnap = await adminDb.collection('transactions').doc(nanoTxId).get()
+  assert.equal(afterSnap.data().amount, -75)
+  assert.equal(afterSnap.data().description, 'Edited pocket expense')
+  assert.equal(afterSnap.data().createdAt.nanoseconds, 123_456_000)
+  assert.equal(await storedBalance(fundedPocket.id), 125)
+
+  // Client-SDK 2-decimal pocket arithmetic (0.3 - 0.1 - 0.2 === 0) must pass rules and avoid float drift
+  const usdParent = await seedAccount({ name: 'USD Parent S5', type: 'savings', balance: 1, currency: 'USD' })
+  await accountsStore.fetchAccounts()
+  const usdPocket = await accountsStore.addPocket({
+    name: 'USD Float Pocket', balance: 0.3, currency: 'USD', parentAccountId: usdParent.id
+  })
+  await transactionsStore.addTransaction({
+    accountId: usdPocket.id, amount: -0.1, description: 'Pocket fee 1', categoryId: 'food', date, type: 'expense'
+  })
+  await transactionsStore.addTransaction({
+    accountId: usdPocket.id, amount: -0.2, description: 'Pocket fee 2', categoryId: 'food', date, type: 'expense'
+  })
+  assert.equal(await storedBalance(usdPocket.id), 0)
+  assert.equal(accountsStore.getAccountById(usdPocket.id)?.balance, 0)
 })

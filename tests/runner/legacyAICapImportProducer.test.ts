@@ -4,6 +4,7 @@ import { test } from 'node:test'
 import ts from 'typescript'
 import { DEFAULT_MONTHLY_BUDGET_ID, resolveBudgetId } from '../../src/lib/budgets.ts'
 import { parseDateOnly } from '../../src/lib/dates.ts'
+import { roundMoney } from '../../src/lib/money.ts'
 import { StatementImportBatchSchema } from '../../src/schemas.ts'
 
 const storeSource = readFileSync(new URL('../../src/stores/transactionsStore.ts', import.meta.url), 'utf8')
@@ -93,7 +94,8 @@ test('the actual batch import producer persists unassigned expenses to the defau
       throw new Error('Unexpected doc() call')
     },
     Timestamp: { fromDate: (date: Date) => date },
-    parseDateOnly
+    parseDateOnly,
+    roundMoney
   })
   const store = {
     categories: [{ id: 'food', name: 'Food', workspaceId: null }],

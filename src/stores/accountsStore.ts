@@ -5,6 +5,7 @@ import { PocketOpeningSchema } from '@/schemas'
 import { isPocketRelatedAccount, planPocketOpening } from '@/lib/pockets'
 import { getAccountCurrencyLockReason } from '@/lib/accountRules'
 import { sameMirrorConfig } from '@/lib/mirror'
+import { roundMoney } from '@/lib/money'
 import { useAuthStore } from '@/stores/authStore'
 import {
   collection,
@@ -514,7 +515,7 @@ export const useAccountsStore = defineStore('accounts', {
       const queriedChildIds = queriedChildren.docs.map(child => child.id).sort()
       this.loading = true
       try {
-        await runTransaction(db, async transaction => {
+        const remainingIds = await runTransaction(db, async transaction => {
           const [workspaceSnap, pocketSnap, parentSnap] = await Promise.all([
             transaction.get(workspaceRef),
             transaction.get(pocketRef),
@@ -543,17 +544,22 @@ export const useAccountsStore = defineStore('accounts', {
               !childIds.includes(accountId)) {
             throw new Error('Solo se puede eliminar un bolsillo vacío que nunca haya tenido actividad.')
           }
-          const remainingIds = childIds.filter(id => id !== accountId)
+          const nextChildIds = childIds.filter(id => id !== accountId)
           transaction.update(parentRef, {
-            childAccountIds: remainingIds,
+            childAccountIds: nextChildIds,
             lastPocketChildId: accountId,
             lastPocketChange: 'deleted'
           })
           transaction.delete(pocketRef)
+          return nextChildIds
         })
         const authStore = useAuthStore()
         if (authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === userId) {
-          this.accounts = this.accounts.filter(existing => existing.id !== accountId)
+          this.accounts = this.accounts
+            .filter(existing => existing.id !== accountId)
+            .map(existing => existing.id === parentAccountId
+              ? { ...existing, childAccountIds: remainingIds }
+              : existing)
         }
       } finally {
         this.loading = false
@@ -568,21 +574,23 @@ export const useAccountsStore = defineStore('accounts', {
       const accountRef = doc(db, 'accounts', accountId)
       
       try {
+        let committedBalance: number | null = null
         await runTransaction(db, async (transaction) => {
           const sfDoc = await transaction.get(accountRef)
           if (!sfDoc.exists()) {
             throw new Error("La cuenta no existe!")
           }
 
-          const newBalance = Number(sfDoc.data().balance) + Number(amountChange)
+          const newBalance = roundMoney(Number(sfDoc.data().balance) + Number(amountChange))
+          committedBalance = newBalance
           transaction.update(accountRef, { balance: newBalance })
         })
 
         // Actualizar estado local
         if (authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === userId) {
           const index = this.accounts.findIndex(acc => acc.id === accountId)
-          if (index !== -1) {
-            this.accounts[index].balance += Number(amountChange)
+          if (index !== -1 && committedBalance !== null) {
+            this.accounts[index].balance = committedBalance
           }
         }
       } catch (error) {

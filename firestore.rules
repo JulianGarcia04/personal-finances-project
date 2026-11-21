@@ -436,9 +436,9 @@ service cloud.firestore {
       let accountBefore = get(accountPath(accountId));
       let accountAfter = getAfter(accountPath(accountId));
       return accountBefore != null && accountAfter != null &&
-        accountAfter.data.balance != accountBefore.data.balance &&
-        accountAfter.data.lastPocketMovementId == transactionId &&
-        accountAfter.data.lastPocketMovementType == operation;
+        accountAfter.data.get('lastPocketMovementId', null) == transactionId &&
+        accountAfter.data.get('lastPocketMovementType', null) == operation &&
+        accountAfter.data.balance != accountBefore.data.balance;
     }
 
     function validPocketMovementCreate(transactionId, data) {
@@ -484,10 +484,10 @@ service cloud.firestore {
       let sourceAfter = getAfter(accountPath(afterData.accountId));
       let destinationAfter = getAfter(accountPath(afterData.toAccountId));
       return sourceBefore != null && destinationBefore != null && sourceAfter != null && destinationAfter != null &&
-        destinationAfter.data.lastPocketMovementId == transactionId &&
-        destinationAfter.data.lastPocketMovementType == 'updated' &&
-        sourceBefore.data.balance + destinationBefore.data.balance ==
-        sourceAfter.data.balance + destinationAfter.data.balance;
+        destinationAfter.data.get('lastPocketMovementId', null) == transactionId &&
+        destinationAfter.data.get('lastPocketMovementType', null) == 'updated' &&
+        math.abs((sourceBefore.data.balance + destinationBefore.data.balance) -
+          (sourceAfter.data.balance + destinationAfter.data.balance)) < 0.0001;
     }
 
     // Every affected endpoint validates its own exact delta, including childless roots.
@@ -500,7 +500,8 @@ service cloud.firestore {
         (beforeData.type != 'transfer' || beforeData.toAccountId == afterData.toAccountId);
       return ('pocketAllocation' in beforeData && beforeData.pocketAllocation == true)
         ? validPocketOpeningUpdate(transactionId, beforeData, afterData)
-        : beforeData.workspaceId == afterData.workspaceId &&
+        : (noDeltaChange || validMovementLinkedAccount(beforeData.accountId, beforeData, afterData, transactionId, 'updated')) &&
+        beforeData.workspaceId == afterData.workspaceId &&
         beforeData.createdAt == afterData.createdAt &&
         afterData.diff(beforeData).affectedKeys().hasOnly([
           'accountId', 'amount', 'description', 'categoryId', 'date', 'type', 'toAccountId',
@@ -508,16 +509,15 @@ service cloud.firestore {
         ]) &&
         validExistingPocketMovement(beforeData) &&
         (noDeltaChange ||
-          (validMovementLinkedAccount(beforeData.accountId, beforeData, afterData, transactionId, 'updated') &&
-           (sameTransferPair
-             ? validPocketTransferPairConserved(transactionId, beforeData, afterData)
-             : (beforeData.type != 'transfer' || validMovementLinkedAccount(beforeData.toAccountId, beforeData, afterData, transactionId, 'updated')) &&
-               (afterData.accountId == beforeData.accountId ||
-                 (beforeData.type == 'transfer' && afterData.accountId == beforeData.toAccountId) ||
-                 validMovementLinkedAccount(afterData.accountId, beforeData, afterData, transactionId, 'updated')) &&
-               (afterData.type != 'transfer' || afterData.toAccountId == beforeData.accountId ||
-                 (beforeData.type == 'transfer' && afterData.toAccountId == beforeData.toAccountId) ||
-                 validMovementLinkedAccount(afterData.toAccountId, beforeData, afterData, transactionId, 'updated'))))) &&
+          (sameTransferPair
+            ? validPocketTransferPairConserved(transactionId, beforeData, afterData)
+            : (beforeData.type != 'transfer' || validMovementLinkedAccount(beforeData.toAccountId, beforeData, afterData, transactionId, 'updated')) &&
+              (afterData.accountId == beforeData.accountId ||
+                (beforeData.type == 'transfer' && afterData.accountId == beforeData.toAccountId) ||
+                validMovementLinkedAccount(afterData.accountId, beforeData, afterData, transactionId, 'updated')) &&
+              (afterData.type != 'transfer' || afterData.toAccountId == beforeData.accountId ||
+                (beforeData.type == 'transfer' && afterData.toAccountId == beforeData.toAccountId) ||
+                validMovementLinkedAccount(afterData.toAccountId, beforeData, afterData, transactionId, 'updated')))) &&
         validPocketMovementShape(afterData, afterData.workspaceId);
     }
 
@@ -543,7 +543,7 @@ service cloud.firestore {
         ((operation == 'created' && !('accountId' in beforeData) && 'accountId' in afterData) ||
          (operation == 'updated' && 'accountId' in beforeData && 'accountId' in afterData) ||
          (operation == 'deleted' && 'accountId' in beforeData && !('accountId' in afterData))) &&
-        request.resource.data.balance == resource.data.balance + netDelta &&
+        math.abs(request.resource.data.balance - (resource.data.balance + netDelta)) < 0.0001 &&
         (!changed.hasAny(['openingAllocationId']) ||
           (operation == 'deleted' && beforeData.pocketAllocation == true &&
            beforeData.toAccountId == accountId && resource.data.openingAllocationId == transactionId &&
@@ -775,7 +775,8 @@ service cloud.firestore {
     }
 
     match /transactions/{transactionId} {
-      allow read: if isWorkspaceMember(resource.data.workspaceId);
+      allow list: if isWorkspaceMember(resource.data.workspaceId);
+      allow get: if isAuthenticated() && (resource == null || isWorkspaceMember(resource.data.workspaceId));
       allow create: if isWorkspaceMember(request.resource.data.workspaceId) &&
         isValidTransactionBudget(request.resource.data, false) &&
         satisfiesAccountBudgetLink(request.resource.data) &&

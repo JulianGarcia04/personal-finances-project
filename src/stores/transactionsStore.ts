@@ -20,6 +20,7 @@ import {
 } from '@/lib/mirror'
 import { createCardBillingLookup, expenseAmountForDate, getInstallmentCount } from '@/lib/installments'
 import { parseDateOnly, toDateValue } from '@/lib/dates'
+import { roundMoney } from '@/lib/money'
 import { createExpenseBudgetAssigner, selectBudgetExpenses } from '@/lib/transactionClassification'
 import { budgetChangeForEdit, budgetIdToPersist, type EditBudgetChange } from '@/lib/budgets'
 import { 
@@ -149,7 +150,7 @@ function publishPocketDeltas(
   for (const [accountId, delta] of Object.entries(deltas)) {
     const account = accountsStore.accounts.find(existing => existing.id === accountId)
     if (!account) continue
-    account.balance += delta
+    account.balance = roundMoney(account.balance + delta)
     if (account.parentAccountId) account.pocketActivity = true
   }
 }
@@ -180,9 +181,9 @@ async function commitPocketMovement(options: {
   workspaceId: string
   userId: string
   next?: PocketMovementTransaction
-  // Budget decided by an edit, written in the same update (a value, or deleteField()).
-  budgetPatch?: { budgetId: unknown }
-}): Promise<{ id: string; data: any; deltas: Record<string, number> }> {
+  // Linked budget of the target account; budget transition is derived from live before.type.
+  linkedBudgetId?: string | null
+}): Promise<{ id: string; data: any; deltas: Record<string, number>; budgetChange?: EditBudgetChange }> {
   const transactionRef = options.transactionId
     ? doc(db, 'transactions', options.transactionId)
     : doc(collection(db, 'transactions'))
@@ -267,7 +268,7 @@ async function commitPocketMovement(options: {
     for (const accountId of endpointIds) {
       const delta = deltas[accountId] ?? 0
       const account = accounts.get(accountId)
-      const balance = Number(account?.balance) + delta
+      const balance = roundMoney(Number(account?.balance) + delta)
       if (!Number.isFinite(balance) || (movementAccountIsPocketRelated(account) && balance < 0)) {
         throw new Error('El saldo disponible de un bolsillo o cuenta principal no puede ser negativo.')
       }
@@ -293,9 +294,21 @@ async function commitPocketMovement(options: {
       return { id, data: before, deltas }
     }
     if (!options.next) throw new Error('Faltan los datos del movimiento.')
-    if (options.kind === 'created') transaction.set(transactionRef, { ...options.next })
-    else transaction.update(transactionRef, { ...options.next, ...(options.budgetPatch ?? {}) })
-    return { id, data: options.next, deltas }
+    if (options.kind === 'created') {
+      transaction.set(transactionRef, { ...options.next })
+      return { id, data: options.next, deltas }
+    }
+    // Compute budget transition from the live stored type inside the transaction,
+    // and preserve server-stored createdAt precision (nanoseconds) on pocket updates.
+    if (!before) throw new Error('Transacción no encontrada.')
+    const liveBudgetChange = budgetChangeForEdit({
+      fromType: before.type,
+      toType: options.next.type,
+      linkedBudgetId: options.linkedBudgetId ?? null
+    })
+    const { createdAt: _ignoredCreatedAt, ...mutableNext } = options.next
+    transaction.update(transactionRef, { ...mutableNext, ...(budgetPatchFor(liveBudgetChange) ?? {}) })
+    return { id, data: options.next, deltas, budgetChange: liveBudgetChange }
   })
 }
 
@@ -601,45 +614,91 @@ export const useTransactionsStore = defineStore('transactions', {
       this.loading = true
       try {
         const transactionDate = date instanceof Date ? date : new Date(date)
-        const installmentCount = type === 'expense' && account.type === 'credit'
-          ? getInstallmentCount(installments)
-          : 1
-        const newTx = {
-          workspaceId,
-          userId: userId || user.uid,
-          accountId,
-          amount: normalizedAmount,
-          description,
-          categoryId,
-          date: Timestamp.fromDate(transactionDate),
-          type,
-          toAccountId,
-          receiptUrl,
-          notes,
-          installments: installmentCount,
-          currency: account.currency || 'USD',
-          createdAt: new Date(),
-          ...budgetField
+        const docRef = doc(collection(db, 'transactions'))
+        const createdAt = new Date()
+
+        const committed = await runTransaction(db, async (transaction) => {
+          const sourceRef = doc(db, 'accounts', accountId)
+          const destRef = type === 'transfer' && toAccountId ? doc(db, 'accounts', toAccountId) : null
+          const [sourceSnap, destSnap] = await Promise.all([
+            transaction.get(sourceRef),
+            destRef ? transaction.get(destRef) : Promise.resolve(null)
+          ])
+          if (!sourceSnap.exists()) throw new Error('Cuenta origen no encontrada')
+          const liveSource = sourceSnap.data()
+          if (liveSource.workspaceId !== workspaceId) {
+            throw new Error('La cuenta origen no pertenece al workspace activo')
+          }
+          const liveDest = destSnap?.exists() ? destSnap.data() : null
+          if (type === 'transfer') {
+            if (!liveDest || liveDest.workspaceId !== workspaceId) {
+              throw new Error('La cuenta destino no existe en el workspace activo')
+            }
+            if (liveDest.currency !== liveSource.currency) {
+              throw new Error('Las transferencias solo se permiten entre cuentas de la misma moneda.')
+            }
+          }
+          assertBridgeMovement(type, liveSource, liveDest)
+          if (liveSource.mirror) {
+            throw new Error('Esta cuenta ahora es una cuenta puente; recarga e inténtalo de nuevo.')
+          }
+          if (movementAccountIsPocketRelated(liveSource) || (liveDest && movementAccountIsPocketRelated(liveDest))) {
+            throw new Error('La cuenta cambió a bolsillo; recarga e inténtalo de nuevo.')
+          }
+
+          const installmentCount = type === 'expense' && liveSource.type === 'credit'
+            ? getInstallmentCount(installments)
+            : 1
+          const newTx = {
+            workspaceId,
+            userId: userId || user.uid,
+            accountId,
+            amount: normalizedAmount,
+            description,
+            categoryId,
+            date: Timestamp.fromDate(transactionDate),
+            type,
+            toAccountId: type === 'transfer' ? toAccountId : null,
+            receiptUrl,
+            notes,
+            installments: installmentCount,
+            currency: liveSource.currency || 'USD',
+            createdAt,
+            ...budgetField
+          }
+
+          const updatedBalances: Record<string, number> = {}
+          if (type === 'transfer' && destRef && liveDest && toAccountId) {
+            const nextSourceBalance = roundMoney(Number(liveSource.balance) - normalizedAmount)
+            const nextDestBalance = roundMoney(Number(liveDest.balance) + normalizedAmount)
+            updatedBalances[accountId] = nextSourceBalance
+            updatedBalances[toAccountId] = nextDestBalance
+            transaction.update(sourceRef, { balance: nextSourceBalance })
+            transaction.update(destRef, { balance: nextDestBalance })
+          } else {
+            const nextSourceBalance = roundMoney(Number(liveSource.balance) + normalizedAmount)
+            updatedBalances[accountId] = nextSourceBalance
+            transaction.update(sourceRef, { balance: nextSourceBalance })
+          }
+
+          transaction.set(docRef, newTx)
+          return { newTx, updatedBalances }
+        })
+
+        const txWithId: Transaction = {
+          id: docRef.id,
+          ...committed.newTx,
+          date: transactionDate
         }
 
-        // 1. Guardar la transacción en Firestore
-        const docRef = await addDoc(collection(db, 'transactions'), newTx)
-        const txWithId: Transaction = { 
-          id: docRef.id, 
-          ...newTx, 
-          date: transactionDate 
+        if (authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === user.uid) {
+          for (const [accId, balance] of Object.entries(committed.updatedBalances)) {
+            const idx = accountsStore.accounts.findIndex(acc => acc.id === accId)
+            if (idx !== -1) accountsStore.accounts[idx].balance = balance
+          }
+          this.transactions.unshift(txWithId)
+          this.transactions.sort((a, b) => b.date.getTime() - a.date.getTime())
         }
-
-        // 2. Actualizar balances de las cuentas asociadas
-        if (type === 'transfer' && toAccountId) {
-          await accountsStore.updateAccountBalance(accountId, -normalizedAmount)
-          await accountsStore.updateAccountBalance(toAccountId, normalizedAmount)
-        } else {
-          await accountsStore.updateAccountBalance(accountId, normalizedAmount)
-        }
-
-        this.transactions.unshift(txWithId)
-        this.transactions.sort((a, b) => b.date.getTime() - a.date.getTime())
 
         return txWithId
       } catch (error) {
@@ -818,32 +877,89 @@ export const useTransactionsStore = defineStore('transactions', {
       }
       this.loading = true
       try {
-        // 1. Eliminar de Firestore y revertir saldos.
+        // 1. Eliminar de Firestore y revertir saldos atómicamente desde el documento guardado.
+        let receiptToDelete: string | null = tx.receiptUrl ?? null
+        let deletedInStore = true
         if (tx.mirrorOf) {
           // Gasto espejo: las dos patas y los tres saldos se revierten juntos o no se revierte nada.
           await this.deleteMirrorPair(tx)
         } else {
-          await deleteDoc(doc(db, 'transactions', transactionId))
+          const txRef = doc(db, 'transactions', transactionId)
+          const deleteOutcome = await runTransaction(db, async (transaction) => {
+            const txSnap = await transaction.get(txRef)
+            if (!txSnap.exists()) return { deleted: false as const, nextBalances: {}, receiptUrl: null as string | null }
 
-          if (tx.type === 'transfer' && tx.toAccountId) {
-            await accountsStore.updateAccountBalance(tx.accountId, tx.amount)
-            await accountsStore.updateAccountBalance(tx.toAccountId, -tx.amount)
-          } else {
-            await accountsStore.updateAccountBalance(tx.accountId, -tx.amount)
+            const stored = txSnap.data() as any
+            if (!canDeleteMirrorTransaction(stored)) {
+              throw new Error(
+                stored.reversedBy || stored.reversedAt
+                  ? 'Esta liquidación ya fue revertida y no se puede eliminar para conservar la consistencia de saldos.'
+                  : 'Una reversión de liquidación no se puede eliminar para conservar la trazabilidad contable.'
+              )
+            }
+            if (stored.mirrorOf) {
+              throw new Error('Este movimiento está vinculado a otro workspace; recarga e inténtalo de nuevo.')
+            }
+
+            const storedAmount = Number(stored.amount)
+            const sourceRef = doc(db, 'accounts', stored.accountId)
+            const destRef = stored.type === 'transfer' && stored.toAccountId
+              ? doc(db, 'accounts', stored.toAccountId)
+              : null
+            const [sourceSnap, destSnap] = await Promise.all([
+              transaction.get(sourceRef),
+              destRef ? transaction.get(destRef) : Promise.resolve(null)
+            ])
+            if ((sourceSnap.exists() && movementAccountIsPocketRelated(sourceSnap.data())) ||
+                (destSnap?.exists() && movementAccountIsPocketRelated(destSnap.data()))) {
+              throw new Error('La cuenta cambió a bolsillo; recarga e inténtalo de nuevo.')
+            }
+
+            const nextBalances: Record<string, number> = {}
+            if (stored.type === 'transfer' && destRef && stored.toAccountId) {
+              if (sourceSnap.exists()) {
+                const next = roundMoney(Number(sourceSnap.data().balance) + storedAmount)
+                nextBalances[stored.accountId] = next
+                transaction.update(sourceRef, { balance: next })
+              }
+              if (destSnap?.exists()) {
+                const next = roundMoney(Number(destSnap.data().balance) - storedAmount)
+                nextBalances[stored.toAccountId] = next
+                transaction.update(destRef, { balance: next })
+              }
+            } else if (sourceSnap.exists()) {
+              const next = roundMoney(Number(sourceSnap.data().balance) - storedAmount)
+              nextBalances[stored.accountId] = next
+              transaction.update(sourceRef, { balance: next })
+            }
+
+            transaction.delete(txRef)
+            return { deleted: true as const, nextBalances, receiptUrl: (stored.receiptUrl as string | null) ?? null }
+          })
+
+          deletedInStore = deleteOutcome.deleted
+          receiptToDelete = deleteOutcome.deleted ? deleteOutcome.receiptUrl : null
+          if (deleteOutcome.deleted && authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === userId) {
+            for (const [accId, balance] of Object.entries(deleteOutcome.nextBalances)) {
+              const idx = accountsStore.accounts.findIndex(acc => acc.id === accId)
+              if (idx !== -1) accountsStore.accounts[idx].balance = balance
+            }
           }
         }
 
-        // 1b. Eliminar de Storage si tiene comprobante
-        if (tx.receiptUrl) {
+        // 1b. Eliminar de Storage si realmente existía y tenía comprobante
+        if (deletedInStore && receiptToDelete) {
           try {
-            const storageFileRef = storageRef(storage, tx.receiptUrl)
+            const storageFileRef = storageRef(storage, receiptToDelete)
             await deleteObject(storageFileRef)
           } catch (storageErr) {
             console.warn('No se pudo borrar el comprobante de Storage:', storageErr)
           }
         }
 
-        this.transactions = this.transactions.filter(t => t.id !== transactionId)
+        if (authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === userId) {
+          this.transactions = this.transactions.filter(t => t.id !== transactionId)
+        }
       } catch (error) {
         console.error('Error al borrar transacción:', error)
         throw error
@@ -1328,7 +1444,7 @@ export const useTransactionsStore = defineStore('transactions', {
               }
               const budgetField = linkedBudgetId ? { budgetId: linkedBudgetId } : {}
               const currentBalance = Number(storedAccount.balance)
-              const balanceAfter = currentBalance + totalAmountChange
+              const balanceAfter = roundMoney(currentBalance + totalAmountChange)
               if (!Number.isFinite(currentBalance) || !Number.isFinite(balanceAfter)) {
                 throw new Error('El saldo de la cuenta no es válido.')
               }
@@ -1479,11 +1595,6 @@ export const useTransactionsStore = defineStore('transactions', {
       const workspaceId = authStore.activeWorkspaceId
       if (!workspaceId) throw new Error('Workspace no inicializado')
       const normalizedAmount = normalizeTransactionAmount(updates.amount, updates.type)
-      const budgetChange = budgetChangeForEdit({
-        fromType: oldTx.type,
-        toType: updates.type,
-        linkedBudgetId: updates.linkedBudgetId ?? null
-      })
 
       if (transactionTouchesPocket(accountsStore, oldTx, updates)) {
         if (!workspaceId || oldTx.workspaceId !== workspaceId) throw new Error('La transacción no pertenece al workspace activo.')
@@ -1514,9 +1625,12 @@ export const useTransactionsStore = defineStore('transactions', {
           // The budget follows the edit in the same write as the pocket movement.
           const result = await commitPocketMovement({
             kind: 'updated', transactionId, workspaceId, userId: user.uid, next,
-            budgetPatch: budgetPatchFor(budgetChange)
+            linkedBudgetId: updates.linkedBudgetId ?? null
           })
-          const updatedTx = withBudgetChange({ ...oldTx, ...next, date: transactionDate }, budgetChange)
+          const updatedTx = withBudgetChange(
+            { ...oldTx, ...next, date: transactionDate },
+            result.budgetChange ?? { action: 'keep' }
+          )
           publishPocketDeltas(accountsStore, result.deltas, workspaceId, user.uid)
           if (authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === user.uid) {
             const currentIndex = this.transactions.findIndex(existing => existing.id === transactionId)
@@ -1535,91 +1649,151 @@ export const useTransactionsStore = defineStore('transactions', {
       this.loading = true
       try {
         const transactionDate = updates.date instanceof Date ? updates.date : new Date(updates.date)
-        const account = accountsStore.getAccountById(updates.accountId)
-        if (!account) throw new Error('Cuenta origen no encontrada')
-        if (account.workspaceId !== workspaceId) throw new Error('La cuenta origen no pertenece al workspace activo')
-        if (account.mirror) {
-          throw new Error('No puedes mover o editar una transacción hacia una cuenta puente fuera de una operación espejo')
-        }
+        const docRef = doc(db, 'transactions', transactionId)
 
-        const isSameTransferFinancials =
-          oldTx.type === 'transfer' &&
-          updates.type === 'transfer' &&
-          updates.accountId === oldTx.accountId &&
-          updates.toAccountId === oldTx.toAccountId &&
-          normalizedAmount === oldTx.amount &&
-          (oldTx.currency || 'USD') === (account.currency || 'USD')
+        const committed = await runTransaction(db, async (transaction) => {
+          const txSnap = await transaction.get(docRef)
+          if (!txSnap.exists()) throw new Error('La transacción ya no existe.')
+          const storedOld = txSnap.data() as any
+          if (storedOld.workspaceId !== workspaceId) {
+            throw new Error('La transacción no pertenece al workspace activo.')
+          }
+          if (storedOld.mirrorOf) {
+            throw new Error('Esta transacción es compartida; recarga antes de editarla.')
+          }
+          const liveBudgetChange = budgetChangeForEdit({
+            fromType: storedOld.type,
+            toType: updates.type,
+            linkedBudgetId: updates.linkedBudgetId ?? null
+          })
+          const budgetField = budgetPatchFor(liveBudgetChange) ?? {}
 
-        if (updates.type === 'transfer') {
-          if (!updates.toAccountId || updates.toAccountId === updates.accountId) {
-            throw new Error('Las transferencias requieren una cuenta de destino diferente a la de origen')
+          const uniqueAccountIds = [...new Set([
+            storedOld.accountId,
+            storedOld.type === 'transfer' ? storedOld.toAccountId : null,
+            updates.accountId,
+            updates.type === 'transfer' ? updates.toAccountId : null
+          ].filter((id): id is string => typeof id === 'string' && id.length > 0))]
+
+          const accountSnaps = await Promise.all(
+            uniqueAccountIds.map(id => transaction.get(doc(db, 'accounts', id)))
+          )
+          const liveAccounts = new Map<string, any>()
+          for (let i = 0; i < uniqueAccountIds.length; i++) {
+            if (accountSnaps[i].exists()) liveAccounts.set(uniqueAccountIds[i], accountSnaps[i].data())
           }
-          const destination = accountsStore.getAccountById(updates.toAccountId)
-          if (!destination || destination.workspaceId !== workspaceId) {
-            throw new Error('La cuenta destino no existe en el workspace activo')
+
+          const account = liveAccounts.get(updates.accountId)
+          if (!account) throw new Error('Cuenta origen no encontrada')
+          if (account.workspaceId !== workspaceId) {
+            throw new Error('La cuenta origen no pertenece al workspace activo')
           }
-          if (destination.currency !== account.currency && !isSameTransferFinancials) {
-            throw new Error('Las transferencias solo se permiten entre cuentas de la misma moneda.')
-          }
-          if (destination.mirror) {
+          if (account.mirror) {
             throw new Error('No puedes mover o editar una transacción hacia una cuenta puente fuera de una operación espejo')
           }
-        }
-        const installmentCount = updates.type === 'expense' && account.type === 'credit'
-          ? getInstallmentCount(updates.installments)
-          : 1
 
-        if (!isSameTransferFinancials) {
-          // 1. Revertir balances de las cuentas antiguas
-          if (oldTx.type === 'transfer' && oldTx.toAccountId) {
-            await accountsStore.updateAccountBalance(oldTx.accountId, oldTx.amount)
-            await accountsStore.updateAccountBalance(oldTx.toAccountId, -oldTx.amount)
-          } else {
-            await accountsStore.updateAccountBalance(oldTx.accountId, -oldTx.amount)
+          const storedOldAmount = Number(storedOld.amount)
+          const isSameTransferFinancials =
+            storedOld.type === 'transfer' &&
+            updates.type === 'transfer' &&
+            updates.accountId === storedOld.accountId &&
+            updates.toAccountId === storedOld.toAccountId &&
+            normalizedAmount === storedOldAmount &&
+            (storedOld.currency || 'USD') === (account.currency || 'USD')
+
+          if (updates.type === 'transfer') {
+            if (!updates.toAccountId || updates.toAccountId === updates.accountId) {
+              throw new Error('Las transferencias requieren una cuenta de destino diferente a la de origen')
+            }
+            const destination = liveAccounts.get(updates.toAccountId)
+            if (!destination || destination.workspaceId !== workspaceId) {
+              throw new Error('La cuenta destino no existe en el workspace activo')
+            }
+            if (destination.currency !== account.currency && !isSameTransferFinancials) {
+              throw new Error('Las transferencias solo se permiten entre cuentas de la misma moneda.')
+            }
+            if (destination.mirror) {
+              throw new Error('No puedes mover o editar una transacción hacia una cuenta puente fuera de una operación espejo')
+            }
           }
 
-          // 2. Aplicar balances de las cuentas nuevas
-          if (updates.type === 'transfer' && updates.toAccountId) {
-            await accountsStore.updateAccountBalance(updates.accountId, -normalizedAmount)
-            await accountsStore.updateAccountBalance(updates.toAccountId, normalizedAmount)
-          } else {
-            await accountsStore.updateAccountBalance(updates.accountId, normalizedAmount)
+          if ([...liveAccounts.values()].some(movementAccountIsPocketRelated)) {
+            throw new Error('Una de las cuentas cambió a bolsillo; recarga e inténtalo de nuevo.')
           }
-        }
 
-        // 3. Preparar documento de actualización
-        // Préstamos y transferencias no llevan categoría ni cuenta destino
-        const neutral = updates.type !== 'income' && updates.type !== 'expense'
-        const updatedFields = {
-          accountId: updates.accountId,
-          amount: normalizedAmount,
-          description: updates.description,
-          categoryId: neutral ? '' : updates.categoryId,
-          date: Timestamp.fromDate(transactionDate),
-          type: updates.type,
-          toAccountId: updates.type === 'transfer' ? updates.toAccountId : null,
-          receiptUrl: updates.receiptUrl ?? null,
-          notes: updates.notes ?? null,
-          installments: installmentCount,
-          userId: updates.userId || oldTx.userId,
-          currency: account.currency || 'USD',
-        }
-        // The budget follows the edit in the same write (linked account, type rules).
-        const budgetField = budgetPatchFor(budgetChange) ?? {}
+          const installmentCount = updates.type === 'expense' && account.type === 'credit'
+            ? getInstallmentCount(updates.installments)
+            : 1
 
-        // 4. Actualizar en Firestore
-        const docRef = doc(db, 'transactions', transactionId)
-        await updateDoc(docRef, { ...updatedFields, ...budgetField })
+          const updatedBalances: Record<string, number> = {}
+          if (!isSameTransferFinancials) {
+            const deltas: Record<string, number> = {}
+            const addDelta = (accId: string, delta: number) => {
+              deltas[accId] = (deltas[accId] ?? 0) + delta
+            }
+            // 1. Revertir balances guardados de las cuentas antiguas
+            if (storedOld.type === 'transfer' && storedOld.toAccountId) {
+              addDelta(storedOld.accountId, storedOldAmount)
+              addDelta(storedOld.toAccountId, -storedOldAmount)
+            } else {
+              addDelta(storedOld.accountId, -storedOldAmount)
+            }
+            // 2. Aplicar balances de las cuentas nuevas
+            if (updates.type === 'transfer' && updates.toAccountId) {
+              addDelta(updates.accountId, -normalizedAmount)
+              addDelta(updates.toAccountId, normalizedAmount)
+            } else {
+              addDelta(updates.accountId, normalizedAmount)
+            }
 
-        // 5. Actualizar en el estado local
+            for (const [accId, delta] of Object.entries(deltas)) {
+              const roundedDelta = roundMoney(delta)
+              if (roundedDelta === 0) continue
+              const liveAcc = liveAccounts.get(accId)
+              if (!liveAcc) continue
+              const nextBalance = roundMoney(Number(liveAcc.balance) + roundedDelta)
+              updatedBalances[accId] = nextBalance
+              transaction.update(doc(db, 'accounts', accId), { balance: nextBalance })
+            }
+          }
+
+          // 3. Preparar documento de actualización y escribir atómicamente con los saldos
+          const neutral = updates.type !== 'income' && updates.type !== 'expense'
+          const updatedFields = {
+            accountId: updates.accountId,
+            amount: normalizedAmount,
+            description: updates.description,
+            categoryId: neutral ? '' : updates.categoryId,
+            date: Timestamp.fromDate(transactionDate),
+            type: updates.type,
+            toAccountId: updates.type === 'transfer' ? updates.toAccountId : null,
+            receiptUrl: updates.receiptUrl ?? null,
+            notes: updates.notes ?? null,
+            installments: installmentCount,
+            userId: updates.userId || storedOld.userId,
+            currency: account.currency || 'USD',
+          }
+
+          transaction.update(docRef, { ...updatedFields, ...budgetField })
+          return { updatedFields, updatedBalances, budgetChange: liveBudgetChange }
+        })
+
+        // 4. Actualizar en el estado local solo si seguimos en el mismo workspace/sesión
         const updatedTx = withBudgetChange({
           ...oldTx,
-          ...updatedFields,
+          ...committed.updatedFields,
           date: transactionDate
-        }, budgetChange)
+        }, committed.budgetChange)
 
-        this.transactions[txIndex] = updatedTx
-        this.transactions.sort((a, b) => b.date.getTime() - a.date.getTime())
+        if (authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === user.uid) {
+          for (const [accId, balance] of Object.entries(committed.updatedBalances)) {
+            const idx = accountsStore.accounts.findIndex(acc => acc.id === accId)
+            if (idx !== -1) accountsStore.accounts[idx].balance = balance
+          }
+          const currentIdx = this.transactions.findIndex(t => t.id === transactionId)
+          if (currentIdx !== -1) this.transactions[currentIdx] = updatedTx
+          this.transactions.sort((a, b) => b.date.getTime() - a.date.getTime())
+        }
 
         return updatedTx
       } catch (error) {
