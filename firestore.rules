@@ -198,6 +198,17 @@ service cloud.firestore {
            request.resource.data.currency == resource.data.currency &&
            (!('mirror' in request.resource.data) || request.resource.data.mirror == null) &&
            (!('mirror' in resource.data) || resource.data.mirror == null))) &&
+        (request.resource.data.currency == resource.data.currency ||
+          (oldIds.size() == 0 &&
+           newIds.size() == 0 &&
+           resource.data.balance == 0 &&
+           request.resource.data.balance == 0 &&
+           (!('mirror' in resource.data) || resource.data.mirror == null) &&
+           (!('mirror' in request.resource.data) || request.resource.data.mirror == null) &&
+           resource.data.get('linkedBudgetId', null) == null &&
+           request.resource.data.get('linkedBudgetId', null) == null &&
+           request.resource.data.currency is string &&
+           request.resource.data.currency.matches('^[A-Z]{3}$'))) &&
         (registryChanged
           ? validPocketAddition(accountId, oldIds, newIds, changed) ||
             validPocketRemoval(accountId, oldIds, newIds, changed)
@@ -245,6 +256,17 @@ service cloud.firestore {
         !('pocketAllocation' in data) &&
         (!('toAccountId' in data) || data.toAccountId == null ||
           (data.toAccountId is string && rootAccountForWorkspace(data.toAccountId, data.workspaceId)));
+    }
+
+    function validOrdinaryTransferCurrency(data) {
+      let toId = data.get('toAccountId', null);
+      let source = get(accountPath(data.accountId));
+      return data.type != 'transfer' || toId == null ||
+        (toId is string &&
+         source != null &&
+         source.data.currency is string && source.data.currency.size() > 0 &&
+         get(accountPath(toId)).data.currency == source.data.currency &&
+         data.get('currency', null) == source.data.currency);
     }
 
     function safeExistingTransactionReferencesNoPocket(data) {
@@ -687,14 +709,20 @@ service cloud.firestore {
     }
 
     // workspaceId is immutable (isValidTransactionBudgetUpdate), so one membership check covers both
-    // states. The pocket path runs close to the 1000-expression limit, so it is tried before the
-    // ordinary-reference branch it can never satisfy (same outcome: the branches are alternatives).
+    // states. Metadata-only ordinary edits short-circuit ahead of the pocket validator (avoiding
+    // 1000-expression exhaustion on legacy cross-currency transfers), while financial pocket edits
+    // skip that branch in one check and run validPocketMovementUpdate first.
     function isValidTransactionUpdate(transactionId, changed) {
       return isValidTransactionBudgetUpdate(changed) &&
         (changed.hasOnly(['budgetId']) ||
+         (!changed.hasAny(['type', 'accountId', 'toAccountId', 'currency', 'amount']) &&
+          safeExistingTransactionReferencesNoPocket(resource.data) &&
+          safeExistingTransactionReferencesNoPocket(request.resource.data) &&
+          validMirrorAwareUpdate(transactionId, changed)) ||
          validPocketMovementUpdate(transactionId, resource.data, request.resource.data) ||
          (safeExistingTransactionReferencesNoPocket(resource.data) &&
           safeExistingTransactionReferencesNoPocket(request.resource.data) &&
+          validOrdinaryTransferCurrency(request.resource.data) &&
           validMirrorAwareUpdate(transactionId, changed)));
     }
 
@@ -703,10 +731,11 @@ service cloud.firestore {
       allow create: if isWorkspaceMember(request.resource.data.workspaceId) &&
         isValidTransactionBudget(request.resource.data, false) &&
         satisfiesAccountBudgetLink(request.resource.data) &&
-        ((normalTransactionReferencesRoots(request.resource.data) &&
-          validBridgeReferenceCreate(transactionId, request.resource.data)) ||
-         validPocketMovementCreate(transactionId, request.resource.data) ||
-         validPocketOpeningTransaction(transactionId));
+        (normalTransactionReferencesRoots(request.resource.data)
+          ? (validOrdinaryTransferCurrency(request.resource.data) &&
+             validBridgeReferenceCreate(transactionId, request.resource.data))
+          : (validPocketMovementCreate(transactionId, request.resource.data) ||
+             validPocketOpeningTransaction(transactionId)));
       allow update: if isWorkspaceMember(resource.data.workspaceId) &&
         isValidTransactionUpdate(transactionId, request.resource.data.diff(resource.data).affectedKeys());
       allow delete: if isWorkspaceMember(resource.data.workspaceId) &&

@@ -10,10 +10,12 @@ export const AccountSchema = z.object({
   balance: z.number({
     invalid_type_error: 'El saldo debe ser un número'
   }),
-  limit: z.number().default(0),
+  limit: z.number({
+    invalid_type_error: 'El cupo debe ser un número'
+  }).finite('El cupo debe ser un número finito').min(0, 'El cupo no puede ser negativo').default(0),
   currency: z.string()
-    .min(3, 'El código de moneda debe tener exactamente 3 caracteres')
-    .max(3, 'El código de moneda debe tener exactamente 3 caracteres'),
+    .trim()
+    .regex(/^[A-Z]{3}$/, 'El código de moneda debe tener 3 letras mayúsculas (ej. COP, USD, EUR)'),
   statementClosingDay: z.number().int().min(1).max(31).nullable().optional(),
   paymentDueDay: z.number().int().min(1).max(31).nullable().optional(),
   parentAccountId: z.string().min(1).nullable().optional()
@@ -97,8 +99,8 @@ export const GoalSchema = z.object({
   }).min(1, 'El monto objetivo debe ser mayor a 0'),
   currentAmount: z.number().default(0),
   currency: z.string()
-    .min(3, 'El código de moneda debe tener exactamente 3 caracteres')
-    .max(3, 'El código de moneda debe tener exactamente 3 caracteres'),
+    .trim()
+    .regex(/^[A-Z]{3}$/, 'El código de moneda debe tener 3 letras mayúsculas (ej. COP, USD, EUR)'),
   targetDate: z.date({
     required_error: 'La fecha límite es requerida',
     invalid_type_error: 'Fecha límite inválida'

@@ -86,12 +86,12 @@ export function getAccountDisplayLabel(account: Account, accounts: Account[]): s
     : `${account.name} · sin grupo (ID: ${account.id})`
 }
 
-/** Preserve ordinary transfer selection, but constrain any movement involving a pocket. */
+/** Require matching workspace/currency and exclude bridges for all transfers, plus pocket rules. */
 export function canTransferBetweenAccounts(source: Account, destination: Account, accounts: Account[]): boolean {
   if (source.id === destination.id) return false
-  if (!isPocketRelatedAccount(source) && !isPocketRelatedAccount(destination)) return true
   if (source.workspaceId !== destination.workspaceId || source.currency !== destination.currency ||
       source.mirror || destination.mirror) return false
+  if (!isPocketRelatedAccount(source) && !isPocketRelatedAccount(destination)) return true
 
   const eligibleTypes = ['checking', 'savings', 'cash', 'credit']
   if (!eligibleTypes.includes(source.type) || !eligibleTypes.includes(destination.type)) return false

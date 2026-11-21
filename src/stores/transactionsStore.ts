@@ -542,6 +542,9 @@ export const useTransactionsStore = defineStore('transactions', {
         if (!destination || destination.workspaceId !== workspaceId) {
           throw new Error('La cuenta destino no existe en el workspace activo')
         }
+        if (destination.currency !== account.currency) {
+          throw new Error('Las transferencias solo se permiten entre cuentas de la misma moneda.')
+        }
       }
       assertBridgeMovement(type, account, destination)
 
@@ -1526,6 +1529,14 @@ export const useTransactionsStore = defineStore('transactions', {
           throw new Error('No puedes mover o editar una transacción hacia una cuenta puente fuera de una operación espejo')
         }
 
+        const isSameTransferFinancials =
+          oldTx.type === 'transfer' &&
+          updates.type === 'transfer' &&
+          updates.accountId === oldTx.accountId &&
+          updates.toAccountId === oldTx.toAccountId &&
+          normalizedAmount === oldTx.amount &&
+          (oldTx.currency || 'USD') === (account.currency || 'USD')
+
         if (updates.type === 'transfer') {
           if (!updates.toAccountId || updates.toAccountId === updates.accountId) {
             throw new Error('Las transferencias requieren una cuenta de destino diferente a la de origen')
@@ -1533,6 +1544,9 @@ export const useTransactionsStore = defineStore('transactions', {
           const destination = accountsStore.getAccountById(updates.toAccountId)
           if (!destination || destination.workspaceId !== workspaceId) {
             throw new Error('La cuenta destino no existe en el workspace activo')
+          }
+          if (destination.currency !== account.currency && !isSameTransferFinancials) {
+            throw new Error('Las transferencias solo se permiten entre cuentas de la misma moneda.')
           }
           if (destination.mirror) {
             throw new Error('No puedes mover o editar una transacción hacia una cuenta puente fuera de una operación espejo')
@@ -1542,20 +1556,22 @@ export const useTransactionsStore = defineStore('transactions', {
           ? getInstallmentCount(updates.installments)
           : 1
 
-        // 1. Revertir balances de las cuentas antiguas
-        if (oldTx.type === 'transfer' && oldTx.toAccountId) {
-          await accountsStore.updateAccountBalance(oldTx.accountId, oldTx.amount)
-          await accountsStore.updateAccountBalance(oldTx.toAccountId, -oldTx.amount)
-        } else {
-          await accountsStore.updateAccountBalance(oldTx.accountId, -oldTx.amount)
-        }
+        if (!isSameTransferFinancials) {
+          // 1. Revertir balances de las cuentas antiguas
+          if (oldTx.type === 'transfer' && oldTx.toAccountId) {
+            await accountsStore.updateAccountBalance(oldTx.accountId, oldTx.amount)
+            await accountsStore.updateAccountBalance(oldTx.toAccountId, -oldTx.amount)
+          } else {
+            await accountsStore.updateAccountBalance(oldTx.accountId, -oldTx.amount)
+          }
 
-        // 2. Aplicar balances de las cuentas nuevas
-        if (updates.type === 'transfer' && updates.toAccountId) {
-          await accountsStore.updateAccountBalance(updates.accountId, -normalizedAmount)
-          await accountsStore.updateAccountBalance(updates.toAccountId, normalizedAmount)
-        } else {
-          await accountsStore.updateAccountBalance(updates.accountId, normalizedAmount)
+          // 2. Aplicar balances de las cuentas nuevas
+          if (updates.type === 'transfer' && updates.toAccountId) {
+            await accountsStore.updateAccountBalance(updates.accountId, -normalizedAmount)
+            await accountsStore.updateAccountBalance(updates.toAccountId, normalizedAmount)
+          } else {
+            await accountsStore.updateAccountBalance(updates.accountId, normalizedAmount)
+          }
         }
 
         // 3. Preparar documento de actualización
@@ -1569,7 +1585,7 @@ export const useTransactionsStore = defineStore('transactions', {
           date: Timestamp.fromDate(transactionDate),
           type: updates.type,
           toAccountId: updates.type === 'transfer' ? updates.toAccountId : null,
-          receiptUrl: updates.receiptUrl,
+          receiptUrl: updates.receiptUrl ?? null,
           notes: updates.notes ?? null,
           installments: installmentCount,
           userId: updates.userId || oldTx.userId,

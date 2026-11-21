@@ -393,10 +393,15 @@
                 maxlength="3"
                 type="text"
                 required
-                :readonly="!!editingAccount?.parentAccountId"
+                :readonly="!!editCurrencyLockReason"
+                :disabled="!!editCurrencyLockReason"
+                :aria-describedby="editCurrencyLockReason ? 'edit-account-currency-lock' : undefined"
                 placeholder="COP, USD, EUR"
-                class="field uppercase"
+                class="field uppercase disabled:opacity-60 disabled:cursor-not-allowed"
               />
+              <p v-if="editCurrencyLockReason" id="edit-account-currency-lock" class="text-[10px] text-text-muted leading-snug">
+                {{ editCurrencyLockReason }}
+              </p>
             </div>
           </div>
 
@@ -641,6 +646,7 @@ import { AccountSchema } from '@/schemas'
 import { getNextOccurrence, daysUntil, expenseAmountForCycle } from '@/lib/creditCycle'
 import { toLocalDateKey } from '@/lib/dates'
 import { splitMoney } from '@/lib/money'
+import { getAccountCurrencyLockReason } from '@/lib/accountRules'
 import {
   canTransferBetweenAccounts,
   getAccountDisplayLabel,
@@ -698,6 +704,14 @@ onMounted(async () => {
 const accountGroups = computed(() => groupAccountsByPocket(accountsStore.accounts, authStore.activeWorkspaceId || undefined))
 const editingAccountId = ref('')
 const editingAccount = computed(() => accountsStore.accounts.find(account => account.id === editingAccountId.value) ?? null)
+const editCurrencyLockReason = computed(() => {
+  const account = editingAccount.value
+  if (!account) return null
+  const hasTransactions = transactionsStore.transactions.some(
+    tx => tx.accountId === account.id || tx.toAccountId === account.id
+  )
+  return getAccountCurrencyLockReason(account, hasTransactions)
+})
 
 const canCreatePocket = (account: Account) =>
   !isPocketAccount(account) && !account.mirror && ['checking', 'savings'].includes(account.type)
@@ -826,8 +840,8 @@ const saveAccount = async () => {
     name: newAcc.value.name,
     type: newAcc.value.type,
     balance: newAcc.value.balance,
-    limit: newAcc.value.limit,
-    currency: newAcc.value.currency.toUpperCase(),
+    limit: newAcc.value.type === 'credit' ? newAcc.value.limit : 0,
+    currency: newAcc.value.currency.trim().toUpperCase(),
     statementClosingDay: newAcc.value.statementClosingDay || null,
     paymentDueDay: newAcc.value.paymentDueDay || null
   })
@@ -903,10 +917,11 @@ const closeEditAccountModal = () => {
 
 const saveEditedAccount = async () => {
   const accountBeingEdited = editingAccount.value
-  const currency = editAcc.value.currency.toUpperCase()
+  const currency = editAcc.value.currency.trim().toUpperCase()
   // Validar con el mismo schema (balance queda por fuera, no se edita)
   const validation = AccountSchema.pick({ name: true, type: true, limit: true, currency: true, statementClosingDay: true, paymentDueDay: true }).safeParse({
     ...editAcc.value,
+    limit: editAcc.value.type === 'credit' ? editAcc.value.limit : 0,
     currency,
     statementClosingDay: editAcc.value.statementClosingDay || null,
     paymentDueDay: editAcc.value.paymentDueDay || null

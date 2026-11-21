@@ -1340,18 +1340,26 @@ const applyEditBudgetAssignment = async () => {
 const editableAccounts = computed(() => accountsStore.accounts.filter(account => !account.mirror ||
   account.id === editingTransaction.value?.accountId || account.id === editingTransaction.value?.toAccountId))
 
+const isOriginalTransferPair = (sourceId: string, destinationId: string) => {
+  const original = editingTransaction.value
+  return !!original && original.type === 'transfer' &&
+    original.accountId === sourceId && original.toAccountId === destinationId
+}
+
 const availableEditDestinationAccounts = computed(() => {
   if (editTx.value.type !== 'transfer') return editableAccounts.value.filter(account => account.id !== editTx.value.accountId)
   const source = accountsStore.getAccountById(editTx.value.accountId)
   return editableAccounts.value.filter(account => account.id !== editTx.value.accountId &&
-    (!source || canTransferBetweenAccounts(source, account, accountsStore.accounts)))
+    (!source || canTransferBetweenAccounts(source, account, accountsStore.accounts) ||
+      isOriginalTransferPair(source.id, account.id)))
 })
 
 const availableEditSourceAccounts = computed(() => {
   if (editTx.value.type !== 'transfer') return editableAccounts.value
   const destination = accountsStore.getAccountById(editTx.value.toAccountId)
   return editableAccounts.value.filter(account => account.id !== editTx.value.toAccountId &&
-    (!destination || canTransferBetweenAccounts(account, destination, accountsStore.accounts)))
+    (!destination || canTransferBetweenAccounts(account, destination, accountsStore.accounts) ||
+      isOriginalTransferPair(account.id, destination.id)))
 })
 
 const availableEditCategories = computed(() => {
@@ -1414,6 +1422,25 @@ const availableNewSourceAccounts = computed(() => {
 
 watch(() => newTx.value.type, type => {
   if (type !== 'expense' && accountsStore.getAccountById(newTx.value.accountId)?.mirror) newTx.value.accountId = ''
+})
+
+watch(() => [newTx.value.type, newTx.value.accountId], () => {
+  if (newTx.value.type !== 'transfer' || !newTx.value.toAccountId) return
+  const source = accountsStore.getAccountById(newTx.value.accountId)
+  const destination = accountsStore.getAccountById(newTx.value.toAccountId)
+  if (!source || !destination || !canTransferBetweenAccounts(source, destination, accountsStore.accounts)) {
+    newTx.value.toAccountId = ''
+  }
+})
+
+watch(() => [editTx.value.type, editTx.value.accountId], () => {
+  if (editTx.value.type !== 'transfer' || !editTx.value.toAccountId) return
+  if (isOriginalTransferPair(editTx.value.accountId, editTx.value.toAccountId)) return
+  const source = accountsStore.getAccountById(editTx.value.accountId)
+  const destination = accountsStore.getAccountById(editTx.value.toAccountId)
+  if (!source || !destination || !canTransferBetweenAccounts(source, destination, accountsStore.accounts)) {
+    editTx.value.toAccountId = ''
+  }
 })
 
 // Filtrar categorías según tipo seleccionado (ingreso o gasto)

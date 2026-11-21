@@ -1,0 +1,41 @@
+# Feature: P0 Accounting Integrity Remediation
+
+Objective: remediate the P0 critical accounting and balance-integrity defects identified in the full-app audit, step by step with a cross-app consistency audit after every unit.
+Branch: `feat/accounting-integrity-p0` (from `main`). Delivery strategy: `ask-on-risk`. Forecast: ~1,200 authored changed lines across 8 work units. Test runners: `pnpm test` (`node --test`), `pnpm test:functions`, `pnpm test:budgets:security`, `pnpm test:emulators`, `pnpm build`.
+
+## Specs
+
+- **S1 — Block 1:1 cross-currency transfers.** Ordinary (non-pocket) transfers between accounts of different currencies must be rejected consistently across transfer eligibility helpers (`canTransferBetweenAccounts`), UI selectors (`Transactions.vue`), store mutations (`transactionsStore.ts`), and `firestore.rules`, matching the server guard (`functions/src/pockets.ts`).
+- **S2 — Lock account currency when balance or movements exist.** Editing `account.currency` must be rejected when the account has a non-zero balance, existing transactions, a mirror link, or a budget link (`accountsStore.ts`, `Accounts.vue`, `firestore.rules`) so balances are never silently re-labeled across currencies.
+- **S3 — Prevent double-reversal on bridge settlements and unsafe mirror mutations.** Deleting an already-reversed bridge settlement (`reversedBy != null`) or a reversal entry (`reversalOf != null` / `settlementType === 'reversal'`) must be blocked in UI (`Transactions.vue`), client store (`transactionsStore.ts`), and server (`functions/src/settlements.ts`); mirror pair deletion must verify reciprocal `twin.mirrorOf`; `setAccountMirror` must require `balance === 0` when enabling or re-pointing a bridge and validate currency/workspace targets.
+- **S4 — Atomic ordinary transactions and rounded balance arithmetic.** Ordinary `addTransaction`, `updateTransaction`, and `deleteTransaction` in `transactionsStore.ts` must commit transaction docs and account balance updates in a single `runTransaction` reading stored state (never mutating balances prior to writing the transaction or reversing from stale Pinia cache), using `roundMoney` for balance updates.
+- **S5 — Preserve pocket `createdAt` and parent cache consistency.** Editing pocket transactions must not overwrite `createdAt` with a JS `Date` (preventing nanosecond truncation `permission-denied` on server-created pocket rows), and `deleteEmptyPocket` must keep the parent account's `childAccountIds` in sync in Pinia.
+- **S6 — Credit cards cannot fund operating budgets.** Exclude credit cards from `linkedAccountIds` (`Goals.vue`, `budgetPersistence.ts`, `firestore.rules`, `functions/src/budgetAlerts.ts`) and ensure transfers onto any credit card never count as budget `Fondos`.
+- **S7 — Fix `selfFundedBudgetIds` cash-flow erasure.** Transferring regular monthly income from an unlinked account into a linked budget account (or a zero/negative net-funds budget) must not silently erase spending from monthly cash flow or alerts (`src/lib/budgets.ts`, `functions/src/budgetAlerts.ts`, `functions/src/agentQueries.ts`).
+- **S8 — Fix Dashboard & Accounts KPI/currency/filter bugs.** Use reporting-currency limits in `Dashboard.vue` `monthEndProjection` scoped to default budget; remove `savingsRate` 0-clamp hiding deficit state; compute uncapped `budgetSummary.percent`; omit `$0` historical categories from `expensesByCategory`; load transactions on `Accounts.vue` mount and align cycle due with ledger; include `toAccountId` in `transactionsStore.filteredTransactions`.
+- **S9 — Align AI Advisor budget/currency calculations.** Convert `categoryBudgets` from `categoryBudgetCurrency` to `primaryCurrency` (and skip unconfirmed currency) in `functions/src/agentQueries.ts` `buildBudgetStatus`; evaluate `expenseLimit` on all monthly expenses matching Dashboard; fix `listAccounts` Net Worth description; refresh `goalsStore.fetchGoals()` in `Agent.vue`.
+- **S10 — Explicit FX base currency and settings integrity.** Track `exchangeRatesBaseCurrency` on workspace settings, surface clear warnings instead of silent 1:1 corruption when base/user currency diverges or rates are missing, and hydrate/clear `expenseLimit` in `Settings.vue`.
+- **S11 — Statement import accounting integrity.** Support `transfer` classification (so credit card payments/abonos never become fake `income`), flag potential duplicates, enforce `statementImportId` idempotency on non-pocket accounts, detect/warn currency mismatches, and exclude bridge accounts from destination select.
+- **S12 — Savings Goals accounting integrity.** Stop recording goal contributions as `type: 'expense'` that destroys Net Worth and inverts Savings Rate; enforce currency match and block credit cards/bridges. *(Product model choice — link Goal to account/pocket vs transfer/virtual — to be confirmed with the user before implementing T8.)*
+- **S13 — Cross-app audit per step.** User requirement verbatim: "En cada paso quiero que cojas los cambios y hagas una auditoria de los cambios recien hechos y los compares con toda la app así para evitar incosistencias y evitar falsos positivos (evitar traer más glitches)". Every task unit ends with a dedicated cross-app audit comparing the unit's diff against the rest of the app (frontend, stores, rules, functions, agent, tests).
+
+## Tasks
+
+| ID | Specs | Route | Status | Evidence |
+|----|-------|-------|--------|----------|
+| T1 | S1, S2, S13 | inline | done | RED: 3 unit tests failed (`pockets.test.ts`, `schemas.test.ts`, `accountRules.test.ts`). GREEN: `pnpm test` 383/383, `pnpm test:functions` 215/215, `pnpm build` ok, `budgets:security` 88/88, `emulators:rules` 41/41, pockets/bridges/accounting emulators 67/67. Cross-app auditor caught 4 blockers (rules post-state bypass, transfer `data.currency`, legacy cross-currency metadata edits, `budgetReferences` compat) -> fixed & rechecked PASS. |
+| T2 | S3, S13 | inline | pending | — |
+| T3 | S4, S5, S13 | inline | pending | — |
+| T4 | S6, S7, S13 | inline | pending | — |
+| T5 | S8, S9, S13 | inline | pending | — |
+| T6 | S10, S13 | inline | pending | — |
+| T7 | S11, S13 | inline | pending | — |
+| T8 | S12, S13 | inline | pending | Blocked on user product decision (Goals model) |
+
+Route evidence: tasks T1–T7 share overlapping core files (`src/stores/transactionsStore.ts`, `src/stores/accountsStore.ts`, `firestore.rules`, `src/views/Dashboard.vue`, `src/views/Goals.vue`) and must be audited step by step per S13; inline execution per unit with an independent read-only cross-app auditor on every unit (satisfies both S13 and the Verification trigger for high-risk items).
+
+## Log
+
+- **L1 (2026-11-21, user, verbatim):** "El plan me gusta... empecemos y a medida que vamos desarrollando vamos iterando en caso de ser necesario.\n\nEn cada paso quiero que cojas los cambios y hagas una auditoria de los cambios recien hechos y los compares con toda la app así para evitar incosistencias y evitar falsos positivos (evitar traer más glitches)"
+- **L2 (context):** Preceded by full-app PM, accounting, UX, and competitor audit (`product_accounting_ux_audit.md`) saved in session brain and mirrored to Engram (`discovery/full-app-accounting-ux-audit`).
+- **L3 (T1 — 2026-11-21):** Implemented S1 (block 1:1 cross-currency ordinary transfers across `canTransferBetweenAccounts`, `Transactions.vue`, `transactionsStore.ts`, `firestore.rules`) and S2 (lock `account.currency` when balance != 0, transactions exist, pockets, mirror, or `linkedBudgetId` across `accountRules.ts`, `accountsStore.ts`, `Accounts.vue`, `firestore.rules`; also tightened `AccountSchema.limit >= 0` and ISO-3 uppercase `currency`). Independent cross-app audit caught 4 blockers before commit: (1) synthetic `budgetReferences` fixtures omitting `toAccountId`, (2) `validRootAccountUpdate` missing post-state + currency format validation, (3) `validOrdinaryTransferCurrency` missing `data.currency == source.currency`, (4) legacy cross-currency transfer metadata-only edits broken in UI/store. Also fixed `firestore.rules` `allow create` ternary and `isValidTransactionUpdate` metadata-only short-circuit to keep all pocket+budget writes comfortably below the 1000-expression limit. All 4 blockers fixed and rechecked PASS. Risk: item 2 (Firestore security rules) + item 3 (shared transfer helper).

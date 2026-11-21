@@ -165,7 +165,12 @@ test('related transfer endpoints require eligible accounts in one workspace and 
   assert.equal(pocketUi.canTransferBetweenAccounts(pocket, otherCurrency, accounts), false)
   assert.equal(pocketUi.canTransferBetweenAccounts(pocket, credit, accounts), false)
   assert.equal(pocketUi.canTransferBetweenAccounts(pocket, mirror, accounts), false)
-  assert.equal(pocketUi.canTransferBetweenAccounts(otherBank, credit, accounts), true, 'ordinary transfers keep legacy eligibility')
+  assert.equal(pocketUi.canTransferBetweenAccounts(otherBank, credit, accounts), true, 'ordinary transfers keep same-currency eligibility')
+  assert.equal(pocketUi.canTransferBetweenAccounts(otherBank, otherCurrency, accounts), false, 'ordinary cross-currency transfers are blocked')
+  assert.equal(pocketUi.canTransferBetweenAccounts(otherCurrency, otherBank, accounts), false, 'ordinary cross-currency transfers are blocked in reverse')
+  assert.equal(pocketUi.canTransferBetweenAccounts(otherBank, mirror, accounts), false, 'ordinary transfers into a bridge are blocked')
+  assert.equal(pocketUi.canTransferBetweenAccounts(mirror, otherBank, accounts), false, 'ordinary transfers out of a bridge are blocked')
+  assert.equal(pocketUi.canTransferBetweenAccounts(otherBank, { ...otherBank, id: 'ws-2-bank', workspaceId: 'workspace-2' }, accounts), false, 'cross-workspace ordinary transfers are blocked')
 })
 
 test('bank accounts with pockets retain ordinary credit-card payment eligibility', () => {

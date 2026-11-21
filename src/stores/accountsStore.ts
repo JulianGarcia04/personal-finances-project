@@ -3,11 +3,14 @@ import { db, auth } from '@/lib/firebase'
 import { Account, AccountType, AccountMirror } from '@/types'
 import { PocketOpeningSchema } from '@/schemas'
 import { planPocketOpening } from '@/lib/pockets'
+import { getAccountCurrencyLockReason } from '@/lib/accountRules'
 import { useAuthStore } from '@/stores/authStore'
 import {
   collection,
   query,
   where,
+  orderBy,
+  limit as limitQuery,
   getDocs,
   addDoc,
   doc,
@@ -98,14 +101,22 @@ export const useAccountsStore = defineStore('accounts', {
 
       this.loading = true
       try {
+        const normalizedCurrency = currency.trim().toUpperCase()
+        if (!/^[A-Z]{3}$/.test(normalizedCurrency)) {
+          throw new Error('El código de moneda debe tener 3 letras mayúsculas (ej. COP, USD, EUR).')
+        }
+        const normalizedLimit = type === 'credit' ? Number(limit) : 0
+        if (!Number.isFinite(normalizedLimit) || normalizedLimit < 0) {
+          throw new Error('El cupo de la tarjeta no puede ser negativo.')
+        }
         const newAccount = {
           workspaceId,
           userId: user.uid,
           name,
           type,
           balance: Number(balance),
-          limit: type === 'credit' ? Number(limit) : 0,
-          currency,
+          limit: normalizedLimit,
+          currency: normalizedCurrency,
           statementClosingDay: type === 'credit' ? statementClosingDay : null,
           paymentDueDay: type === 'credit' ? paymentDueDay : null,
           createdAt: new Date()
@@ -296,15 +307,56 @@ export const useAccountsStore = defineStore('accounts', {
       const userId = auth.currentUser?.uid
       this.loading = true
       try {
+        const normalizedCurrency = updates.currency.trim().toUpperCase()
+        if (!/^[A-Z]{3}$/.test(normalizedCurrency)) {
+          throw new Error('El código de moneda debe tener 3 letras mayúsculas (ej. COP, USD, EUR).')
+        }
+        const normalizedLimit = updates.type === 'credit' ? Number(updates.limit) : 0
+        if (!Number.isFinite(normalizedLimit) || normalizedLimit < 0) {
+          throw new Error('El cupo de la tarjeta no puede ser negativo.')
+        }
+
+        const accountRef = doc(db, 'accounts', accountId)
+        const accountSnap = await getDoc(accountRef)
+        if (!accountSnap.exists()) throw new Error('La cuenta no existe')
+        const stored = accountSnap.data() as Account
+
+        if (normalizedCurrency !== stored.currency) {
+          const immediateReason = getAccountCurrencyLockReason(stored, false)
+          if (immediateReason) throw new Error(immediateReason)
+
+          const targetWorkspaceId = stored.workspaceId || workspaceId
+          if (targetWorkspaceId) {
+            const [outgoingSnap, incomingSnap] = await Promise.all([
+              getDocs(query(
+                collection(db, 'transactions'),
+                where('workspaceId', '==', targetWorkspaceId),
+                where('accountId', '==', accountId),
+                orderBy('date', 'desc'),
+                limitQuery(1)
+              )),
+              getDocs(query(
+                collection(db, 'transactions'),
+                where('workspaceId', '==', targetWorkspaceId),
+                where('toAccountId', '==', accountId),
+                orderBy('date', 'desc'),
+                limitQuery(1)
+              ))
+            ])
+            const historyReason = getAccountCurrencyLockReason(stored, !outgoingSnap.empty || !incomingSnap.empty)
+            if (historyReason) throw new Error(historyReason)
+          }
+        }
+
         const fields = {
           name: updates.name,
           type: updates.type,
-          limit: updates.type === 'credit' ? Number(updates.limit) : 0,
-          currency: updates.currency,
+          limit: normalizedLimit,
+          currency: normalizedCurrency,
           statementClosingDay: updates.type === 'credit' ? updates.statementClosingDay ?? null : null,
           paymentDueDay: updates.type === 'credit' ? updates.paymentDueDay ?? null : null
         }
-        await updateDoc(doc(db, 'accounts', accountId), fields)
+        await updateDoc(accountRef, fields)
         if (authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === userId) {
           const index = this.accounts.findIndex(acc => acc.id === accountId)
           if (index !== -1) {
