@@ -468,28 +468,33 @@
               <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Workspace que pone la plata</label>
               <select
                 v-model="editMirror.workspaceId"
+                :disabled="!!editMirrorLockReason"
                 @change="loadMirrorAccounts()"
-                class="field focus:border-accent-violet"
+                class="field focus:border-accent-violet disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 <option value="">Sin espejo — cuenta normal</option>
                 <option v-for="ws in otherWorkspaces" :key="ws.id" :value="ws.id">{{ ws.name }}</option>
               </select>
+              <p v-if="editMirrorLockReason" class="text-[10px] text-text-muted leading-snug">
+                {{ editMirrorLockReason }}
+              </p>
             </div>
 
             <div v-if="editMirror.workspaceId" class="space-y-3.5 animate-fade-in">
               <p v-if="loadingMirrorAccounts" class="text-[11px] text-text-muted">Cargando cuentas…</p>
-              <p v-else-if="mirrorAccounts.length < 2" class="text-[11px] text-accent-rose">
-                Ese workspace necesita al menos dos cuentas: la que paga y una de "por cobrar".
+              <p v-else-if="eligibleMirrorAccounts.length < 2" class="text-[11px] text-accent-rose">
+                Ese workspace necesita al menos dos cuentas compatibles en {{ editAcc.currency.toUpperCase() }} (sin bolsillos ni espejo): la que paga y una de "por cobrar".
               </p>
               <template v-else>
                 <div class="space-y-1">
                   <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Cuenta que paga (allá)</label>
                   <select
                     v-model="editMirror.sourceAccountId"
-                    class="field focus:border-accent-violet"
+                    :disabled="!!editMirrorLockReason"
+                    class="field focus:border-accent-violet disabled:opacity-60 disabled:cursor-not-allowed"
                   >
                     <option value="" disabled>Ej. tu tarjeta de crédito</option>
-                    <option v-for="acc in mirrorAccounts" :key="acc.id" :value="acc.id" :disabled="acc.id === editMirror.accountId">
+                    <option v-for="acc in eligibleMirrorAccounts" :key="acc.id" :value="acc.id" :disabled="acc.id === editMirror.accountId">
                       {{ acc.name }} ({{ acc.currency }})
                     </option>
                   </select>
@@ -499,10 +504,11 @@
                   <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Cuenta "por cobrar" (allá)</label>
                   <select
                     v-model="editMirror.accountId"
-                    class="field focus:border-accent-violet"
+                    :disabled="!!editMirrorLockReason"
+                    class="field focus:border-accent-violet disabled:opacity-60 disabled:cursor-not-allowed"
                   >
                     <option value="" disabled>Ej. "Por cobrar – Casa", saldo 0</option>
-                    <option v-for="acc in mirrorAccounts" :key="acc.id" :value="acc.id" :disabled="acc.id === editMirror.sourceAccountId">
+                    <option v-for="acc in eligibleMirrorAccounts" :key="acc.id" :value="acc.id" :disabled="acc.id === editMirror.sourceAccountId">
                       {{ acc.name }} ({{ acc.currency }})
                     </option>
                   </select>
@@ -647,12 +653,14 @@ import { getNextOccurrence, daysUntil, expenseAmountForCycle } from '@/lib/credi
 import { toLocalDateKey } from '@/lib/dates'
 import { splitMoney } from '@/lib/money'
 import { getAccountCurrencyLockReason } from '@/lib/accountRules'
+import { sameMirrorConfig } from '@/lib/mirror'
 import {
   canTransferBetweenAccounts,
   getAccountDisplayLabel,
   getAccountPocketTotals,
   groupAccountsByPocket,
-  isPocketAccount
+  isPocketAccount,
+  isPocketRelatedAccount
 } from '@/lib/pockets'
 import {
   Plus as PlusIcon,
@@ -711,6 +719,26 @@ const editCurrencyLockReason = computed(() => {
     tx => tx.accountId === account.id || tx.toAccountId === account.id
   )
   return getAccountCurrencyLockReason(account, hasTransactions)
+})
+const editMirrorLockReason = computed(() => {
+  const account = editingAccount.value
+  if (!account) return null
+  if (isPocketRelatedAccount(account)) return 'Una cuenta con bolsillos o un bolsillo no puede ser cuenta puente.'
+  if (account.linkedBudgetId) return 'Esta cuenta está ligada a un presupuesto: quítala del presupuesto antes de cambiar el espejo.'
+  if (Number(account.balance) !== 0) {
+    return account.mirror
+      ? 'Liquida el saldo a 0 antes de cambiar o quitar la configuración de espejo.'
+      : 'Solo puedes configurar espejo en una cuenta con saldo 0.'
+  }
+  return null
+})
+const eligibleMirrorAccounts = computed(() => {
+  const targetCurrency = editAcc.value.currency.trim().toUpperCase()
+  const current = editingAccount.value?.mirror
+  return mirrorAccounts.value.filter(acc =>
+    (acc.id === current?.accountId || acc.id === current?.sourceAccountId) ||
+    (!acc.mirror && !isPocketRelatedAccount(acc) && acc.currency === targetCurrency)
+  )
 })
 
 const canCreatePocket = (account: Account) =>
@@ -943,6 +971,14 @@ const saveEditedAccount = async () => {
     return
   }
 
+  const nextMirror = workspaceId ? { workspaceId, sourceAccountId, accountId } : null
+  const mirrorChanged = !accountBeingEdited?.parentAccountId &&
+    !sameMirrorConfig(accountBeingEdited?.mirror ?? null, nextMirror)
+  if (mirrorChanged && editMirrorLockReason.value) {
+    alert(editMirrorLockReason.value)
+    return
+  }
+
   loading.value = true
   try {
     await accountsStore.updateAccount(editingAccountId.value, {
@@ -951,11 +987,8 @@ const saveEditedAccount = async () => {
       statementClosingDay: editAcc.value.statementClosingDay || null,
       paymentDueDay: editAcc.value.paymentDueDay || null
     })
-    if (!accountBeingEdited?.parentAccountId) {
-      await accountsStore.setAccountMirror(
-        editingAccountId.value,
-        workspaceId ? { workspaceId, sourceAccountId, accountId } : null
-      )
+    if (mirrorChanged) {
+      await accountsStore.setAccountMirror(editingAccountId.value, nextMirror)
     }
     closeEditAccountModal()
   } catch (err: any) {

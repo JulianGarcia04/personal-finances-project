@@ -2,7 +2,7 @@
 // Run through `node tests/pockets.imports.emulators.mjs`, which starts the emulators.
 import assert from 'node:assert/strict'
 import test, { after, before } from 'node:test'
-import { doc, setDoc, updateDoc } from 'firebase/firestore'
+import { deleteDoc, doc, setDoc, updateDoc } from 'firebase/firestore'
 import { createPocketFixture } from './pockets.fixtures.mjs'
 
 let fixture
@@ -191,4 +191,163 @@ test('S2: editing account currency is blocked when balance is non-zero or moveme
     name: 'Con saldo renombrada', type: 'checking', limit: 0, currency: 'COP'
   })
   assert.equal((await fixture.adminDb.collection('accounts').doc(fundedAcc.id).get()).data().name, 'Con saldo renombrada')
+})
+
+test('S3: deleting a reversed settlement or reversal entry is blocked on client, server (pocket), and Firestore rules', async () => {
+  const { adminDb, db, identity, workspaceId, accountsStore, transactionsStore, authStore } = fixture
+  authStore.activeWorkspaceId = workspaceId
+  const userId = identity.user.uid
+
+  const runScenario = async (withPocket) => {
+    const key = `s3-${withPocket ? 'pocket' : 'plain'}-${Date.now()}-${++sequence}`
+    const mirrorWorkspaceId = `${key}-mirror`
+    await adminDb.collection('workspaces').doc(mirrorWorkspaceId).set({
+      id: mirrorWorkspaceId, name: 'Personal', ownerId: userId, members: [userId], currency: 'COP'
+    })
+    const ids = {
+      from: `${key}-from`,
+      fromPocket: withPocket ? `${key}-from-pocket` : null,
+      bridge: `${key}-bridge`,
+      source: `${key}-source`,
+      receivable: `${key}-receivable`,
+      to: `${key}-to`
+    }
+    const seed = (id, data) => adminDb.collection('accounts').doc(id).set({
+      userId, limit: 0, currency: 'COP', statementClosingDay: null, paymentDueDay: null, createdAt: new Date(), ...data
+    })
+    await seed(ids.from, {
+      workspaceId, name: 'From', type: 'savings', balance: 1_000,
+      ...(withPocket ? { childAccountIds: [ids.fromPocket] } : {})
+    })
+    if (withPocket) {
+      await seed(ids.fromPocket, {
+        workspaceId, name: 'Pocket', type: 'savings', balance: 200,
+        parentAccountId: ids.from, pocketActivity: true, openingAllocationId: null
+      })
+    }
+    await seed(ids.bridge, {
+      workspaceId, name: 'Bridge', type: 'checking', balance: -300,
+      mirror: { workspaceId: mirrorWorkspaceId, accountId: ids.receivable, sourceAccountId: ids.source }
+    })
+    await seed(ids.source, { workspaceId: mirrorWorkspaceId, name: 'Card', type: 'credit', balance: -300 })
+    await seed(ids.receivable, { workspaceId: mirrorWorkspaceId, name: 'Receivable', type: 'checking', balance: 300 })
+    await seed(ids.to, { workspaceId: mirrorWorkspaceId, name: 'Personal Bank', type: 'savings', balance: 500 })
+
+    await accountsStore.fetchAccounts()
+    await transactionsStore.settleMirror({
+      bridgeAccountId: ids.bridge, amount: 150, fromAccountId: ids.from, toAccountId: ids.to, date
+    })
+    await transactionsStore.fetchTransactions()
+    const settlementLeg = transactionsStore.transactions.find(
+      tx => tx.accountId === ids.from && tx.toAccountId === ids.bridge && tx.type === 'transfer'
+    )
+    assert.ok(settlementLeg, 'settlement leg should exist')
+
+    await transactionsStore.reverseSettlement(settlementLeg.id)
+    await transactionsStore.fetchTransactions()
+    const reversedLeg = transactionsStore.transactions.find(tx => tx.id === settlementLeg.id)
+    assert.ok(reversedLeg?.reversedBy, 'settlement must be marked reversedBy')
+    const reversalId = reversedLeg.reversedBy
+
+    const beforeBalances = {
+      from: await storedBalance(ids.from),
+      bridge: await storedBalance(ids.bridge),
+      receivable: await storedBalance(ids.receivable),
+      to: await storedBalance(ids.to)
+    }
+    assert.deepEqual(beforeBalances, { from: 1_000, bridge: -300, receivable: 300, to: 500 })
+
+    // Deleting the already-reversed settlement must fail in store AND direct rules;
+    // clearing reversedBy/reversedAt via updateDoc must also fail (no 2-step bypass).
+    await assert.rejects(transactionsStore.deleteTransaction(settlementLeg.id), /revertida/i)
+    await assert.rejects(deleteDoc(doc(db, 'transactions', settlementLeg.id)), denied)
+    await assert.rejects(
+      updateDoc(doc(db, 'transactions', settlementLeg.id), { reversedBy: null, reversedAt: null }),
+      denied
+    )
+
+    // Deleting the reversal leg must fail in store AND direct rules
+    await assert.rejects(transactionsStore.deleteTransaction(reversalId), /reversión/i)
+    await assert.rejects(deleteDoc(doc(db, 'transactions', reversalId)), denied)
+
+    // All 4 balances and both docs must remain completely untouched
+    assert.deepEqual({
+      from: await storedBalance(ids.from),
+      bridge: await storedBalance(ids.bridge),
+      receivable: await storedBalance(ids.receivable),
+      to: await storedBalance(ids.to)
+    }, beforeBalances)
+    assert.equal((await adminDb.collection('transactions').doc(settlementLeg.id).get()).exists, true)
+    assert.equal((await adminDb.collection('transactions').doc(reversalId).get()).exists, true)
+  }
+
+  await runScenario(false)
+  await runScenario(true)
+})
+
+test('S3: setAccountMirror enforces zero balance, distinct workspaces, matching currency, and preserves no-op edits', async () => {
+  const { adminDb, db, identity, workspaceId, accountsStore } = fixture
+  const userId = identity.user.uid
+  const otherWs = `s3-mirror-ws-${Date.now()}-${++sequence}`
+  await adminDb.collection('workspaces').doc(otherWs).set({
+    id: otherWs, name: 'Otro WS', ownerId: userId, members: [userId], currency: 'COP'
+  })
+
+  const nonZero = await seedAccount({ name: 'Con saldo', balance: 500, currency: 'COP' })
+  const clean = await seedAccount({ name: 'Puente limpio', balance: 0, currency: 'COP' })
+  const localOther = await seedAccount({ name: 'Local otro', balance: 0, currency: 'COP' })
+  const remoteSource = await seedAccount({ workspaceId: otherWs, name: 'Tarjeta remota', type: 'credit', balance: 0, currency: 'COP' })
+  const remoteRec = await seedAccount({ workspaceId: otherWs, name: 'Por cobrar COP', balance: 0, currency: 'COP' })
+  const remoteUsd = await seedAccount({ workspaceId: otherWs, name: 'Por cobrar USD', balance: 0, currency: 'USD' })
+  await accountsStore.fetchAccounts()
+
+  const validMirror = { workspaceId: otherWs, sourceAccountId: remoteSource.id, accountId: remoteRec.id }
+
+  // Cannot enable mirror on non-zero balance (store & rules), nor create non-zero mirrored account directly
+  await assert.rejects(accountsStore.setAccountMirror(nonZero.id, validMirror), /saldo distinto de cero/i)
+  await assert.rejects(updateDoc(doc(db, 'accounts', nonZero.id), { mirror: validMirror }), denied)
+  await assert.rejects(
+    setDoc(doc(db, 'accounts', `direct-nonzero-mirror-${++sequence}`), {
+      workspaceId, userId, name: 'Bad bridge', type: 'checking', balance: 100, limit: 0, currency: 'COP',
+      mirror: validMirror, createdAt: new Date()
+    }),
+    denied
+  )
+  // Cannot bypass mirror target validation via direct Firestore updateDoc on a zero-balance account
+  await assert.rejects(
+    updateDoc(doc(db, 'accounts', clean.id), {
+      mirror: { workspaceId: otherWs, sourceAccountId: remoteSource.id, accountId: remoteUsd.id }
+    }),
+    denied
+  )
+  await assert.rejects(
+    updateDoc(doc(db, 'accounts', clean.id), {
+      mirror: { workspaceId, sourceAccountId: nonZero.id, accountId: localOther.id }
+    }),
+    denied
+  )
+
+  // Cannot mirror to same workspace or mismatched currency
+  await assert.rejects(
+    accountsStore.setAccountMirror(clean.id, { workspaceId, sourceAccountId: nonZero.id, accountId: localOther.id }),
+    /otro workspace/i
+  )
+  await assert.rejects(
+    accountsStore.setAccountMirror(clean.id, { workspaceId: otherWs, sourceAccountId: remoteSource.id, accountId: remoteUsd.id }),
+    /misma moneda/i
+  )
+
+  // Can enable mirror on clean zero-balance account with valid same-currency remote targets
+  await accountsStore.setAccountMirror(clean.id, validMirror)
+  assert.deepEqual((await adminDb.collection('accounts').doc(clean.id).get()).data().mirror, validMirror)
+
+  // Give the bridge debt (-200): no-op setAccountMirror (name edit flow) succeeds, re-pointing fails
+  await adminDb.collection('accounts').doc(clean.id).update({ balance: -200 })
+  await accountsStore.fetchAccounts()
+  await accountsStore.setAccountMirror(clean.id, validMirror)
+  await assert.rejects(
+    accountsStore.setAccountMirror(clean.id, { workspaceId: otherWs, sourceAccountId: remoteRec.id, accountId: remoteSource.id }),
+    /saldo distinto de cero/i
+  )
+  await assert.rejects(accountsStore.setAccountMirror(clean.id, null), /saldo distinto de cero/i)
 })

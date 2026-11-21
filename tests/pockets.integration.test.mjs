@@ -608,9 +608,10 @@ test('invalid parents, currency conflicts, and nested pockets are rejected', asy
   const cash = await accountsStore.addAccount({ name: 'Cash', type: 'cash', balance: 100, currency: 'COP' })
   const bank = await accountsStore.addAccount({ name: 'Eligible', type: 'checking', balance: 100, currency: 'COP' })
   const mirror = await accountsStore.addAccount({ name: 'Mirror', type: 'checking', balance: 100, currency: 'COP' })
-  await accountsStore.setAccountMirror(mirror.id, {
-    workspaceId: 'another-workspace', accountId: 'receivable', sourceAccountId: 'source'
+  await adminDb.collection('accounts').doc(mirror.id).update({
+    mirror: { workspaceId: 'another-workspace', accountId: 'receivable', sourceAccountId: 'source' }
   })
+  await accountsStore.fetchAccounts()
   const pocket = await accountsStore.addAccount({ name: 'Child', type: 'savings', balance: 0, currency: 'COP', parentAccountId: bank.id })
 
   for (const parentId of [credit.id, cash.id, mirror.id, pocket.id]) {
@@ -879,9 +880,10 @@ test('extracted Admin account path enforces membership and funds pockets atomica
     parentAccountId: String(pocket.id)
   }))
   const mirroredParent = await accountsStore.addAccount({ name: 'Admin mirror parent', type: 'checking', balance: 20, currency: 'COP' })
-  await accountsStore.setAccountMirror(mirroredParent.id, {
-    workspaceId: 'remote-workspace', accountId: 'receivable', sourceAccountId: 'source'
+  await adminDb.collection('accounts').doc(mirroredParent.id).update({
+    mirror: { workspaceId: 'remote-workspace', accountId: 'receivable', sourceAccountId: 'source' }
   })
+  await accountsStore.fetchAccounts()
   await assert.rejects(createWorkspaceAccount(adminDb, {
     userId: identity.user.uid,
     workspaceId,

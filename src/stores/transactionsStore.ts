@@ -6,6 +6,8 @@ import { Account, Transaction, Category, TransactionType } from '@/types'
 import { getTransactionReplacementDeltas, isPocketAccount, isPocketRelatedAccount } from '@/lib/pockets'
 import {
   assertBridgeMovement,
+  assertMirrorPairDeletable,
+  canDeleteMirrorTransaction,
   isSettlementCandidate,
   planMirror,
   planSettlement,
@@ -772,6 +774,13 @@ export const useTransactionsStore = defineStore('transactions', {
     async deleteTransaction(transactionId: string): Promise<void> {
       const tx = this.transactions.find(t => t.id === transactionId)
       if (!tx) return
+      if (!canDeleteMirrorTransaction(tx)) {
+        throw new Error(
+          tx.reversedBy || tx.reversedAt
+            ? 'Esta liquidación ya fue revertida y no se puede eliminar para conservar la consistencia de saldos.'
+            : 'Una reversión de liquidación no se puede eliminar para conservar la trazabilidad contable.'
+        )
+      }
 
       const accountsStore = useAccountsStore()
       const authStore = useAuthStore()
@@ -859,6 +868,7 @@ export const useTransactionsStore = defineStore('transactions', {
 
         const leg = legSnap.data() as any
         const twin = twinSnap.data() as any
+        assertMirrorPairDeletable({ id: legSnap.id, ...leg }, { id: twinSnap.id, ...twin })
         const legAccounts = await Promise.all([...accountIdsForTransaction(leg), ...accountIdsForTransaction(twin)]
           .map(accountId => transaction.get(doc(db, 'accounts', accountId))))
         if (legAccounts.some(snap => snap.exists() && movementAccountIsPocketRelated(snap.data()))) {
@@ -958,6 +968,9 @@ export const useTransactionsStore = defineStore('transactions', {
           }
           if (bridgeData.workspaceId !== workspaceId || from.workspaceId !== workspaceId) {
             throw new Error('La cuenta puente y la cuenta de pago deben pertenecer al workspace activo')
+          }
+          if (currentMirror.workspaceId === workspaceId) {
+            throw new Error('La cuenta puente debe reflejar otro workspace')
           }
           if (receivable.workspaceId !== mirrorWorkspaceId || to.workspaceId !== mirrorWorkspaceId) {
             throw new Error('Las cuentas espejo no pertenecen al workspace configurado')

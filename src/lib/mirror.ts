@@ -125,6 +125,54 @@ export function assertBridgeMovement(
   }
 }
 
+export interface MirrorDeletionLeg {
+  id?: string
+  mirrorOf?: string | null
+  reversedBy?: string | null
+  reversedAt?: unknown
+  reversalOf?: string | null
+  settlementType?: string | null
+}
+
+/**
+ * Blocks deleting an already-reversed bridge settlement (which would double-reverse all 4 balances),
+ * deleting a reversal entry (which would leave reversedBy stranded), or deleting a non-reciprocal pair.
+ */
+export function assertMirrorPairDeletable(leg: MirrorDeletionLeg, twin: MirrorDeletionLeg): void {
+  if (!leg.id || !twin.id || leg.id === twin.id || leg.mirrorOf !== twin.id || twin.mirrorOf !== leg.id) {
+    throw new Error('La relación espejo del movimiento no es válida; no se eliminó ninguna transacción.')
+  }
+  if (leg.reversedBy || twin.reversedBy || leg.reversedAt || twin.reversedAt) {
+    throw new Error('Esta liquidación ya fue revertida y no se puede eliminar para conservar la consistencia de saldos.')
+  }
+  if (leg.reversalOf || twin.reversalOf || leg.settlementType === 'reversal' || twin.settlementType === 'reversal') {
+    throw new Error('Una reversión de liquidación no se puede eliminar para conservar la trazabilidad contable.')
+  }
+}
+
+export function canDeleteMirrorTransaction(
+  tx: Pick<MirrorDeletionLeg, 'reversedBy' | 'reversedAt' | 'reversalOf' | 'settlementType'>
+): boolean {
+  return !tx.reversedBy && !tx.reversedAt && !tx.reversalOf && tx.settlementType !== 'reversal'
+}
+
+export interface MirrorConfigLike {
+  workspaceId: string
+  accountId: string
+  sourceAccountId: string
+}
+
+export function sameMirrorConfig(
+  left?: MirrorConfigLike | null,
+  right?: MirrorConfigLike | null
+): boolean {
+  if (!left && !right) return true
+  if (!left || !right) return false
+  return left.workspaceId === right.workspaceId &&
+    left.accountId === right.accountId &&
+    left.sourceAccountId === right.sourceAccountId
+}
+
 export interface SettlementDeltas {
   from: number // cuenta que paga la deuda, en el workspace del puente
   bridge: number // cuenta puente: sube hacia 0

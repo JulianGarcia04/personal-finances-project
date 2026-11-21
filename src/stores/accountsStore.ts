@@ -2,8 +2,9 @@ import { defineStore } from 'pinia'
 import { db, auth } from '@/lib/firebase'
 import { Account, AccountType, AccountMirror } from '@/types'
 import { PocketOpeningSchema } from '@/schemas'
-import { planPocketOpening } from '@/lib/pockets'
+import { isPocketRelatedAccount, planPocketOpening } from '@/lib/pockets'
 import { getAccountCurrencyLockReason } from '@/lib/accountRules'
+import { sameMirrorConfig } from '@/lib/mirror'
 import { useAuthStore } from '@/stores/authStore'
 import {
   collection,
@@ -397,12 +398,53 @@ export const useAccountsStore = defineStore('accounts', {
         await runTransaction(db, async (transaction) => {
           const accountSnap = await transaction.get(accountRef)
           if (!accountSnap.exists()) throw new Error('La cuenta no existe')
+          const stored = accountSnap.data() as Account
 
-          if (mirror !== null && accountSnap.data().linkedBudgetId) {
-            throw new Error('Esta cuenta está ligada a un presupuesto: quítala del presupuesto antes de convertirla en cuenta puente.')
+          if (sameMirrorConfig(stored.mirror ?? null, mirror)) return
+
+          if (Number(stored.balance) !== 0) {
+            throw new Error(
+              mirror === null
+                ? 'No puedes quitar el espejo mientras la cuenta tenga saldo distinto de cero. Liquida la deuda antes de quitarlo.'
+                : 'No puedes configurar ni cambiar el espejo mientras la cuenta tenga saldo distinto de cero.'
+            )
           }
-          if (mirror === null && Number(accountSnap.data().balance) !== 0) {
-            throw new Error('No puedes quitar el espejo mientras la cuenta tenga saldo distinto de cero. Liquida la deuda antes de quitarlo.')
+
+          if (mirror !== null) {
+            if (isPocketRelatedAccount(stored)) {
+              throw new Error('Una cuenta con bolsillos o un bolsillo no puede ser cuenta puente.')
+            }
+            if (stored.linkedBudgetId) {
+              throw new Error('Esta cuenta está ligada a un presupuesto: quítala del presupuesto antes de convertirla en cuenta puente.')
+            }
+            if (!mirror.workspaceId || mirror.workspaceId === stored.workspaceId) {
+              throw new Error('La cuenta puente debe reflejar otro workspace distinto al actual.')
+            }
+            if (!mirror.sourceAccountId || !mirror.accountId || mirror.sourceAccountId === mirror.accountId) {
+              throw new Error('La cuenta que paga y la cuenta por cobrar deben ser distintas.')
+            }
+
+            const [sourceSnap, receivableSnap] = await Promise.all([
+              transaction.get(doc(db, 'accounts', mirror.sourceAccountId)),
+              transaction.get(doc(db, 'accounts', mirror.accountId))
+            ])
+            if (!sourceSnap.exists() || !receivableSnap.exists()) {
+              throw new Error('Las cuentas seleccionadas en el workspace espejo no existen.')
+            }
+            const sourceData = sourceSnap.data() as Account
+            const receivableData = receivableSnap.data() as Account
+            if (sourceData.workspaceId !== mirror.workspaceId || receivableData.workspaceId !== mirror.workspaceId) {
+              throw new Error('Las cuentas del espejo deben pertenecer al workspace destino seleccionado.')
+            }
+            if (sourceData.mirror || receivableData.mirror) {
+              throw new Error('Las cuentas destino del espejo no pueden ser cuentas puente.')
+            }
+            if (isPocketRelatedAccount(sourceData) || isPocketRelatedAccount(receivableData)) {
+              throw new Error('Las cuentas del espejo no pueden ser bolsillos ni tener bolsillos.')
+            }
+            if (sourceData.currency !== stored.currency || receivableData.currency !== stored.currency) {
+              throw new Error('La cuenta puente, la cuenta que paga y la cuenta por cobrar deben usar la misma moneda.')
+            }
           }
 
           transaction.update(accountRef, { mirror })

@@ -366,7 +366,7 @@ export async function mutateWorkspaceTransaction(
       const referrers = await transaction.get(
         db.collection('transactions').where('mirrorOf', '==', transactionId).limit(1)
       )
-      if (before.mirrorOf || before.settlementType || !referrers.empty) {
+      if (before.mirrorOf || before.settlementType || before.reversedBy || before.reversedAt || before.reversalOf || !referrers.empty) {
         throw new Error('Este movimiento está vinculado a otro workspace (gasto compartido o liquidación); modifícalo o elimínalo desde la app para revertir ambas partes juntas.')
       }
     }

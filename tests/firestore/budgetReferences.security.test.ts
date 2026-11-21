@@ -388,7 +388,12 @@ test('a budget and the accounts it links are created together in one batch', asy
 
 test('bridge and pocket-related accounts cannot be linked to a budget', async () => {
   const mirror = { workspaceId: wsB, accountId: `${runId}-account-b`, sourceAccountId: `${runId}-account-a` }
-  const bridge = await createAccount({ mirror })
+  const bridgeId = id('bridge-account')
+  await privilegedDocument(`accounts/${bridgeId}`, {
+    workspaceId: wsA, userId: dualId, name: 'Bridge', type: 'checking', balance: 0, limit: 0, currency: 'USD',
+    mirror, createdAt: new Date('2026-10-01T00:00:00Z')
+  })
+  const bridge = accountRef(bridgeId)
   const budget = await createBudget()
   await updateDoc(budget, { linkedAccountIds: [bridge.id], updatedAt: serverTimestamp() })
   await deniedUnchanged(() => updateDoc(bridge, { linkedBudgetId: budget.id }))

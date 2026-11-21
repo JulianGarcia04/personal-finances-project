@@ -227,3 +227,43 @@ test('editing a shared expense moves the three balances by the difference only',
     previousAmount: -300, amount: -100, bridgeCurrency: 'COP', sourceCurrency: 'USD', receivableCurrency: 'COP'
   }), /misma moneda/)
 })
+
+test('S3: assertMirrorPairDeletable blocks reversed settlements, reversal legs, and non-reciprocal links', async () => {
+  const mirror = await import('./mirror.ts')
+  assert.equal(typeof mirror.assertMirrorPairDeletable, 'function', 'mirror pair delete guard is required')
+  assert.equal(typeof mirror.canDeleteMirrorTransaction, 'function', 'UI delete eligibility helper is required')
+  assert.equal(typeof mirror.sameMirrorConfig, 'function', 'mirror equality helper is required')
+
+  const { bridgeLeg, mirrorLeg } = sharedExpensePair()
+  const { paid, received } = settlementLegs()
+
+  assert.doesNotThrow(() => mirror.assertMirrorPairDeletable(bridgeLeg, mirrorLeg))
+  assert.doesNotThrow(() => mirror.assertMirrorPairDeletable(paid, received))
+  assert.equal(mirror.canDeleteMirrorTransaction(bridgeLeg), true)
+  assert.equal(mirror.canDeleteMirrorTransaction(paid), true)
+
+  // Already-reversed settlement cannot be deleted from either leg
+  assert.throws(() => mirror.assertMirrorPairDeletable({ ...paid, reversedBy: 'rev-1' }, received), /revertida/i)
+  assert.throws(() => mirror.assertMirrorPairDeletable(paid, { ...received, reversedBy: 'rev-2' }), /revertida/i)
+  assert.equal(mirror.canDeleteMirrorTransaction({ ...paid, reversedBy: 'rev-1' }), false)
+
+  // Reversal entries cannot be deleted from either leg
+  assert.throws(() => mirror.assertMirrorPairDeletable(
+    { ...paid, settlementType: 'reversal', reversalOf: 'orig-1' },
+    { ...received, settlementType: 'reversal', reversalOf: 'orig-2' }
+  ), /reversión/i)
+  assert.throws(() => mirror.assertMirrorPairDeletable({ ...paid, reversalOf: 'orig-1' }, received), /reversión/i)
+  assert.equal(mirror.canDeleteMirrorTransaction({ ...paid, settlementType: 'reversal' }), false)
+  assert.equal(mirror.canDeleteMirrorTransaction({ ...paid, reversalOf: 'orig-1' }), false)
+
+  // Non-reciprocal mirrorOf link is rejected
+  assert.throws(() => mirror.assertMirrorPairDeletable(bridgeLeg, { ...mirrorLeg, mirrorOf: 'other' }), /relación espejo/i)
+
+  // sameMirrorConfig equality
+  const cfg = { workspaceId: 'ws-2', accountId: 'rec', sourceAccountId: 'src' }
+  assert.equal(mirror.sameMirrorConfig(null, null), true)
+  assert.equal(mirror.sameMirrorConfig(undefined, null), true)
+  assert.equal(mirror.sameMirrorConfig(cfg, { ...cfg }), true)
+  assert.equal(mirror.sameMirrorConfig(cfg, null), false)
+  assert.equal(mirror.sameMirrorConfig(cfg, { ...cfg, accountId: 'rec-2' }), false)
+})
