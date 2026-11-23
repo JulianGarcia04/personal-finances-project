@@ -370,7 +370,76 @@ test('S7 archived budgets and their caps survive a settings reload', async () =>
   assert.deepEqual(reloaded?.categoryCaps, { food: 900 })
 })
 
-test('S11 legacy planner saves preserve goals, planner, category limits, exchange rates, and separate budget state', async () => {
+test('P1 S2 saves only a finite, nonnegative estimated income and leaves other settings intact', async () => {
+  const workspace = makeWorkspace({
+    budgetNeedsPercent: 55, budgetWantsPercent: 25, expenseLimit: 700,
+    exchangeRatesBaseCurrency: 'EUR', categoryBudgetCurrency: 'EUR', budgetAlertsEnabled: false
+  })
+  const budget = makeBudget('monthly-a', { totalLimit: 900 })
+  const harness = makeHarness({ workspace, budgets: [budget], caps: { 'monthly-a': { food: 80 } } })
+  await harness.actions.loadBudgetSettings()
+  const before = structuredClone(harness.state)
+
+  for (const invalid of [-1, NaN, Infinity]) {
+    await assert.rejects(harness.actions.saveBudgetIncome(invalid), /ingreso mensual/)
+  }
+  assert.deepEqual(harness.writes, [])
+  assert.deepEqual(harness.state, before)
+
+  await harness.actions.saveBudgetIncome(9000.5)
+  assert.deepEqual(harness.writes, [{ workspaceId: context.workspaceId, patch: { budgetIncome: 9000.5 } }])
+  assert.deepEqual(harness.getWorkspace(), { ...workspace, budgetIncome: 9000.5 })
+  assert.deepEqual(harness.state, { ...before, budgetIncome: 9000.5 })
+})
+
+test('P1 S2 requires the active workspace settings and does not cache an old workspace write after a switch', async () => {
+  const harness = makeHarness()
+  await assert.rejects(harness.actions.saveBudgetIncome(9000), /not ready/)
+  assert.deepEqual(harness.writes, [])
+  await harness.actions.loadBudgetSettings()
+
+  const gate = deferredVoid()
+  harness.dependencies.writeWorkspaceSettings = async (workspaceId, patch) => {
+    harness.writes.push({ workspaceId, patch })
+    await gate.promise
+  }
+  const pendingSave = harness.actions.saveBudgetIncome(9000)
+  harness.setContext({ ...context, workspaceId: 'workspace-b' })
+  await assert.rejects(harness.actions.saveBudgetIncome(12000), /not ready/)
+  harness.setWorkspace(makeWorkspace({ budgetIncome: 12000 }))
+  await harness.actions.loadBudgetSettings()
+  gate.resolve()
+  await assert.rejects(pendingSave, /context changed/)
+
+  assert.deepEqual(harness.writes, [{ workspaceId: context.workspaceId, patch: { budgetIncome: 9000 } }])
+  assert.equal(harness.state.budgetIncome, 12000)
+})
+
+test('P1 S2 does not overwrite the loaded cache when switching back before settings reload', async () => {
+  const harness = makeHarness()
+  await harness.actions.loadBudgetSettings()
+  const gate = deferredVoid()
+  harness.dependencies.writeWorkspaceSettings = async (workspaceId, patch) => {
+    harness.writes.push({ workspaceId, patch })
+    await gate.promise
+  }
+  const save = harness.actions.saveBudgetIncome(9000)
+    .then(() => undefined, (error: Error) => error.message)
+
+  harness.setContext({ ...context, workspaceId: 'workspace-b' })
+  harness.setWorkspace(makeWorkspace({ budgetIncome: 12000 }))
+  await harness.actions.loadBudgetSettings()
+  const workspaceBSnapshot = structuredClone(harness.state)
+  harness.setContext(context) // Active id changes before the sidebar reloads the settings.
+
+  gate.resolve()
+  const error = await save
+  assert.deepEqual(harness.writes, [{ workspaceId: context.workspaceId, patch: { budgetIncome: 9000 } }])
+  assert.deepEqual(harness.state, workspaceBSnapshot, 'an A save must not update the still-loaded B cache')
+  assert.match(error ?? '', /not ready/)
+})
+
+test('S11 legacy settings saves preserve goals, ratios, category limits, exchange rates, and separate budget state', async () => {
   const budget = makeBudget('monthly-a')
   const harness = makeHarness({ budgets: [budget], caps: { 'monthly-a': { food: 80 } } })
   await harness.actions.loadBudgetSettings()
@@ -478,10 +547,12 @@ test('budget mutations are rejected while the active workspace snapshot is still
   const loading = harness.actions.loadBudgetSettings()
   assert.equal(harness.state.budgetSettingsLoading, true)
   await assert.rejects(harness.actions.createOperatingBudget({ kind: 'monthly', name: 'Too early', capCurrency: 'USD' }), /not ready/)
+  await assert.rejects(harness.actions.saveBudgetIncome(9000), /not ready/)
   resolveRead(makeWorkspace() as BudgetWorkspaceLegacyData)
   await loading
   assert.equal(harness.state.budgetSettingsLoading, false)
   assert.deepEqual(harness.persistenceCalls, [])
+  assert.deepEqual(harness.writes, [])
 })
 
 test('workspace changes during an older settings read cannot overwrite the newer active workspace state', async () => {

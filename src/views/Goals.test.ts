@@ -8,8 +8,6 @@ import { compileScript, parse } from 'vue/compiler-sfc'
 import * as Router from 'vue-router'
 import ts from 'typescript'
 import { toDateValue, toLocalDateKey } from '../lib/dates.ts'
-import { createCardBillingLookup, expenseAmountForDate } from '../lib/installments.ts'
-import { budgetScopedMonthFilter } from '../lib/budgets.ts'
 import { canTransferBetweenAccounts } from '../lib/pockets.ts'
 import { isReservedBudgetName } from '../schemas.ts'
 
@@ -33,8 +31,8 @@ test('S7: additional budgets expose create, edit, and archive controls while ret
   assertContains(/conserva asignaciones, historial y cuotas pendientes/, 'archive copy must explain retained obligations')
 })
 
-test('S11: additional budgets remain separate from goals, goal allocations, the planner, and legacy category limits', () => {
-  assertContains(/separados de las metas, sus asignaciones, el plan 50\/30\/20 y los límites base por categoría/, 'operating budgets must stay separate from legacy planner state')
+test('S11: additional budgets remain separate from goals, goal allocations, and legacy category limits', () => {
+  assertContains(/separados de las metas, sus asignaciones y los límites base por categoría/, 'operating budgets must stay separate from legacy state')
   assertContains(/categoryCaps/, 'additional category caps must be represented separately')
   assertContains(/budgetAllocations/, 'goal allocations must remain intact')
 })
@@ -146,53 +144,6 @@ test('budget date inputs show the local calendar day', () => {
   assert.equal(dateInputValue(new Date(2026, 9, 1, 0, 0)), '2026-10-01')
   assert.equal(dateInputValue(new Date(2026, 9, 31, 20, 30)), '2026-10-31')
   assert.equal(dateInputValue(undefined), '')
-})
-
-test('the planner counts card statements due this month instead of this month\'s card purchases', () => {
-  const declaration = goalsView.match(/const realMonthTotals = computed\(\(\) => \{[\s\S]*?\n\}\)/)?.[0]
-  assert.ok(declaration, 'Goals.vue must define realMonthTotals')
-  const javascript = ts.transpileModule(declaration, {
-    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext }
-  }).outputText
-  const now = new Date()
-  const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1)
-  const previousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-  // Closing 31 keeps each purchase on its calendar month's statement; due day 10 pays it next month.
-  const cardBillingFor = {
-    value: createCardBillingLookup([{ id: 'visa', type: 'credit', statementClosingDay: 31, paymentDueDay: 10 }])
-  }
-  const transactions = [
-    { type: 'expense', amount: -50, date: previousMonth, accountId: 'visa', currency: 'COP' },
-    { type: 'expense', amount: -1000, date: thisMonth, accountId: 'visa', currency: 'COP' },
-    { type: 'expense', amount: -10, date: thisMonth, accountId: 'cash', currency: 'COP' },
-    { type: 'income', amount: 400, date: thisMonth, accountId: 'cash', currency: 'COP' },
-    { type: 'income', amount: 25, date: thisMonth, accountId: 'cash', currency: 'COP', budgetId: 'default-monthly' },
-    // Income assigned to another budget funds only that budget.
-    { type: 'income', amount: 5000, date: thisMonth, accountId: 'cash', currency: 'COP', budgetId: 'ventas-casa' },
-    // Spending of a self-funded budget is paid by its own income, not by the month's income.
-    { type: 'expense', amount: -700, date: thisMonth, accountId: 'cash', currency: 'COP', budgetId: 'ventas-casa' },
-    // A budget without assigned income is paid by the month's income.
-    { type: 'expense', amount: -5, date: thisMonth, accountId: 'cash', currency: 'COP', budgetId: 'hogar' }
-  ]
-  const realMonthTotals = new Function(
-    'computed', 'transactionsStore', 'goalsStore', 'userCurrency', 'expenseAmountForDate', 'cardBillingFor',
-    'budgetScopedMonthFilter', 'linkedBudgetOfAccount',
-    `${javascript}\nreturn realMonthTotals`
-  )(
-    (getter: () => unknown) => ({ get value() { return getter() } }),
-    { transactions },
-    {
-      convertToPrimary: (amount: number) => amount,
-      operatingBudgets: [{ budget: { id: 'ventas-casa', kind: 'event' } }, { budget: { id: 'hogar', kind: 'monthly' } }]
-    },
-    { value: 'COP' },
-    expenseAmountForDate,
-    cardBillingFor,
-    budgetScopedMonthFilter,
-    () => null
-  ) as { value: { income: number; expense: number } }
-
-  assert.deepEqual(realMonthTotals.value, { income: 425, expense: 65 })
 })
 
 test('currency fields are selectors prefilled from the configured currency', () => {
@@ -448,7 +399,6 @@ test('budget basis: Goals shows the consumption/payment switch and counts budget
   assertContains(/data-testid="goals-budget-basis"[\s\S]{0,400}<BudgetBasisSwitch \/>/, 'the budget area must start with the basis switch')
   assertContains(/const cardBillingFor = computed\(\(\) => createCardBillingLookup\(accountsStore\.accounts, budgetBasis\.value, \{\s*transactions: transactionsStore\.transactions\s*\}\)\)/, 'budget figures must follow the chosen basis and apply card payments')
   assertContains(/vista «\{\{ BUDGET_BASIS_LABELS\[budgetBasis\] \}\}»/, 'the protected baseline must name the view it counts with')
-  assertContains(/Gasto real del mes \(\{\{ BUDGET_BASIS_LABELS\[budgetBasis\] \}\}\)/, 'the 50/30/20 comparison must name the view it counts with')
 })
 
 function createGoalContributionHarness({ goal, sourceId = '', accounts = [] }: {
@@ -619,24 +569,11 @@ test('linked goal contributions reject an invalid source before any account or g
   }
 })
 
-test('budget planner labels show the configured percentages, not fixed 50/30/20', () => {
-  assertContains(/Necesidades \(\{\{ needsPercent \}\}%\)/, 'needs label must show the configured percent')
-  assertContains(/Deseos \(\{\{ wantsPercent \}\}%\)/, 'wants label must show the configured percent')
-  assertContains(/Ahorro \(\{\{ savingsPercent \}\}%\)/, 'savings label must show the configured percent')
-  assertNotContains(/Necesidades \(50%\)|Deseos \(30%\)|Ahorro \(20%\)/, 'fixed default percentages must not be shown as labels')
-})
-
-test('plan vs real title shows the configured split, not a fixed 50/30/20', () => {
-  assertContains(/Tu plan \{\{ needsPercent \}\}\/\{\{ wantsPercent \}\}\/\{\{ savingsPercent \}\} vs este mes \(real\)/, 'the title must show the configured percentages')
-  assertNotContains(/Tu plan 50\/30\/20 vs este mes/, 'the title must not show a fixed split')
-})
-
 // Render the real SFCs and RouterLinks without a browser, Firebase or a canvas backend.
 class ViewNode {
   parent: ViewNode | null = null
   children: ViewNode[] = []
   props: Record<string, any> = {}
-  chartData?: number[]
   tag: string
   text: string
   constructor(tag: string, text = '') { this.tag = tag; this.text = text }
@@ -644,7 +581,6 @@ class ViewNode {
   get descendants(): ViewNode[] { return this.children.flatMap(child => [child, ...child.descendants]) }
   focus() { focusedNode = this }
   get focused() { return focusedNode === this }
-  getContext() { return this }
   closest(selector: string): ViewNode | null {
     return selector === `#${this.props.id}` ? this : this.parent?.closest(selector) ?? null
   }
@@ -687,33 +623,28 @@ const renderer = Vue.createRenderer<ViewNode, ViewNode>({
 
 const requireModule = createRequire(import.meta.url)
 const noOp = () => undefined
+const syncInputValue = (node: ViewNode, { value }: { value: unknown }) => { node.props.value = value }
 const MockSheet = (props: { open: boolean; title: string }, { slots }: Vue.SetupContext) =>
   props.open ? Vue.h('div', { role: 'dialog', 'aria-label': props.title }, [slots.default?.(), slots.footer?.()]) : null
-class MockChart {
-  static register() {}
-  private canvas: ViewNode
-  constructor(canvas: ViewNode, config: { data: { datasets: { data: number[] }[] } }) {
-    this.canvas = canvas
-    canvas.chartData = config.data.datasets[0].data
-  }
-  destroy() { this.canvas.chartData = undefined }
-}
 
 const mountNavigation = async (t: import('node:test').TestContext, path: string, showSidebar = false) => {
   const account = { id: 'cash', name: 'Efectivo', type: 'cash', currency: 'COP', balance: 100 }
+  const incomeSaves: number[] = []
   const stores = {
-    authStore: { isAuthenticated: true, activeWorkspaceId: 'workspace-a' },
+    authStore: Vue.reactive({ isAuthenticated: true, user: { uid: 'user-a' }, activeWorkspaceId: 'workspace-a' }),
     settingsStore: { currency: 'COP', loadSettings: noOp },
-    workspacesStore: { workspaces: [], activeWorkspaceProfiles: {} },
+    workspacesStore: { workspaces: [], activeWorkspaceProfiles: {}, fetchMyWorkspaces: noOp },
     accountsStore: { accounts: [account], netWorthByCurrency: { COP: 100 }, getAccountById: () => account, fetchAccounts: noOp },
     transactionsStore: { transactions: [], categories: [], fetchCategories: noOp, fetchTransactions: noOp },
-    goalsStore: {
+    goalsStore: Vue.reactive({
       goals: [{ id: 'trip', name: 'Viaje', targetAmount: 100, currentAmount: 25, currency: 'COP', targetDate: new Date(2030, 0, 1) }],
       categoryBudgets: { food: 100 }, categoryBudgetCurrency: { status: 'confirmed', code: 'COP' },
       operatingBudgets: [], exchangeRates: {}, convertToPrimary: (amount: number) => amount,
-      budgetIncome: 100, budgetNeedsPercent: 55, budgetWantsPercent: 25, budgetSavingsPercent: 20,
-      fetchGoals: noOp, loadBudgetSettings: noOp
-    }
+      budgetIncome: 100,
+      budgetSettingsContextKey: JSON.stringify(['user-a', 'workspace-a']),
+      fetchGoals: noOp, loadBudgetSettings: noOp,
+      async saveBudgetIncome(amount: number) { incomeSaves.push(amount); this.budgetIncome = amount }
+    })
   }
   const loadComponent = (file: string) => {
     const source = readFileSync(new URL(file, import.meta.url), 'utf8')
@@ -723,9 +654,12 @@ const mountNavigation = async (t: import('node:test').TestContext, path: string,
     const script = ts.transpile(content, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS })
     const exports = {} as { default: Vue.Component }
     new Function('exports', 'require', script)(exports, (id: string) => {
-      if (id === 'vue') return { ...Vue, Transition: (_: unknown, { slots }: Vue.SetupContext) => slots.default?.(), vModelText: {}, vModelSelect: {} }
+      if (id === 'vue') return {
+        ...Vue, Transition: (_: unknown, { slots }: Vue.SetupContext) => slots.default?.(),
+        vModelText: { mounted: syncInputValue, beforeUpdate: syncInputValue }, vModelSelect: {}
+      }
       if (id === 'vue-router') return Router
-      if (id === 'chart.js') return { Chart: MockChart, registerables: [] }
+      if (id === 'chart.js') return { Chart: { register: noOp }, registerables: [] }
       if (id === '@/lib/analytics') return { track: noOp }
       if (id === '@/components/ui/useBodyScrollLock') return { useBodyScrollLock: noOp }
       if (id.endsWith('/BaseSheet.vue')) return { default: MockSheet }
@@ -776,10 +710,50 @@ const mountNavigation = async (t: import('node:test').TestContext, path: string,
     })
     await Vue.nextTick()
   }
-  return { root, router, stepHistory }
+  return { root, router, stepHistory, stores, incomeSaves }
 }
 
-test('P1 S1: section links follow direct URLs and history, with separate workflows and a live planner', async t => {
+test('P1 S2: budgets keep only the estimated income editor and save its value in the current workspace', async t => {
+  const { root, router, stores, incomeSaves } = await mountNavigation(t, '/goals')
+  const budgetInputs = () => root.descendants.filter(node => node.tag === 'input')
+  assert.ok(!budgetInputs().some(node => node.props.type === 'range'), 'the planner sliders must be gone')
+  assert.ok(!root.descendants.some(node => node.tag === 'canvas'))
+  assert.doesNotMatch(root.content, /Plan de Presupuesto|50\/30\/20|vs este mes \(real\)/)
+  const label = root.find('label', 'Ingreso mensual estimado')
+  const income = budgetInputs().find(node => node.props.id === label.props.for && node.props.type === 'number')
+  assert.ok(income, 'the label must name the editable amount')
+  assert.equal(root.descendants.filter(node => node.tag === 'label' && node.content === label.content).length, 1)
+  assert.equal(income.props.value, 100)
+  assert.ok(!income.props.disabled)
+  assert.match(income.parent!.content, /COP/)
+
+  const changeIncome = async (value: number | string, valid = true) => {
+    income.props['onUpdate:modelValue'](value)
+    await income.props.onChange({ target: { validity: { valid } } })
+    await Vue.nextTick()
+  }
+  await changeIncome(-1, false)
+  assert.deepEqual(incomeSaves, [])
+  assert.ok(root.descendants.some(node => node.props.role === 'alert' && node.content === 'Ingresa un monto mayor o igual a 0.'))
+  await changeIncome(275.5)
+  await changeIncome('')
+  assert.deepEqual(incomeSaves, [275.5, 0], 'decimals are kept and clearing the amount stores zero')
+
+  stores.authStore.activeWorkspaceId = 'workspace-b'
+  await Vue.nextTick()
+  assert.equal(income.props.disabled, true)
+  assert.equal(income.props.value, '')
+  stores.goalsStore.budgetSettingsContextKey = JSON.stringify(['user-a', 'workspace-b'])
+  stores.goalsStore.budgetIncome = 120
+  await Vue.nextTick()
+  assert.ok(!income.props.disabled)
+  assert.equal(income.props.value, 120)
+
+  await router.push('/goals?tab=savings')
+  assert.ok(!root.descendants.some(node => node.tag === 'label' && node.content === label.content))
+})
+
+test('P1 S1: section links follow direct URLs and history, with separate workflows', async t => {
   const { root, router, stepHistory } = await mountNavigation(t, '/goals?tab=savings')
   const nodes = () => root.descendants
   const sectionLinks = () => nodes().filter(node => node.tag === 'a' && node.props.href?.startsWith('/goals'))
@@ -806,17 +780,14 @@ test('P1 S1: section links follow direct URLs and history, with separate workflo
   const assertBudgets = () => {
     assert.ok(root.find('h2', 'Presupuestos').focused)
     assert.deepEqual(currentLinks(), ['/goals'])
-    assert.deepEqual(nodes().find(node => node.tag === 'canvas')?.chartData, [55, 25, 20])
     assert.ok(nodes().some(node => node.props['data-testid'] === 'goals-budget-basis'))
     assert.ok(!nodes().some(node => node.props['aria-label'] === 'Aportar saldo' || node.content === 'Nuevo Objetivo'))
   }
   assertBudgets()
-  const previousCanvas = nodes().find(node => node.tag === 'canvas')!
   await root.find('button', 'Nuevo presupuesto').click()
   assert.ok(nodes().some(node => node.props.id === 'operating-budget-form'))
   await stepHistory(-1)
   assertSavings()
-  assert.equal(previousCanvas.chartData, undefined, 'leaving budgets must release the canvas')
   assert.ok(!nodes().some(node => node.props.role === 'dialog'))
   await stepHistory(1)
   assertBudgets()

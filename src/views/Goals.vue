@@ -156,114 +156,27 @@
         </div>
       </div>
 
-      <!-- Budget planner -->
-      <div v-else class="w-full max-w-lg space-y-6">
-        <h3 class="font-display font-bold text-xl text-text-primary flex items-center space-x-2">
-          <PiggyBankIcon class="w-5 h-5 text-accent-emerald" />
-          <span>Plan de Presupuesto</span>
-        </h3>
-
-        <div class="glass-panel rounded-2xl p-4 sm:p-6 border border-white/5 space-y-6">
-          
-          <!-- Income Input -->
-          <div class="space-y-2">
-            <label class="block text-xs font-semibold text-text-secondary">Ingreso Mensual Estimado</label>
-            <div class="relative">
-              <span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-text-muted font-semibold">$</span>
-              <input 
-                v-model.number="incomeInput"
-                type="number"
-                inputmode="decimal"
-                min="0"
-                class="field pl-8 font-semibold"
-                placeholder="Ingresa tus ingresos"
-                @change="saveBudget"
-              />
-            </div>
-          </div>
-
-          <!-- Pie / Donut Chart -->
-          <div class="relative w-48 h-48 mx-auto flex items-center justify-center">
-            <canvas ref="budgetChartRef"></canvas>
-            <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none mt-2">
-              <span class="text-[10px] text-text-muted font-semibold uppercase tracking-wider">Ahorro</span>
-              <span class="max-w-[8.5rem] truncate font-display font-bold text-base text-accent-emerald tabular-nums" :title="formatCurrency(monthlySavingsAmount, userCurrency)">
-                {{ formatCompactCurrency(monthlySavingsAmount, userCurrency) }}
-              </span>
-            </div>
-          </div>
-
-          <!-- Distribution sliders -->
-          <div class="space-y-4">
-            <!-- Needs Slider (50% default) -->
-            <div class="space-y-1.5">
-              <div class="flex justify-between gap-2 text-xs font-semibold">
-                <span class="min-w-0 text-text-secondary flex items-center gap-1.5">
-                  <span class="shrink-0 w-2.5 h-2.5 rounded-full bg-accent-emerald"></span>
-                  Necesidades ({{ needsPercent }}%)
-                </span>
-                <span class="shrink-0 text-text-primary tabular-nums">{{ formatCurrency(monthlyNeedsAmount, userCurrency) }}</span>
-              </div>
-              <input 
-                v-model.number="needsPercent"
-                type="range"
-                min="0"
-                max="100"
-                class="range-slider text-accent-emerald"
-                @input="adjustSliders('needs')"
-                @change="saveBudget"
-              />
-            </div>
-
-            <!-- Wants Slider (30% default) -->
-            <div class="space-y-1.5">
-              <div class="flex justify-between gap-2 text-xs font-semibold">
-                <span class="min-w-0 text-text-secondary flex items-center gap-1.5">
-                  <span class="shrink-0 w-2.5 h-2.5 rounded-full bg-accent-violet"></span>
-                  Deseos ({{ wantsPercent }}%)
-                </span>
-                <span class="shrink-0 text-text-primary tabular-nums">{{ formatCurrency(monthlyWantsAmount, userCurrency) }}</span>
-              </div>
-              <input 
-                v-model.number="wantsPercent"
-                type="range"
-                min="0"
-                max="100"
-                class="range-slider text-accent-violet"
-                @input="adjustSliders('wants')"
-                @change="saveBudget"
-              />
-            </div>
-
-            <!-- Savings Slider (20% default) -->
-            <div class="space-y-1.5">
-              <div class="flex justify-between gap-2 text-xs font-semibold">
-                <span class="min-w-0 text-text-secondary flex items-center gap-1.5">
-                  <span class="shrink-0 w-2.5 h-2.5 rounded-full bg-accent-amber"></span>
-                  Ahorro ({{ savingsPercent }}%)
-                </span>
-                <span class="shrink-0 text-text-primary tabular-nums">{{ formatCurrency(monthlySavingsAmount, userCurrency) }}</span>
-              </div>
-              <input 
-                v-model.number="savingsPercent"
-                type="range"
-                min="0"
-                max="100"
-                class="range-slider text-accent-amber"
-                @input="adjustSliders('savings')"
-                @change="saveBudget"
-              />
-            </div>
-          </div>
-
-          <!-- Total Allocation indicator -->
-          <div class="p-3 bg-slate-950/45 border border-white/5 rounded-xl text-center text-xs flex justify-between gap-2">
-            <span class="text-text-secondary">Suma total porcentajes:</span>
-            <span :class="[isPercentSumValid ? 'text-accent-emerald font-bold' : 'text-accent-rose font-bold']">
-              {{ needsPercent + wantsPercent + savingsPercent }}%
-            </span>
-          </div>
+      <div v-else class="w-full max-w-lg glass-panel rounded-2xl p-4 sm:p-5 border border-white/5 space-y-2">
+        <label for="estimated-monthly-income" class="block font-display font-semibold text-sm text-text-primary">Ingreso mensual estimado</label>
+        <div class="flex items-center gap-3">
+          <input
+            id="estimated-monthly-income"
+            v-model.number="incomeInput"
+            type="number"
+            inputmode="decimal"
+            min="0"
+            step="any"
+            :disabled="!canEditBudgetIncome"
+            aria-describedby="estimated-income-currency estimated-income-hint"
+            class="field min-w-0 font-semibold disabled:opacity-60"
+            @change="saveBudgetIncome"
+          />
+          <span id="estimated-income-currency" class="shrink-0 text-xs font-semibold text-text-muted">{{ userCurrency }}</span>
         </div>
+        <p id="estimated-income-hint" class="text-xs text-text-secondary">
+          Las alertas de gasto mensual usan el mayor entre este monto y los ingresos del mes sin presupuesto asignado. Se guarda al salir del campo.
+        </p>
+        <p v-if="incomeSaveError" role="alert" class="text-xs text-accent-rose">{{ incomeSaveError }}</p>
       </div>
     </div>
 
@@ -281,7 +194,7 @@
             <span>Presupuestos adicionales</span>
           </h3>
           <p class="text-xs text-text-muted mt-1 max-w-3xl">
-            Se administran separados de las metas, sus asignaciones, el plan 50/30/20 y los límites base por categoría.
+            Se administran separados de las metas, sus asignaciones y los límites base por categoría.
             Los límites se conservan en su moneda guardada; la moneda de visualización no cambia la moneda guardada.
           </p>
         </div>
@@ -560,38 +473,6 @@
           :suggestions="baselineSuggestedCategories"
           @select="addBaselineCategory"
         />
-      </div>
-
-      <!-- 50/30/20 vs realidad del mes -->
-      <div class="glass-panel rounded-2xl p-4 sm:p-6 border border-white/5 space-y-4">
-        <h4 class="font-display font-semibold text-sm text-text-primary">Tu plan {{ needsPercent }}/{{ wantsPercent }}/{{ savingsPercent }} vs este mes (real)</h4>
-        <!-- ponytail: no sabemos qué categorías son "necesidad" vs "deseo"; comparamos gasto total y ahorro reales contra el plan -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-          <div class="space-y-1.5">
-            <div class="flex justify-between gap-2 font-semibold">
-              <span class="min-w-0 text-text-secondary">Gasto (plan necesidades+deseos)</span>
-              <span class="shrink-0 text-right text-text-primary tabular-nums">{{ formatCurrency(monthlyNeedsAmount + monthlyWantsAmount, userCurrency) }}</span>
-            </div>
-            <div class="flex justify-between gap-2 font-semibold">
-              <span class="min-w-0 text-text-secondary">Gasto real del mes ({{ BUDGET_BASIS_LABELS[budgetBasis] }})</span>
-              <span class="shrink-0 text-right tabular-nums" :class="realMonthExpense > (monthlyNeedsAmount + monthlyWantsAmount) ? 'text-accent-rose' : 'text-accent-emerald'">
-                {{ formatCurrency(realMonthExpense, userCurrency) }}
-              </span>
-            </div>
-          </div>
-          <div class="space-y-1.5">
-            <div class="flex justify-between gap-2 font-semibold">
-              <span class="min-w-0 text-text-secondary">Ahorro (plan)</span>
-              <span class="shrink-0 text-right text-text-primary tabular-nums">{{ formatCurrency(monthlySavingsAmount, userCurrency) }}</span>
-            </div>
-            <div class="flex justify-between gap-2 font-semibold">
-              <span class="min-w-0 text-text-secondary">Ahorro real del mes</span>
-              <span class="shrink-0 text-right tabular-nums" :class="realMonthSavings >= monthlySavingsAmount ? 'text-accent-emerald' : 'text-accent-amber'">
-                {{ formatCurrency(realMonthSavings, userCurrency) }}
-              </span>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
 
@@ -935,7 +816,7 @@
 
 <script setup lang="ts">
 import { track } from '@/lib/analytics'
-import { ref, reactive, onMounted, onBeforeUnmount, computed, watch, nextTick, useTemplateRef } from 'vue'
+import { ref, shallowRef, reactive, onMounted, computed, watch, nextTick, useTemplateRef } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { useGoalsStore } from '@/stores/goalsStore'
 import { useAccountsStore } from '@/stores/accountsStore'
@@ -948,12 +829,12 @@ import BaseSheet from '@/components/ui/BaseSheet.vue'
 import CategoryPicker from '@/components/CategoryPicker.vue'
 import { suggestCategoriesBySpending, visibleBaselineCategories } from '@/lib/categoryPicker'
 import { getCategoryIconComponent } from '@/lib/categoryIcons'
-import { DEFAULT_MONTHLY_BUDGET_ID, budgetMoveCandidates, budgetScopedMonthFilter, canAssignBudget, linkedAccountConflicts, linkedBudgetForAccount } from '@/lib/budgets'
+import { DEFAULT_MONTHLY_BUDGET_ID, budgetMoveCandidates, canAssignBudget, linkedAccountConflicts, linkedBudgetForAccount } from '@/lib/budgets'
 import { budgetCardFigures } from '@/lib/dashboardMetrics'
 import { isReservedBudgetName } from '@/schemas'
 import { reportBudgetScope } from '@/lib/budgetReporting'
 import type { BudgetWorkspaceBudgetSnapshot } from '@/lib/budgetWorkspaceAdapter'
-import { createCardBillingLookup, expenseAmountForDate } from '@/lib/installments'
+import { createCardBillingLookup } from '@/lib/installments'
 import { BUDGET_BASIS_LABELS, budgetBasis } from '@/lib/budgetBasis'
 import BudgetBasisSwitch from '@/components/BudgetBasisSwitch.vue'
 import { parseDateOnly, toDateValue, toLocalDateKey } from '@/lib/dates'
@@ -971,9 +852,6 @@ import {
   Check as CheckIcon,
   ArrowRightLeft as MoveIcon
 } from 'lucide-vue-next'
-import { Chart, registerables } from 'chart.js'
-
-Chart.register(...registerables)
 
 const goalsStore = useGoalsStore()
 const accountsStore = useAccountsStore()
@@ -983,7 +861,7 @@ const authStore = useAuthStore()
 const route = useRoute()
 
 const sections = [
-  { id: 'budgets', to: '/goals', label: 'Presupuestos', description: 'Organiza tus gastos y planifica la distribución de tus ingresos mensuales.', icon: WalletIcon },
+  { id: 'budgets', to: '/goals', label: 'Presupuestos', description: 'Organiza tus gastos con presupuestos mensuales y de eventos.', icon: WalletIcon },
   { id: 'savings', to: '/goals?tab=savings', label: 'Metas de ahorro', description: 'Crea metas de ahorro y sigue el progreso hacia tus objetivos.', icon: TargetIcon }
 ] as const
 const activeSection = computed(() => route.query.tab === 'savings' ? sections[1] : sections[0])
@@ -1076,18 +954,25 @@ const goalContributionSources = computed(() => {
   )
 })
 
-// Budget Planner inputs
-const incomeInput = ref(0)
-const needsPercent = ref(50)
-const wantsPercent = ref(30)
-const savingsPercent = ref(20)
+const incomeInput = shallowRef<number | string>('')
+const incomeSaveError = shallowRef('')
+const budgetIncomeContextKey = computed(() => {
+  const uid = authStore.user?.uid
+  const workspaceId = activeWorkspaceId.value
+  return uid && workspaceId ? JSON.stringify([uid, workspaceId]) : null
+})
+const canEditBudgetIncome = computed(() =>
+  budgetIncomeContextKey.value !== null &&
+  goalsStore.budgetSettingsContextKey === budgetIncomeContextKey.value &&
+  !goalsStore.budgetSettingsLoading && !goalsStore.budgetSettingsError
+)
+watch([budgetIncomeContextKey, canEditBudgetIncome, () => goalsStore.budgetIncome], () => {
+  incomeInput.value = canEditBudgetIncome.value ? goalsStore.budgetIncome : ''
+  incomeSaveError.value = ''
+}, { immediate: true })
 
 // Category budgets: copia local editable de goalsStore.categoryBudgets
 const categoryBudgetInputs = reactive<Record<string, number | null>>({})
-
-// Chart reference
-const budgetChartRef = useTemplateRef<HTMLCanvasElement>('budgetChartRef')
-let budgetChart: Chart | null = null
 
 // Computed
 const userCurrency = computed(() => settingsStore.currency || 'COP')
@@ -1171,42 +1056,6 @@ const baselineBudgetReport = computed(() => {
   })
 })
 
-// Gasto/ingreso/ahorro real del mes (monedas convertidas a la principal)
-const realMonthTotals = computed(() => {
-  const now = new Date()
-  let income = 0, expense = 0
-  const kinds = new Map(goalsStore.operatingBudgets.map(({ budget }) => [budget.id, budget.kind]))
-  // Income assigned to another budget funds only that budget, and spending of a budget with its
-  // own income is paid by that income, so neither counts against the month.
-  const scoped = budgetScopedMonthFilter(transactionsStore.transactions, {
-    year: now.getFullYear(), month: now.getMonth(), kindOf: budgetId => kinds.get(budgetId),
-    linkedBudgetOf: linkedBudgetOfAccount,
-    convert: (amount, currency) => goalsStore.convertToPrimary(amount, currency, userCurrency.value)
-  })
-  transactionsStore.transactions.forEach(t => {
-    if (t.type === 'income') {
-      if (!scoped.countsIncome(t)) return
-      if (t.date.getMonth() !== now.getMonth() || t.date.getFullYear() !== now.getFullYear()) return
-      income += goalsStore.convertToPrimary(Math.abs(t.amount), t.currency, userCurrency.value)
-    } else if (t.type === 'expense') {
-      if (!scoped.countsExpense(t)) return
-      const amount = expenseAmountForDate(t, now, cardBillingFor.value(t.accountId))
-      expense += goalsStore.convertToPrimary(amount, t.currency, userCurrency.value)
-    }
-  })
-  return { income, expense }
-})
-const realMonthExpense = computed(() => realMonthTotals.value.expense)
-const realMonthSavings = computed(() => Math.max(realMonthTotals.value.income - realMonthTotals.value.expense, 0))
-
-const monthlyNeedsAmount = computed(() => (incomeInput.value * needsPercent.value) / 100)
-const monthlyWantsAmount = computed(() => (incomeInput.value * wantsPercent.value) / 100)
-const monthlySavingsAmount = computed(() => (incomeInput.value * savingsPercent.value) / 100)
-
-const isPercentSumValid = computed(() => {
-  return (needsPercent.value + wantsPercent.value + savingsPercent.value) === 100
-})
-
 onMounted(async () => {
   focusSectionHeading()
   await goalsStore.fetchGoals()
@@ -1215,11 +1064,6 @@ onMounted(async () => {
   await transactionsStore.fetchCategories()
   await transactionsStore.fetchTransactions()
 
-  // Sincronizar inputs locales con store
-  incomeInput.value = goalsStore.budgetIncome
-  needsPercent.value = goalsStore.budgetNeedsPercent
-  wantsPercent.value = goalsStore.budgetWantsPercent
-  savingsPercent.value = goalsStore.budgetSavingsPercent
   Object.assign(categoryBudgetInputs, goalsStore.categoryBudgets)
 })
 
@@ -1236,16 +1080,6 @@ const formatCurrency = (val: number, currency: string) => {
     currency: currency || 'USD',
     minimumFractionDigits: 0,
     maximumFractionDigits: 0
-  }).format(val)
-}
-
-// Compact form for tight spots (donut centre), e.g. "1,2 M US$".
-const formatCompactCurrency = (val: number, currency: string) => {
-  return new Intl.NumberFormat('es-ES', {
-    style: 'currency',
-    currency: currency || 'USD',
-    notation: 'compact',
-    maximumFractionDigits: 1
   }).format(val)
 }
 
@@ -1597,101 +1431,6 @@ const getDaysRemainingText = (targetDate: any) => {
   return `${diffDays} ${diffDays === 1 ? 'día' : 'días'} rest.`
 }
 
-// Sliders auto-balancing logic
-const adjustSliders = (changed: 'needs' | 'wants' | 'savings') => {
-  let needs = needsPercent.value
-  let wants = wantsPercent.value
-  let savings = savingsPercent.value
-
-  const sum = needs + wants + savings
-  const diff = sum - 100
-
-  if (diff !== 0) {
-    if (changed === 'needs') {
-      // Ajustar proporcionalmente los otros dos
-      const remainder = 100 - needs
-      if (remainder <= 0) {
-        wantsPercent.value = 0
-        savingsPercent.value = 0
-      } else {
-        const factor = wants + savings === 0 ? 0.5 : wants / (wants + savings)
-        wantsPercent.value = Math.round(remainder * factor)
-        savingsPercent.value = 100 - needs - wantsPercent.value
-      }
-    } else if (changed === 'wants') {
-      const remainder = 100 - wants
-      if (remainder <= 0) {
-        needsPercent.value = 0
-        savingsPercent.value = 0
-      } else {
-        const factor = needs + savings === 0 ? 0.5 : needs / (needs + savings)
-        needsPercent.value = Math.round(remainder * factor)
-        savingsPercent.value = 100 - wants - needsPercent.value
-      }
-    } else if (changed === 'savings') {
-      const remainder = 100 - savings
-      if (remainder <= 0) {
-        needsPercent.value = 0
-        wantsPercent.value = 0
-      } else {
-        const factor = needs + wants === 0 ? 0.5 : needs / (needs + wants)
-        needsPercent.value = Math.round(remainder * factor)
-        wantsPercent.value = 100 - savings - needsPercent.value
-      }
-    }
-  }
-}
-
-const destroyBudgetChart = () => {
-  budgetChart?.destroy()
-  budgetChart = null
-}
-
-// Chart.js initialization
-const renderBudgetChart = () => {
-  destroyBudgetChart()
-  if (!budgetChartRef.value) return
-
-  const ctx = budgetChartRef.value.getContext('2d')
-  if (!ctx) return
-
-  budgetChart = new Chart(ctx, {
-    type: 'doughnut',
-    data: {
-      labels: ['Necesidades', 'Deseos', 'Ahorro'],
-      datasets: [{
-        data: [needsPercent.value, wantsPercent.value, savingsPercent.value],
-        backgroundColor: [
-          '#10b981', // emerald
-          '#8b5cf6', // violet
-          '#fbbf24'  // amber
-        ],
-        borderWidth: 1,
-        borderColor: '#080c14'
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          display: false
-        },
-        tooltip: {
-          callbacks: {
-            label: (context) => ` ${context.label}: ${context.raw}%`
-          }
-        }
-      },
-      cutout: '80%'
-    }
-  })
-}
-
-// The canvas only exists in Budgets. Render after it mounts and release it when it leaves.
-watch([budgetChartRef, needsPercent, wantsPercent, savingsPercent], renderBudgetChart, { flush: 'post' })
-onBeforeUnmount(destroyBudgetChart)
-
 // Create new Goal
 const handleCreateGoal = async () => {
   if (!newGoalName.value || !newGoalTargetAmount.value || !newGoalTargetDate.value) return
@@ -1786,20 +1525,22 @@ const handleContribute = async () => {
   }
 }
 
-// Save budget
-const saveBudget = async () => {
+// Save budget income
+const saveBudgetIncome = async (event: Event) => {
+  if (!canEditBudgetIncome.value) return
+  const contextKey = budgetIncomeContextKey.value
+  incomeSaveError.value = ''
+  if (!(event.target as HTMLInputElement).validity.valid) {
+    incomeSaveError.value = 'Ingresa un monto mayor o igual a 0.'
+    return
+  }
+  // Clearing the input still stores zero, just as with the original field.
   try {
-    await goalsStore.saveBudgetSettings({
-      budgetIncome: incomeInput.value,
-      budgetNeedsPercent: needsPercent.value,
-      budgetWantsPercent: wantsPercent.value,
-      budgetSavingsPercent: savingsPercent.value,
-      budgetAllocations: goalsStore.budgetAllocations,
-      categoryBudgets: goalsStore.categoryBudgets,
-      exchangeRates: goalsStore.exchangeRates
-    })
+    await goalsStore.saveBudgetIncome(Number(incomeInput.value))
   } catch (err) {
-    console.error('Error al guardar presupuesto:', err)
+    if (budgetIncomeContextKey.value !== contextKey) return
+    incomeSaveError.value = 'No se pudo guardar el ingreso. Revisa el monto e inténtalo de nuevo.'
+    console.error('Error al guardar el ingreso mensual estimado:', err)
   }
 }
 

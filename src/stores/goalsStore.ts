@@ -71,7 +71,7 @@ export interface GoalsBudgetManagementDependencies {
   createWorkspaceAdapter(): BudgetWorkspaceAdapter
   createBudgetPersistence(workspaceId: string): ReturnType<typeof createBudgetPersistence>
   createCategoryCapsPersistence(workspaceId: string): ReturnType<typeof createBudgetCategoryCapsPersistence>
-  writeWorkspaceSettings(workspaceId: string, patch: LegacyBudgetSettingsPatch): Promise<void>
+  writeWorkspaceSettings(workspaceId: string, patch: LegacyBudgetSettingsPatch | Pick<BudgetSettings, 'budgetIncome'>): Promise<void>
 }
 
 const defaultCategoryBudgetCurrency: CategoryBudgetCurrencyState = { status: 'unconfirmed' }
@@ -239,6 +239,19 @@ export const createGoalsBudgetActions = (
       } finally {
         if (requestVersion === state.budgetSettingsLoadVersion) state.budgetSettingsLoading = false
       }
+    },
+
+    async saveBudgetIncome(budgetIncome: number): Promise<void> {
+      const context = requireLoadedContext()
+      if (state.budgetSettingsError) throw new Error('Budget settings are not ready for the active workspace')
+      if (!Number.isFinite(budgetIncome) || budgetIncome < 0) {
+        throw new Error('El ingreso mensual debe ser un número finito mayor o igual a 0')
+      }
+      await dependencies.writeWorkspaceSettings(context.workspaceId, { budgetIncome })
+      assertContextIsCurrent(context)
+      // The active workspace ID may change before its settings have loaded.
+      requireLoadedContext()
+      state.budgetIncome = budgetIncome
     },
 
     async saveLegacySettings(settings: BudgetSettings): Promise<void> {
@@ -625,6 +638,15 @@ export const useGoalsStore = defineStore('goals', {
       const runtime = await loadGoalsRuntime()
       return createGoalsBudgetActions(this, createRuntimeBudgetDependencies(runtime))
         .confirmLegacyCategoryBudgetCurrency(code)
+    },
+
+    async saveBudgetIncome(budgetIncome: number): Promise<void> {
+      const loadedContextKey = this.budgetSettingsContextKey
+      const runtime = await loadGoalsRuntime()
+      if (this.budgetSettingsContextKey !== loadedContextKey) {
+        throw new Error('Budget workspace context changed during operation')
+      }
+      return createGoalsBudgetActions(this, createRuntimeBudgetDependencies(runtime)).saveBudgetIncome(budgetIncome)
     },
 
     // 6. Guardar sólo la configuración heredada; los presupuestos adicionales viven en sus propios documentos.
