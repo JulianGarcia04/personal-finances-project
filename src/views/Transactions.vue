@@ -171,7 +171,8 @@
                   type="checkbox" 
                   v-model="selectedTxIds"
                   :value="tx.id"
-                  class="rounded border-border bg-slate-900/50 text-accent-emerald focus:ring-accent-emerald cursor-pointer"
+                  :disabled="!canDeleteMirrorTransaction(tx)"
+                  class="rounded border-border bg-slate-900/50 text-accent-emerald focus:ring-accent-emerald cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                 />
               </td>
               <!-- Description -->
@@ -242,6 +243,7 @@
                     <RotateCcwIcon class="w-4 h-4" />
                   </button>
                   <button 
+                    v-if="canDeleteMirrorTransaction(tx)"
                     @click="handleDelete(tx.id)"
                     class="hover-device:opacity-0 hover-device:group-hover:opacity-100 hover-device:group-focus-within:opacity-100 focus-visible:opacity-100 p-2 rounded-lg text-text-muted hover:text-accent-rose hover:bg-white/5 transition-all"
                     title="Eliminar Transacción"
@@ -311,8 +313,9 @@
                 type="checkbox"
                 v-model="selectedTxIds"
                 :value="tx.id"
+                :disabled="!canDeleteMirrorTransaction(tx)"
                 :aria-label="`Seleccionar ${tx.description}`"
-                class="mt-1 rounded border-border bg-slate-900/50 text-accent-emerald focus:ring-accent-emerald cursor-pointer"
+                class="mt-1 rounded border-border bg-slate-900/50 text-accent-emerald focus:ring-accent-emerald cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
               />
             </label>
             <div class="min-w-0">
@@ -371,6 +374,7 @@
               <RotateCcwIcon class="w-4 h-4" />
             </button>
             <button
+              v-if="canDeleteMirrorTransaction(tx)"
               @click="handleDelete(tx.id)"
               class="tap flex items-center justify-center rounded-lg text-text-muted hover:text-accent-rose hover:bg-white/5 active:bg-white/10 transition-all"
               title="Eliminar Transacción"
@@ -1049,7 +1053,7 @@ import { getMonthlyInstallmentAmount } from '@/lib/installments'
 import { toDateValue, toLocalDateKey } from '@/lib/dates'
 import { getTransactionDisplay } from '@/lib/transactionDisplay'
 import { canTransferBetweenAccounts, getAccountDisplayLabel, isPocketAccount, isPocketRelatedAccount } from '@/lib/pockets'
-import { isSettlementCandidate } from '@/lib/mirror'
+import { canDeleteMirrorTransaction, isSettlementCandidate } from '@/lib/mirror'
 import { 
   Plus as PlusIcon, 
   Trash2 as TrashIcon, 
@@ -1129,13 +1133,22 @@ const closeSettlementReversal = () => {
 
 // Ponytail: Batch selection state and computed
 const selectedTxIds = ref<string[]>([])
+const deletableDisplayedTransactions = computed(() =>
+  displayedTransactions.value.filter(canDeleteMirrorTransaction)
+)
+watch(deletableDisplayedTransactions, rows => {
+  const allowed = new Set(rows.map(row => row.id))
+  if (selectedTxIds.value.some(id => !allowed.has(id))) {
+    selectedTxIds.value = selectedTxIds.value.filter(id => allowed.has(id))
+  }
+})
 const isAllSelected = computed(() => {
-  return displayedTransactions.value.length > 0 && 
-         selectedTxIds.value.length === displayedTransactions.value.length
+  return deletableDisplayedTransactions.value.length > 0 &&
+         selectedTxIds.value.length === deletableDisplayedTransactions.value.length
 })
 const toggleSelectAll = (e: Event) => {
   if ((e.target as HTMLInputElement).checked) {
-    selectedTxIds.value = displayedTransactions.value.map(t => t.id)
+    selectedTxIds.value = deletableDisplayedTransactions.value.map(t => t.id)
   } else {
     selectedTxIds.value = []
   }
@@ -1155,13 +1168,24 @@ const selectionSummary = computed(() => {
   return totals
 })
 const handleBatchDelete = async () => {
-  if (confirm(`¿Eliminar ${selectedTxIds.value.length} transacciones? Esto actualizará los saldos de las cuentas.`)) {
-    try {
-      // Ponytail: promise all loop instead of batch endpoint
-      await Promise.all(selectedTxIds.value.map(id => transactionsStore.deleteTransaction(id)))
-      selectedTxIds.value = []
-    } catch (err) {
-      console.error('Error en batch delete', err)
+  const ids = selectedTxIds.value.filter(id => {
+    const tx = transactionsStore.transactions.find(item => item.id === id)
+    return !tx || canDeleteMirrorTransaction(tx)
+  })
+  if (ids.length === 0) return
+  if (confirm(`¿Eliminar ${ids.length} transacciones? Esto actualizará los saldos de las cuentas.`)) {
+    const failed: string[] = []
+    for (const id of ids) {
+      try {
+        await transactionsStore.deleteTransaction(id)
+        selectedTxIds.value = selectedTxIds.value.filter(selectedId => selectedId !== id)
+      } catch (err) {
+        console.error('Error en batch delete', err)
+        failed.push(err instanceof Error ? err.message : 'No se pudo eliminar una transacción.')
+      }
+    }
+    if (failed.length > 0) {
+      alert(failed[0])
     }
   }
 }
@@ -1340,18 +1364,26 @@ const applyEditBudgetAssignment = async () => {
 const editableAccounts = computed(() => accountsStore.accounts.filter(account => !account.mirror ||
   account.id === editingTransaction.value?.accountId || account.id === editingTransaction.value?.toAccountId))
 
+const isOriginalTransferPair = (sourceId: string, destinationId: string) => {
+  const original = editingTransaction.value
+  return !!original && original.type === 'transfer' &&
+    original.accountId === sourceId && original.toAccountId === destinationId
+}
+
 const availableEditDestinationAccounts = computed(() => {
   if (editTx.value.type !== 'transfer') return editableAccounts.value.filter(account => account.id !== editTx.value.accountId)
   const source = accountsStore.getAccountById(editTx.value.accountId)
   return editableAccounts.value.filter(account => account.id !== editTx.value.accountId &&
-    (!source || canTransferBetweenAccounts(source, account, accountsStore.accounts)))
+    (!source || canTransferBetweenAccounts(source, account, accountsStore.accounts) ||
+      isOriginalTransferPair(source.id, account.id)))
 })
 
 const availableEditSourceAccounts = computed(() => {
   if (editTx.value.type !== 'transfer') return editableAccounts.value
   const destination = accountsStore.getAccountById(editTx.value.toAccountId)
   return editableAccounts.value.filter(account => account.id !== editTx.value.toAccountId &&
-    (!destination || canTransferBetweenAccounts(account, destination, accountsStore.accounts)))
+    (!destination || canTransferBetweenAccounts(account, destination, accountsStore.accounts) ||
+      isOriginalTransferPair(account.id, destination.id)))
 })
 
 const availableEditCategories = computed(() => {
@@ -1414,6 +1446,25 @@ const availableNewSourceAccounts = computed(() => {
 
 watch(() => newTx.value.type, type => {
   if (type !== 'expense' && accountsStore.getAccountById(newTx.value.accountId)?.mirror) newTx.value.accountId = ''
+})
+
+watch(() => [newTx.value.type, newTx.value.accountId], () => {
+  if (newTx.value.type !== 'transfer' || !newTx.value.toAccountId) return
+  const source = accountsStore.getAccountById(newTx.value.accountId)
+  const destination = accountsStore.getAccountById(newTx.value.toAccountId)
+  if (!source || !destination || !canTransferBetweenAccounts(source, destination, accountsStore.accounts)) {
+    newTx.value.toAccountId = ''
+  }
+})
+
+watch(() => [editTx.value.type, editTx.value.accountId], () => {
+  if (editTx.value.type !== 'transfer' || !editTx.value.toAccountId) return
+  if (isOriginalTransferPair(editTx.value.accountId, editTx.value.toAccountId)) return
+  const source = accountsStore.getAccountById(editTx.value.accountId)
+  const destination = accountsStore.getAccountById(editTx.value.toAccountId)
+  if (!source || !destination || !canTransferBetweenAccounts(source, destination, accountsStore.accounts)) {
+    editTx.value.toAccountId = ''
+  }
 })
 
 // Filtrar categorías según tipo seleccionado (ingreso o gasto)
@@ -1744,6 +1795,7 @@ const handleDelete = async (id: string) => {
       await transactionsStore.deleteTransaction(id)
     } catch (err) {
       console.error('Error al borrar movimiento:', err)
+      alert(err instanceof Error ? err.message : 'No se pudo eliminar el movimiento.')
     }
   }
 }

@@ -316,10 +316,16 @@ export async function reverseBridgeSettlement(
   })
 }
 
-/** Deletes both legs of a settlement (or of its reversal) and undoes their balances together. */
+/** Deletes both legs of an unreversed bridge settlement and undoes their balances together. */
 export async function deleteBridgeSettlement(db: Firestore, input: SettlementLegInput): Promise<void> {
   await db.runTransaction(async transaction => {
     const legs = await readLinkedLegs(db, transaction, input.transactionId, input.workspaceId)
+    if (legs.some(leg => leg.reversedBy != null || leg.reversedAt != null)) {
+      throw new SettlementRejection('Esta liquidación ya fue revertida y no se puede eliminar para conservar la consistencia de saldos.')
+    }
+    if (legs.some(leg => leg.reversalOf != null || leg.settlementType === 'reversal')) {
+      throw new SettlementRejection('Una reversión de liquidación no se puede eliminar para conservar la trazabilidad contable.')
+    }
     if (legs.some(leg => leg.type !== 'transfer' || leg.categoryId !== '' || !leg.toAccountId)) {
       throw new SettlementRejection('Este par vinculado no es una liquidación de cuenta puente; no se puede eliminar mientras una de sus cuentas tenga bolsillos.')
     }

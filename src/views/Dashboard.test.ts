@@ -10,6 +10,7 @@ import {
 import {
   DEFAULT_MONTHLY_BUDGET_ID,
   budgetScopedMonthFilter,
+  resolveBudgetId,
   type BudgetExpenseTransaction
 } from '../lib/budgets.ts'
 import {
@@ -95,6 +96,7 @@ const estimateDependencies = (
   transactionsStore: { transactions },
   primaryCurrency: { value: currency },
   goalsStore: { exchangeRates },
+  activeExchangeRates: { value: exchangeRates },
   budgetBillingFor: billingDependency(accounts, basis)
 })
 
@@ -134,6 +136,7 @@ const legacyBudgetDependencies = (
     categoryBudgetCurrency,
     exchangeRates
   },
+  activeExchangeRates: { value: exchangeRates },
   transactionsStore: {
     transactions,
     spendingByCategoryThisMonth: (convert: (amount: number, currency: string) => number) => ({
@@ -260,13 +263,55 @@ test('Dashboard month-end projection adds card statements of earlier purchases o
     convert: (amount: number) => amount,
     cardBillingFor: billingDependency([visa]),
     splitMonthEndExpenses,
-    projectMonthEndExpenses
+    projectMonthEndExpenses,
+    resolveBudgetId,
+    DEFAULT_MONTHLY_BUDGET_ID
   })
   const elapsed = now.getDate()
   const days = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
 
   assert.equal(projection.value.total, (40 / elapsed) * days + 50)
   assert.equal(projection.value.budgeted, (10 / elapsed) * days + 50)
+})
+
+test('S8: Dashboard reports uncapped budget percent, reporting-currency limit for projection, negative savingsRate, omits $0 historical categories, and excludes bridge cards from upcoming payments', () => {
+  // Uncapped budgetSummary.percent: food spent 1500/500, rent spent 0/500 -> total 150% (not 50% capped).
+  const uncapped = evaluateComputed<{ percent: number | null; totalLimitForReporting: number | null }>('budgetSummary', {
+    ...legacyBudgetDependencies({ status: 'confirmed', code: 'EUR' }, { EUR: 2 }, [
+      currentMonthExpense({ amount: -1500, currency: 'USD', categoryId: 'food', budgetId: null })
+    ]),
+    goalsStore: {
+      categoryBudgets: { food: 250, rent: 250 },
+      categoryBudgetCurrency: { status: 'confirmed', code: 'EUR' },
+      exchangeRates: { EUR: 2 }
+    }
+  })
+  assert.equal(uncapped.value.totalLimitForReporting, 1000)
+  assert.equal(uncapped.value.percent, 150)
+
+  // Negative savingsRate is not clamped to 0 when expenses exceed income.
+  const deficitRate = evaluateComputed<number>('savingsRate', {
+    computed: computedDependency,
+    monthlyIncome: { value: 1000 },
+    monthlyExpenses: { value: 1250 }
+  })
+  assert.equal(deficitRate.value, -25)
+
+  // Historical $0-share expenses must not create $0 keys in expensesByCategory.
+  const oldDate = new Date(2020, 0, 15)
+  const categories = evaluateComputed<Record<string, number>>('expensesByCategory', {
+    computed: computedDependency,
+    transactionsStore: { transactions: [currentMonthExpense({ date: oldDate, amount: -50, categoryId: 'food' })] },
+    cardBillingFor: billingDependency(),
+    expenseAmountForMonth,
+    getCategory: () => ({ name: 'Food', color: '#fff' }),
+    convert: (amount: number) => amount
+  })
+  assert.deepEqual(categories.value, {})
+
+  // Bridge credit card must be excluded from upcomingCardPayments.
+  assert.match(script, /upcomingCardPayments = computed[\s\S]*?\.filter\(acc => acc\.type === 'credit' && !acc\.mirror && acc\.paymentDueDay\)/)
+  assert.match(script, /budgetTotal: budgetSummary\.value\?\.totalLimitForReporting \?\? 0/)
 })
 
 // --- S9: "Todo" / "Por presupuesto" ---
@@ -296,7 +341,8 @@ const s9MonthFlow = (transactions: BudgetExpenseTransaction[]) => {
     budgetScopedMonthFilter,
     transactionsStore,
     budgetKinds: { value: new Map(s9OperatingBudgets.map(({ budget }) => [budget.id, budget.kind])) },
-    linkedBudgetOfAccount: () => null
+    linkedBudgetOfAccount: () => null,
+    convert: (amount: number) => amount
   })
   return evaluateComputed<never>('getMoMData', {
     alignedMonthPeriods,
@@ -353,6 +399,7 @@ test('S9: the per-budget panel lists active budgets with activity and their fund
   const breakdown = evaluateComputed<{ id: string; name: string; fundsAmount: number | null; spent: number | null; available: number | null }[]>('budgetBreakdown', {
     computed: computedDependency,
     goalsStore: { operatingBudgets: s9OperatingBudgets, exchangeRates: {} },
+    activeExchangeRates: { value: {} },
     transactionsStore: { transactions: s9Transactions() },
     primaryCurrency: { value: 'COP' },
     budgetBillingFor: billingDependency(),

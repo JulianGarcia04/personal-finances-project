@@ -363,7 +363,10 @@ test('a retried statementImportId replays the first result without writing twice
 
   const first = await callable(data)
   const second = await callable(data)
-  assert.deepEqual(second.data, first.data)
+  assert.equal(first.data.replayed, undefined)
+  assert.equal(second.data.replayed, true)
+  assert.deepEqual(second.data.transactionIds, first.data.transactionIds)
+  assert.deepEqual(second.data.transactions, first.data.transactions)
   assert.equal(first.data.balance, 120)
   assert.equal(await transactionCount(adminDb, workspaceId), beforeCount + 2)
   assert.equal((await adminDb.collection('accounts').doc(pocket.id).get()).data().balance, 120)
@@ -372,7 +375,8 @@ test('a retried statementImportId replays the first result without writing twice
 
   const concurrentData = request(workspaceId, pocket.id, [row(-10, 'Double click')])
   const concurrent = await Promise.all([callable(concurrentData), callable(concurrentData)])
-  assert.deepEqual(concurrent[1].data, concurrent[0].data)
+  assert.deepEqual(concurrent.map(result => result.data.replayed).filter(Boolean), [true])
+  assert.deepEqual(concurrent[0].data.transactionIds, concurrent[1].data.transactionIds)
   assert.equal(await transactionCount(adminDb, workspaceId), beforeCount + 3)
   assert.equal((await adminDb.collection('accounts').doc(pocket.id).get()).data().balance, 110)
 
@@ -583,4 +587,73 @@ test('an imported pocket transaction supports later atomic edit and reversal', a
   assert.equal((await adminDb.collection('accounts').doc(pocket.id).get()).data().balance, 80)
   assert.equal((await adminDb.collection('transactions').doc(created.id).get()).exists, false)
   assert.equal((await adminDb.collection('accounts').doc(parent.id).get()).data().balance, 120)
+})
+
+test('keyed ordinary transfer receipt survives row deletion, pocket conversion, and rejects key reuse', async () => {
+  const { accountsStore, adminDb, transactionsStore, workspaceId } = fixture
+  const bank = await accountsStore.addAccount({ name: 'Receipt transfer bank', type: 'checking', balance: 2_000_000, currency: 'COP' })
+  const card = await accountsStore.addAccount({ name: 'Receipt transfer card', type: 'credit', balance: -300_000, currency: 'COP' })
+  const otherBank = await accountsStore.addAccount({ name: 'Other receipt bank', type: 'checking', balance: 900_000, currency: 'COP' })
+  const statementImportId = randomUUID()
+  const rows = [{
+    date: '2026-10-10T12:00:00.000Z',
+    description: 'Pago tarjeta Visa',
+    amount: -150_000,
+    categorySuggestion: '',
+    type: 'transfer',
+    counterpartyAccountId: card.id
+  }]
+  const beforeCount = await transactionCount(adminDb, workspaceId)
+
+  const [created] = await transactionsStore.addTransactionsBatch(bank.id, rows, { statementImportId })
+  assert.equal(created.type, 'transfer')
+  assert.equal(created.accountId, bank.id)
+  assert.equal(created.toAccountId, card.id)
+  assert.equal(created.amount, 150_000)
+  assert.equal((await adminDb.collection('accounts').doc(bank.id).get()).data().balance, 1_850_000)
+  assert.equal((await adminDb.collection('accounts').doc(card.id).get()).data().balance, -150_000)
+  assert.equal(await transactionCount(adminDb, workspaceId), beforeCount + 1)
+
+  await transactionsStore.deleteTransaction(created.id)
+  assert.equal((await adminDb.collection('transactions').doc(created.id).get()).exists, false)
+  assert.equal((await adminDb.collection('accounts').doc(bank.id).get()).data().balance, 2_000_000)
+  assert.equal((await adminDb.collection('accounts').doc(card.id).get()).data().balance, -300_000)
+
+  const { statementImportMarkerId } = functionsRequire('./lib/pocketImports.js')
+  const receiptRef = adminDb.collection('statementImports').doc(statementImportMarkerId(workspaceId, statementImportId))
+  const receipt = await receiptRef.get()
+  assert.equal(receipt.exists, true)
+  assert.equal(receipt.data().accountId, bank.id)
+  assert.deepEqual(receipt.data().result.transactionIds, [created.id])
+  assert.equal(Object.hasOwn(receipt.data().result, 'transactions'), false)
+
+  // The receipt is checked before hierarchy validation, so a later pocket conversion cannot
+  // turn a deleted transaction's retry into a second balance mutation.
+  await accountsStore.addAccount({
+    name: 'Receipt transfer pocket',
+    type: 'savings',
+    balance: 0,
+    currency: 'COP',
+    parentAccountId: bank.id
+  })
+  const beforeReplay = await transactionCount(adminDb, workspaceId)
+  const localBankBalance = accountsStore.getAccountById(bank.id).balance
+  const replay = await transactionsStore.addTransactionsBatch(bank.id, rows, { statementImportId })
+  assert.deepEqual(replay, [])
+  assert.equal(await transactionCount(adminDb, workspaceId), beforeReplay)
+  assert.equal((await adminDb.collection('accounts').doc(bank.id).get()).data().balance, 2_000_000)
+  assert.equal((await adminDb.collection('accounts').doc(card.id).get()).data().balance, -300_000)
+  assert.equal(accountsStore.getAccountById(bank.id).balance, localBankBalance)
+  assert.equal(transactionsStore.transactions.some(transaction => transaction.id === created.id), false)
+
+  await assert.rejects(transactionsStore.addTransactionsBatch(bank.id, [{ ...rows[0], amount: -125_000 }], { statementImportId }))
+  await assert.rejects(
+    transactionsStore.addTransactionsBatch(bank.id, rows, { statementImportId: 'bad id!' }),
+    /El identificador de importación no es válido\./
+  )
+  await assert.rejects(transactionsStore.addTransactionsBatch(otherBank.id, rows, { statementImportId }))
+  assert.equal(await transactionCount(adminDb, workspaceId), beforeReplay)
+  assert.equal((await adminDb.collection('accounts').doc(bank.id).get()).data().balance, 2_000_000)
+  assert.equal((await adminDb.collection('accounts').doc(card.id).get()).data().balance, -300_000)
+  assert.equal((await adminDb.collection('accounts').doc(otherBank.id).get()).data().balance, 900_000)
 })

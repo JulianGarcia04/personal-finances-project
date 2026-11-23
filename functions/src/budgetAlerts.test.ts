@@ -23,7 +23,8 @@ import {
   monthKey,
   resolveAlertBudgetId,
   spendFieldsChanged,
-  ALERT_CARD_BASIS
+  ALERT_CARD_BASIS,
+  effectiveWorkspaceExchangeRates
 } from "./budgetAlerts";
 
 const BOGOTA = "America/Bogota";
@@ -419,8 +420,13 @@ test("transfers move a budget's funds by the linked accounts they touch", () => 
   // Without links only assigned income counts, as before.
   assert.equal(scopeFundsTotal(funding, { id: "casa", kind: "event" }, OCTOBER, COP_OPTIONS), 50);
   const kindOf = () => "monthly" as const;
-  assert.deepEqual([...selfFundedBudgetIds([transfer("bank", "cash-viaje", 10)], OCTOBER, COP_OPTIONS, kindOf, linkedBudgetOf)], ["viaje"]);
+  // S7: transfer alone from an unlinked account never makes a budget self-funded (would erase cash outflow).
+  assert.deepEqual([...selfFundedBudgetIds([transfer("bank", "cash-viaje", 10)], OCTOBER, COP_OPTIONS, kindOf, linkedBudgetOf)], []);
   assert.deepEqual([...selfFundedBudgetIds([transfer("cash-viaje", "bank", 10)], OCTOBER, COP_OPTIONS, kindOf, linkedBudgetOf)], []);
+  // Assigned income makes it self-funded only while net funds stay strictly positive.
+  assert.deepEqual([...selfFundedBudgetIds([income(100, { budgetId: "viaje" })], OCTOBER, COP_OPTIONS, kindOf, linkedBudgetOf)], ["viaje"]);
+  assert.deepEqual([...selfFundedBudgetIds([income(100, { budgetId: "viaje" }), transfer("cash-viaje", "bank", 100)], OCTOBER, COP_OPTIONS, kindOf, linkedBudgetOf)], []);
+  assert.deepEqual([...selfFundedBudgetIds([income(100, { budgetId: "viaje" }), transfer("cash-viaje", "bank", 150)], OCTOBER, COP_OPTIONS, kindOf, linkedBudgetOf)], []);
 
   // A transfer write re-checks the budgets it touches.
   const scope = (before?: Record<string, unknown>, after?: Record<string, unknown>) =>
@@ -489,4 +495,19 @@ test("budget alerts count card purchases in their statement cycle month (consump
   const options = { timeZone: BOGOTA, billingFor: () => card };
   assert.equal(alertCategoryFor(purchase, DEFAULT_SCOPE, { year: 2026, month: 9 }, options), "food");
   assert.equal(alertCategoryFor(purchase, DEFAULT_SCOPE, { year: 2026, month: 10 }, options), null);
+});
+
+test("S10: effectiveWorkspaceExchangeRates disables stored rates when exchangeRatesBaseCurrency differs from reporting currency", () => {
+  assert.deepEqual(
+    effectiveWorkspaceExchangeRates({ exchangeRates: { USD: 4000 }, exchangeRatesBaseCurrency: "COP" }, "COP"),
+    { rates: { USD: 4000 }, mismatchedBase: null }
+  );
+  assert.deepEqual(
+    effectiveWorkspaceExchangeRates({ exchangeRates: { USD: 4000 }, exchangeRatesBaseCurrency: "COP" }, "USD"),
+    { rates: {}, mismatchedBase: "COP" }
+  );
+  assert.deepEqual(
+    effectiveWorkspaceExchangeRates({ exchangeRates: { USD: 4000 } }, "COP"),
+    { rates: { USD: 4000 }, mismatchedBase: null }
+  );
 });

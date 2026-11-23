@@ -19,3 +19,8 @@ test('settlement selectors offer main accounts, banks with pockets included, but
   }
   assert.match(computedBody('settleSourceAccounts'), /!acc\.mirror/, 'bridge accounts still cannot pay a settlement')
 })
+
+test('S8: Accounts loads transactions on mount and aligns credit card cycle due with statement ledger capped by debt', () => {
+  assert.match(accountsView, /onMounted\(async \(\) => \{[\s\S]*?transactionsStore\.fetchTransactions\(\)/)
+  assert.match(accountsView, /const cycleChargeAmount = \(account: Account\) => \{[\s\S]*?buildCardStatementLedger\(account, billing, transactionsStore\.transactions\)/)
+})

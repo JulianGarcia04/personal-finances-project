@@ -63,6 +63,7 @@ export async function seedAgentFixture(db, { workspaceId, userId, now = FIXED_NO
     name: 'Casa', ownerId: userId, members: [userId], currency: 'USD',
     exchangeRates: { USD: 4000 },
     categoryBudgets: { [c.food]: 300_000, [c.tech]: 50_000 },
+    categoryBudgetCurrency: 'COP',
     expenseLimit: 1_000_000,
     budgetIncome: 6_000_000,
     budgetAllocations: { [ids.goal]: 500_000 },

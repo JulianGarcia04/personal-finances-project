@@ -1,7 +1,9 @@
 import { AgentToolError, buildDateContext, NameMaps } from "./agentTools";
+import { roundMoney } from "./money";
 import { CardBilling, cardBillingOf, ImputationBasis, paymentMonthIndex, YearMonth, zonedDateKey, zonedWallClockToInstant, zonedYearMonth } from "./http";
 import {
   AlertScope,
+  capInReportingCurrency,
   LinkedBudgetLookup,
   monthlyExpenseTotal,
   monthlyIncomeTotal,
@@ -50,6 +52,73 @@ const MONTHS = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", 
 const DAY_MS = 86_400_000;
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
+
+export type SavingsGoalAccountSnapshot = Record<string, unknown> & {
+  workspaceId?: unknown;
+  currency?: unknown;
+  balance?: unknown;
+  type?: unknown;
+  mirror?: unknown;
+  parentAccountId?: unknown;
+  childAccountIds?: unknown;
+};
+
+export function isSavingsGoalAccountLinkable(
+  accountId: string,
+  currency: string,
+  workspaceId: string,
+  accounts: ReadonlyMap<string, SavingsGoalAccountSnapshot>
+): boolean {
+  const account = accounts.get(accountId);
+  if (!account || account.workspaceId !== workspaceId || account.currency !== currency ||
+      !["checking", "savings", "cash"].includes(String(account.type)) || account.mirror != null ||
+      typeof account.balance !== "number" || !Number.isFinite(account.balance)) return false;
+
+  const parentId = account.parentAccountId;
+  if (parentId !== undefined && parentId !== null) {
+    if (typeof parentId !== "string" || !parentId.trim() || account.type !== "savings") return false;
+    const parent = accounts.get(parentId);
+    const childIds = parent?.childAccountIds;
+    if (!parent || parent.workspaceId !== workspaceId || parent.currency !== currency ||
+        !["checking", "savings"].includes(String(parent.type)) || parent.mirror != null ||
+        parent.parentAccountId != null || !Array.isArray(childIds) || !childIds.includes(accountId)) return false;
+  }
+
+  if (parentId != null) {
+    if (account.parentAccountId !== parentId || account.childAccountIds != null &&
+        (!Array.isArray(account.childAccountIds) || account.childAccountIds.length > 0)) return false;
+  } else if (account.childAccountIds != null) {
+    if (!Array.isArray(account.childAccountIds) || new Set(account.childAccountIds).size !== account.childAccountIds.length) return false;
+    for (const childId of account.childAccountIds) {
+      if (typeof childId !== "string") return false;
+      const child = accounts.get(childId);
+      if (!child || child.workspaceId !== workspaceId || child.currency !== currency ||
+          child.type !== "savings" || child.parentAccountId !== accountId || child.mirror != null ||
+          childId === accountId || child.childAccountIds != null &&
+          (!Array.isArray(child.childAccountIds) || child.childAccountIds.length > 0)) return false;
+    }
+  }
+
+  return true;
+}
+
+/** Resolve virtual progress from the goal, and linked progress from a validated live account. */
+export function getSavingsGoalProgressAmount(
+  goal: Record<string, unknown>,
+  workspaceId: string,
+  accounts: ReadonlyMap<string, SavingsGoalAccountSnapshot>
+): number | null {
+  const linkedAccountId = goal.linkedAccountId;
+  if (!Object.hasOwn(goal, "linkedAccountId") || linkedAccountId === null) {
+    const currentAmount = Number(goal.currentAmount ?? 0);
+    return Number.isFinite(currentAmount) ? roundMoney(currentAmount) : 0;
+  }
+  if (typeof linkedAccountId !== "string" || !linkedAccountId.trim() || typeof goal.currency !== "string" ||
+      !isSavingsGoalAccountLinkable(linkedAccountId, goal.currency, workspaceId, accounts)) return null;
+
+  const balance = Number(accounts.get(linkedAccountId)?.balance);
+  return Number.isFinite(balance) ? roundMoney(balance) : null;
+}
 
 // --- Currency ------------------------------------------------------------------
 
@@ -408,7 +477,7 @@ export interface SummaryOptions {
    * extra rows outside the period that event budgets need (their all-time income, expenses and
    * transfers). Extra rows never feed the existing totals.
    */
-  budgetBreakdown?: { budgets: SummaryBudget[]; extraRows?: SummaryTransaction[] };
+  budgetBreakdown?: { budgets: SummaryBudget[]; extraRows?: SummaryTransaction[]; creditAccountIds?: ReadonlySet<string> };
 }
 
 const categoryName = (id: string | null | undefined, names: NameMaps) =>
@@ -511,8 +580,8 @@ function aggregate(rows: SummaryTransaction[], period: ResolvedPeriod, options: 
       income: round2(income),
       expenses: round2(expenses),
       net: round2(income - expenses),
-      // Dashboard.vue L544-548: 0 without income, never negative.
-      savingsRate: income === 0 ? 0 : Math.round(Math.max(0, ((income - expenses) / income) * 100) * 10) / 10,
+      // Dashboard.vue savingsRate: 0 without income; negative when expenses exceed income.
+      savingsRate: income === 0 ? 0 : Math.round(((income - expenses) / income) * 1000) / 10,
       upcomingInstallments: round2(upcoming)
     },
     groups: groupList,
@@ -639,14 +708,16 @@ function budgetBreakdown(
   for (const budget of active) {
     if (!Array.isArray(budget.linkedAccountIds)) continue;
     for (const accountId of budget.linkedAccountIds) {
-      if (typeof accountId === "string" && !links.has(accountId)) links.set(accountId, budget.id);
+      if (typeof accountId === "string" && !input.creditAccountIds?.has(accountId) && !links.has(accountId)) {
+        links.set(accountId, budget.id);
+      }
     }
   }
   const linkedBudgetOf: LinkedBudgetLookup = accountId => links.get(accountId) ?? null;
 
   const monthlyIncome = sumKnown(months.map(month => monthlyIncomeTotal(movements, month, spendOptions)));
   const monthlyExpense = sumKnown(months.map(month => monthlyExpenseTotal(movements, month, spendOptions,
-    selfFundedBudgetIds(funding, month, { timeZone }, kindOf, linkedBudgetOf))));
+    selfFundedBudgetIds(funding, month, spendOptions, kindOf, linkedBudgetOf))));
 
   const budgets: BudgetBreakdownRow[] = [];
   let fundsRateMissing = false;
@@ -700,33 +771,78 @@ export function monthlyAverages(
 // --- Budgets -------------------------------------------------------------------
 
 export interface BudgetStatus {
-  categories: { categoryId: string; categoryName: string; limit: number; spent: number; remaining: number; percentUsed: number; exceeded: boolean }[];
-  totals: { budget: number; spent: number; percentUsed: number };
+  categories: {
+    categoryId: string;
+    categoryName: string;
+    limit: number | null;
+    spent: number;
+    remaining: number | null;
+    percentUsed: number | null;
+    exceeded: boolean;
+  }[];
+  totals: { budget: number | null; spent: number; percentUsed: number | null };
   expenseLimit: { limit: number; spent: number; remaining: number; percentUsed: number; exceeded: boolean } | null;
 }
 
 /**
- * Budget vs actual for a month summary grouped by category. Port of the
- * Dashboard budgetSummary (Dashboard.vue L556-584): per-row percent is
- * spent/limit; the global percent caps each category at its limit.
+ * Budget vs actual for a month summary grouped by category. Aligns with Dashboard
+ * `budgetSummary`: per-row and global percents are uncapped `spent / limit`, caps are
+ * converted from `capCurrency` to `primaryCurrency` via manual FX (disabled when
+ * unconfirmed or rate missing), and `expenseLimit` uses all monthly expenses.
  */
-export function buildBudgetStatus({ categoryBudgets, expenseLimit, summary, names }: {
+export function buildBudgetStatus({
+  categoryBudgets,
+  expenseLimit,
+  summary,
+  allExpensesTotal,
+  capCurrency,
+  primaryCurrency,
+  exchangeRates,
+  names
+}: {
   categoryBudgets: Record<string, number>;
   expenseLimit: number | null | undefined;
   summary: FinancialSummary;
+  allExpensesTotal?: number;
+  capCurrency?: string | null;
+  primaryCurrency?: string;
+  exchangeRates?: Record<string, number>;
   names: NameMaps;
 }): BudgetStatus {
   const spentBy = new Map(summary.groups.map(g => [g.key, g.expenses]));
-  let budget = 0;
+  const convertCap = (rawLimit: number): number | null => {
+    if (capCurrency === undefined) return rawLimit;
+    if (!primaryCurrency) return capCurrency === null ? null : rawLimit;
+    const converted = capInReportingCurrency(rawLimit, capCurrency, primaryCurrency, exchangeRates ?? {});
+    return converted === null ? null : round2(converted);
+  };
+
+  let budgetTotal: number | null = 0;
   let spentTotal = 0;
-  let capped = 0;
+  let positiveLimitSpentTotal = 0;
   const categories = Object.entries(categoryBudgets)
-    .map(([categoryId, rawLimit]) => {
-      const limit = Number(rawLimit) || 0;
+    .map(([categoryId, raw]) => {
+      const parsed = Number(raw);
+      const rawLimit = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+      const limit = convertCap(rawLimit);
       const spent = spentBy.get(categoryId) ?? 0;
-      budget += limit;
       spentTotal += spent;
-      capped += Math.min(spent, limit);
+      if (limit === null) {
+        budgetTotal = null;
+        return {
+          categoryId,
+          categoryName: names.categories.get(categoryId) ?? "Categoría desconocida",
+          limit: null,
+          spent,
+          remaining: null,
+          percentUsed: null,
+          exceeded: false
+        };
+      }
+      if (limit > 0) {
+        if (budgetTotal !== null) budgetTotal += limit;
+        positiveLimitSpentTotal += spent;
+      }
       return {
         categoryId,
         categoryName: names.categories.get(categoryId) ?? "Categoría desconocida",
@@ -734,16 +850,23 @@ export function buildBudgetStatus({ categoryBudgets, expenseLimit, summary, name
         spent,
         remaining: round2(limit - spent),
         percentUsed: limit > 0 ? Math.round((spent / limit) * 100) : 0,
-        exceeded: spent > limit
+        exceeded: limit > 0 && spent > limit
       };
     })
-    .sort((a, b) => b.percentUsed - a.percentUsed);
+    .sort((a, b) => (b.percentUsed ?? -1) - (a.percentUsed ?? -1));
 
   const limit = Number(expenseLimit) || 0;
-  const monthSpent = summary.totals.expenses;
+  const monthSpent = allExpensesTotal ?? summary.totals.expenses;
+  const roundedBudget = budgetTotal === null ? null : round2(budgetTotal);
   return {
     categories,
-    totals: { budget: round2(budget), spent: round2(spentTotal), percentUsed: budget > 0 ? Math.round((capped / budget) * 100) : 0 },
+    totals: {
+      budget: roundedBudget,
+      spent: round2(spentTotal),
+      percentUsed: roundedBudget === null
+        ? null
+        : roundedBudget > 0 ? Math.round((positiveLimitSpentTotal / roundedBudget) * 100) : 0
+    },
     expenseLimit: limit > 0
       ? { limit, spent: monthSpent, remaining: round2(limit - monthSpent), percentUsed: Math.round((monthSpent / limit) * 100), exceeded: monthSpent > limit }
       : null

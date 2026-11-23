@@ -143,10 +143,60 @@ test("editing an expense between a pocket-related account and a credit card upda
   await assert.rejects(
     mutateWorkspaceTransaction(db, {
       kind: "updated", userId: "u1", workspaceId: "ws", transactionId: id,
-      movement: { accountId: "pocket", toAccountId: "card", type: "transfer", amount: 30, description: "Invalid pocket card transfer", date: new Date("2026-10-26T12:00:00Z") } as never
+      movement: { accountId: "card", toAccountId: "pocket", type: "transfer", amount: 30, description: "Card advance into a pocket", date: new Date("2026-10-26T12:00:00Z") } as never
     }),
-    /Las transferencias con tarjetas requieren cuentas principales, no bolsillos/
+    /Una tarjeta de crédito no puede transferir dinero a un bolsillo/
   );
+  assert.equal(read("accounts/card")?.balance, -200);
+  assert.equal(read("accounts/pocket")?.balance, 70);
+});
+
+test("a pocket pays a credit card as a neutral transfer and reversing it restores both ends", async () => {
+  const { db, read } = fakeDb({
+    ...fixtures(null, {}),
+    "accounts/bank": { workspaceId: "ws", type: "savings", balance: 500_000, currency: "COP", childAccountIds: ["pocket"] },
+    "accounts/pocket": {
+      workspaceId: "ws", type: "savings", balance: 200_000, currency: "COP",
+      parentAccountId: "bank", childAccountIds: [], pocketActivity: true
+    },
+    "accounts/card": { workspaceId: "ws", type: "credit", balance: -300_000, limit: 1_000_000, currency: "COP" }
+  });
+  const netWorth = () => ["bank", "pocket", "card"].reduce((total, id) => total + Number(read(`accounts/${id}`)?.balance), 0);
+  const before = netWorth();
+  const payment = {
+    accountId: "pocket", toAccountId: "card", type: "transfer", amount: 100_000,
+    description: "Pago tarjeta desde bolsillo", date: new Date("2026-11-21T12:00:00Z")
+  };
+
+  const { id } = await mutateWorkspaceTransaction(db, { kind: "created", userId: "u1", workspaceId: "ws", movement: payment as never });
+  assert.equal(read("accounts/pocket")?.balance, 100_000);
+  assert.equal(read("accounts/bank")?.balance, 500_000);
+  assert.equal(read("accounts/card")?.balance, -200_000);
+  assert.equal(netWorth(), before);
+  assert.equal(read(`transactions/${id}`)?.type, "transfer");
+  assert.equal(read(`transactions/${id}`)?.accountId, "pocket");
+  assert.equal(read(`transactions/${id}`)?.toAccountId, "card");
+
+  await mutateWorkspaceTransaction(db, {
+    kind: "updated", userId: "u1", workspaceId: "ws", transactionId: id, movement: { ...payment, amount: 150_000 } as never
+  });
+  assert.equal(read("accounts/pocket")?.balance, 50_000);
+  assert.equal(read("accounts/card")?.balance, -150_000);
+  assert.equal(read("accounts/bank")?.balance, 500_000);
+
+  await assert.rejects(
+    mutateWorkspaceTransaction(db, {
+      kind: "updated", userId: "u1", workspaceId: "ws", transactionId: id, movement: { ...payment, amount: 200_001 } as never
+    }),
+    /no puede ser negativo/
+  );
+  assert.equal(read("accounts/pocket")?.balance, 50_000);
+
+  await mutateWorkspaceTransaction(db, { kind: "deleted", userId: "u1", workspaceId: "ws", transactionId: id });
+  assert.equal(read("accounts/pocket")?.balance, 200_000);
+  assert.equal(read("accounts/card")?.balance, -300_000);
+  assert.equal(read("accounts/bank")?.balance, 500_000);
+  assert.equal(netWorth(), before);
 });
 
 

@@ -6,6 +6,8 @@ import { Account, Transaction, Category, TransactionType } from '@/types'
 import { getTransactionReplacementDeltas, isPocketAccount, isPocketRelatedAccount } from '@/lib/pockets'
 import {
   assertBridgeMovement,
+  assertMirrorPairDeletable,
+  canDeleteMirrorTransaction,
   isSettlementCandidate,
   planMirror,
   planSettlement,
@@ -18,6 +20,8 @@ import {
 } from '@/lib/mirror'
 import { createCardBillingLookup, expenseAmountForDate, getInstallmentCount } from '@/lib/installments'
 import { parseDateOnly, toDateValue } from '@/lib/dates'
+import { roundMoney } from '@/lib/money'
+import { planTransferDirection, resolveStatementImportId, type StatementImportType } from '@/lib/statementImport'
 import { createExpenseBudgetAssigner, selectBudgetExpenses } from '@/lib/transactionClassification'
 import { budgetChangeForEdit, budgetIdToPersist, type EditBudgetChange } from '@/lib/budgets'
 import { 
@@ -147,7 +151,7 @@ function publishPocketDeltas(
   for (const [accountId, delta] of Object.entries(deltas)) {
     const account = accountsStore.accounts.find(existing => existing.id === accountId)
     if (!account) continue
-    account.balance += delta
+    account.balance = roundMoney(account.balance + delta)
     if (account.parentAccountId) account.pocketActivity = true
   }
 }
@@ -178,9 +182,9 @@ async function commitPocketMovement(options: {
   workspaceId: string
   userId: string
   next?: PocketMovementTransaction
-  // Budget decided by an edit, written in the same update (a value, or deleteField()).
-  budgetPatch?: { budgetId: unknown }
-}): Promise<{ id: string; data: any; deltas: Record<string, number> }> {
+  // Linked budget of the target account; budget transition is derived from live before.type.
+  linkedBudgetId?: string | null
+}): Promise<{ id: string; data: any; deltas: Record<string, number>; budgetChange?: EditBudgetChange }> {
   const transactionRef = options.transactionId
     ? doc(db, 'transactions', options.transactionId)
     : doc(collection(db, 'transactions'))
@@ -241,9 +245,9 @@ async function commitPocketMovement(options: {
       const recordedCurrency = isNewMovement ? options.next?.currency : before?.currency
       if (recordedCurrency !== source.currency) throw new Error('La moneda del movimiento debe coincidir con su cuenta.')
       const target = movement.toAccountId ? accounts.get(movement.toAccountId) : undefined
-      if (movement.type === 'transfer' && (source.type === 'credit' || target?.type === 'credit') &&
-          (isPocketAccount(source) || (target && isPocketAccount(target)))) {
-        throw new Error('Las transferencias con tarjetas requieren cuentas principales, no bolsillos.')
+      // A pocket may pay a card; a card may not fund a pocket (no card advances into pockets).
+      if (movement.type === 'transfer' && source.type === 'credit' && target && isPocketAccount(target)) {
+        throw new Error('Una tarjeta de crédito no puede transferir dinero a un bolsillo.')
       }
       if (movement.type === 'transfer') {
         const destination = movement.toAccountId && accounts.get(movement.toAccountId)
@@ -265,7 +269,7 @@ async function commitPocketMovement(options: {
     for (const accountId of endpointIds) {
       const delta = deltas[accountId] ?? 0
       const account = accounts.get(accountId)
-      const balance = Number(account?.balance) + delta
+      const balance = roundMoney(Number(account?.balance) + delta)
       if (!Number.isFinite(balance) || (movementAccountIsPocketRelated(account) && balance < 0)) {
         throw new Error('El saldo disponible de un bolsillo o cuenta principal no puede ser negativo.')
       }
@@ -291,9 +295,21 @@ async function commitPocketMovement(options: {
       return { id, data: before, deltas }
     }
     if (!options.next) throw new Error('Faltan los datos del movimiento.')
-    if (options.kind === 'created') transaction.set(transactionRef, { ...options.next })
-    else transaction.update(transactionRef, { ...options.next, ...(options.budgetPatch ?? {}) })
-    return { id, data: options.next, deltas }
+    if (options.kind === 'created') {
+      transaction.set(transactionRef, { ...options.next })
+      return { id, data: options.next, deltas }
+    }
+    // Compute budget transition from the live stored type inside the transaction,
+    // and preserve server-stored createdAt precision (nanoseconds) on pocket updates.
+    if (!before) throw new Error('Transacción no encontrada.')
+    const liveBudgetChange = budgetChangeForEdit({
+      fromType: before.type,
+      toType: options.next.type,
+      linkedBudgetId: options.linkedBudgetId ?? null
+    })
+    const { createdAt: _ignoredCreatedAt, ...mutableNext } = options.next
+    transaction.update(transactionRef, { ...mutableNext, ...(budgetPatchFor(liveBudgetChange) ?? {}) })
+    return { id, data: options.next, deltas, budgetChange: liveBudgetChange }
   })
 }
 
@@ -346,7 +362,9 @@ export const useTransactionsStore = defineStore('transactions', {
       let list = [...state.transactions]
 
       if (filters.accountId) {
-        list = list.filter(t => t.accountId === filters.accountId)
+        list = list.filter(t =>
+          t.accountId === filters.accountId || (t.type === 'transfer' && t.toAccountId === filters.accountId)
+        )
       }
       if (filters.categoryId) {
         list = list.filter(t => t.categoryId === filters.categoryId)
@@ -542,6 +560,9 @@ export const useTransactionsStore = defineStore('transactions', {
         if (!destination || destination.workspaceId !== workspaceId) {
           throw new Error('La cuenta destino no existe en el workspace activo')
         }
+        if (destination.currency !== account.currency) {
+          throw new Error('Las transferencias solo se permiten entre cuentas de la misma moneda.')
+        }
       }
       assertBridgeMovement(type, account, destination)
 
@@ -596,45 +617,91 @@ export const useTransactionsStore = defineStore('transactions', {
       this.loading = true
       try {
         const transactionDate = date instanceof Date ? date : new Date(date)
-        const installmentCount = type === 'expense' && account.type === 'credit'
-          ? getInstallmentCount(installments)
-          : 1
-        const newTx = {
-          workspaceId,
-          userId: userId || user.uid,
-          accountId,
-          amount: normalizedAmount,
-          description,
-          categoryId,
-          date: Timestamp.fromDate(transactionDate),
-          type,
-          toAccountId,
-          receiptUrl,
-          notes,
-          installments: installmentCount,
-          currency: account.currency || 'USD',
-          createdAt: new Date(),
-          ...budgetField
+        const docRef = doc(collection(db, 'transactions'))
+        const createdAt = new Date()
+
+        const committed = await runTransaction(db, async (transaction) => {
+          const sourceRef = doc(db, 'accounts', accountId)
+          const destRef = type === 'transfer' && toAccountId ? doc(db, 'accounts', toAccountId) : null
+          const [sourceSnap, destSnap] = await Promise.all([
+            transaction.get(sourceRef),
+            destRef ? transaction.get(destRef) : Promise.resolve(null)
+          ])
+          if (!sourceSnap.exists()) throw new Error('Cuenta origen no encontrada')
+          const liveSource = sourceSnap.data()
+          if (liveSource.workspaceId !== workspaceId) {
+            throw new Error('La cuenta origen no pertenece al workspace activo')
+          }
+          const liveDest = destSnap?.exists() ? destSnap.data() : null
+          if (type === 'transfer') {
+            if (!liveDest || liveDest.workspaceId !== workspaceId) {
+              throw new Error('La cuenta destino no existe en el workspace activo')
+            }
+            if (liveDest.currency !== liveSource.currency) {
+              throw new Error('Las transferencias solo se permiten entre cuentas de la misma moneda.')
+            }
+          }
+          assertBridgeMovement(type, liveSource, liveDest)
+          if (liveSource.mirror) {
+            throw new Error('Esta cuenta ahora es una cuenta puente; recarga e inténtalo de nuevo.')
+          }
+          if (movementAccountIsPocketRelated(liveSource) || (liveDest && movementAccountIsPocketRelated(liveDest))) {
+            throw new Error('La cuenta cambió a bolsillo; recarga e inténtalo de nuevo.')
+          }
+
+          const installmentCount = type === 'expense' && liveSource.type === 'credit'
+            ? getInstallmentCount(installments)
+            : 1
+          const newTx = {
+            workspaceId,
+            userId: userId || user.uid,
+            accountId,
+            amount: normalizedAmount,
+            description,
+            categoryId,
+            date: Timestamp.fromDate(transactionDate),
+            type,
+            toAccountId: type === 'transfer' ? toAccountId : null,
+            receiptUrl,
+            notes,
+            installments: installmentCount,
+            currency: liveSource.currency || 'USD',
+            createdAt,
+            ...budgetField
+          }
+
+          const updatedBalances: Record<string, number> = {}
+          if (type === 'transfer' && destRef && liveDest && toAccountId) {
+            const nextSourceBalance = roundMoney(Number(liveSource.balance) - normalizedAmount)
+            const nextDestBalance = roundMoney(Number(liveDest.balance) + normalizedAmount)
+            updatedBalances[accountId] = nextSourceBalance
+            updatedBalances[toAccountId] = nextDestBalance
+            transaction.update(sourceRef, { balance: nextSourceBalance })
+            transaction.update(destRef, { balance: nextDestBalance })
+          } else {
+            const nextSourceBalance = roundMoney(Number(liveSource.balance) + normalizedAmount)
+            updatedBalances[accountId] = nextSourceBalance
+            transaction.update(sourceRef, { balance: nextSourceBalance })
+          }
+
+          transaction.set(docRef, newTx)
+          return { newTx, updatedBalances }
+        })
+
+        const txWithId: Transaction = {
+          id: docRef.id,
+          ...committed.newTx,
+          date: transactionDate
         }
 
-        // 1. Guardar la transacción en Firestore
-        const docRef = await addDoc(collection(db, 'transactions'), newTx)
-        const txWithId: Transaction = { 
-          id: docRef.id, 
-          ...newTx, 
-          date: transactionDate 
+        if (authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === user.uid) {
+          for (const [accId, balance] of Object.entries(committed.updatedBalances)) {
+            const idx = accountsStore.accounts.findIndex(acc => acc.id === accId)
+            if (idx !== -1) accountsStore.accounts[idx].balance = balance
+          }
+          this.transactions.unshift(txWithId)
+          this.transactions.sort((a, b) => b.date.getTime() - a.date.getTime())
         }
-
-        // 2. Actualizar balances de las cuentas asociadas
-        if (type === 'transfer' && toAccountId) {
-          await accountsStore.updateAccountBalance(accountId, -normalizedAmount)
-          await accountsStore.updateAccountBalance(toAccountId, normalizedAmount)
-        } else {
-          await accountsStore.updateAccountBalance(accountId, normalizedAmount)
-        }
-
-        this.transactions.unshift(txWithId)
-        this.transactions.sort((a, b) => b.date.getTime() - a.date.getTime())
 
         return txWithId
       } catch (error) {
@@ -769,6 +836,13 @@ export const useTransactionsStore = defineStore('transactions', {
     async deleteTransaction(transactionId: string): Promise<void> {
       const tx = this.transactions.find(t => t.id === transactionId)
       if (!tx) return
+      if (!canDeleteMirrorTransaction(tx)) {
+        throw new Error(
+          tx.reversedBy || tx.reversedAt
+            ? 'Esta liquidación ya fue revertida y no se puede eliminar para conservar la consistencia de saldos.'
+            : 'Una reversión de liquidación no se puede eliminar para conservar la trazabilidad contable.'
+        )
+      }
 
       const accountsStore = useAccountsStore()
       const authStore = useAuthStore()
@@ -806,32 +880,89 @@ export const useTransactionsStore = defineStore('transactions', {
       }
       this.loading = true
       try {
-        // 1. Eliminar de Firestore y revertir saldos.
+        // 1. Eliminar de Firestore y revertir saldos atómicamente desde el documento guardado.
+        let receiptToDelete: string | null = tx.receiptUrl ?? null
+        let deletedInStore = true
         if (tx.mirrorOf) {
           // Gasto espejo: las dos patas y los tres saldos se revierten juntos o no se revierte nada.
           await this.deleteMirrorPair(tx)
         } else {
-          await deleteDoc(doc(db, 'transactions', transactionId))
+          const txRef = doc(db, 'transactions', transactionId)
+          const deleteOutcome = await runTransaction(db, async (transaction) => {
+            const txSnap = await transaction.get(txRef)
+            if (!txSnap.exists()) return { deleted: false as const, nextBalances: {}, receiptUrl: null as string | null }
 
-          if (tx.type === 'transfer' && tx.toAccountId) {
-            await accountsStore.updateAccountBalance(tx.accountId, tx.amount)
-            await accountsStore.updateAccountBalance(tx.toAccountId, -tx.amount)
-          } else {
-            await accountsStore.updateAccountBalance(tx.accountId, -tx.amount)
+            const stored = txSnap.data() as any
+            if (!canDeleteMirrorTransaction(stored)) {
+              throw new Error(
+                stored.reversedBy || stored.reversedAt
+                  ? 'Esta liquidación ya fue revertida y no se puede eliminar para conservar la consistencia de saldos.'
+                  : 'Una reversión de liquidación no se puede eliminar para conservar la trazabilidad contable.'
+              )
+            }
+            if (stored.mirrorOf) {
+              throw new Error('Este movimiento está vinculado a otro workspace; recarga e inténtalo de nuevo.')
+            }
+
+            const storedAmount = Number(stored.amount)
+            const sourceRef = doc(db, 'accounts', stored.accountId)
+            const destRef = stored.type === 'transfer' && stored.toAccountId
+              ? doc(db, 'accounts', stored.toAccountId)
+              : null
+            const [sourceSnap, destSnap] = await Promise.all([
+              transaction.get(sourceRef),
+              destRef ? transaction.get(destRef) : Promise.resolve(null)
+            ])
+            if ((sourceSnap.exists() && movementAccountIsPocketRelated(sourceSnap.data())) ||
+                (destSnap?.exists() && movementAccountIsPocketRelated(destSnap.data()))) {
+              throw new Error('La cuenta cambió a bolsillo; recarga e inténtalo de nuevo.')
+            }
+
+            const nextBalances: Record<string, number> = {}
+            if (stored.type === 'transfer' && destRef && stored.toAccountId) {
+              if (sourceSnap.exists()) {
+                const next = roundMoney(Number(sourceSnap.data().balance) + storedAmount)
+                nextBalances[stored.accountId] = next
+                transaction.update(sourceRef, { balance: next })
+              }
+              if (destSnap?.exists()) {
+                const next = roundMoney(Number(destSnap.data().balance) - storedAmount)
+                nextBalances[stored.toAccountId] = next
+                transaction.update(destRef, { balance: next })
+              }
+            } else if (sourceSnap.exists()) {
+              const next = roundMoney(Number(sourceSnap.data().balance) - storedAmount)
+              nextBalances[stored.accountId] = next
+              transaction.update(sourceRef, { balance: next })
+            }
+
+            transaction.delete(txRef)
+            return { deleted: true as const, nextBalances, receiptUrl: (stored.receiptUrl as string | null) ?? null }
+          })
+
+          deletedInStore = deleteOutcome.deleted
+          receiptToDelete = deleteOutcome.deleted ? deleteOutcome.receiptUrl : null
+          if (deleteOutcome.deleted && authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === userId) {
+            for (const [accId, balance] of Object.entries(deleteOutcome.nextBalances)) {
+              const idx = accountsStore.accounts.findIndex(acc => acc.id === accId)
+              if (idx !== -1) accountsStore.accounts[idx].balance = balance
+            }
           }
         }
 
-        // 1b. Eliminar de Storage si tiene comprobante
-        if (tx.receiptUrl) {
+        // 1b. Eliminar de Storage si realmente existía y tenía comprobante
+        if (deletedInStore && receiptToDelete) {
           try {
-            const storageFileRef = storageRef(storage, tx.receiptUrl)
+            const storageFileRef = storageRef(storage, receiptToDelete)
             await deleteObject(storageFileRef)
           } catch (storageErr) {
             console.warn('No se pudo borrar el comprobante de Storage:', storageErr)
           }
         }
 
-        this.transactions = this.transactions.filter(t => t.id !== transactionId)
+        if (authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === userId) {
+          this.transactions = this.transactions.filter(t => t.id !== transactionId)
+        }
       } catch (error) {
         console.error('Error al borrar transacción:', error)
         throw error
@@ -856,6 +987,7 @@ export const useTransactionsStore = defineStore('transactions', {
 
         const leg = legSnap.data() as any
         const twin = twinSnap.data() as any
+        assertMirrorPairDeletable({ id: legSnap.id, ...leg }, { id: twinSnap.id, ...twin })
         const legAccounts = await Promise.all([...accountIdsForTransaction(leg), ...accountIdsForTransaction(twin)]
           .map(accountId => transaction.get(doc(db, 'accounts', accountId))))
         if (legAccounts.some(snap => snap.exists() && movementAccountIsPocketRelated(snap.data()))) {
@@ -955,6 +1087,9 @@ export const useTransactionsStore = defineStore('transactions', {
           }
           if (bridgeData.workspaceId !== workspaceId || from.workspaceId !== workspaceId) {
             throw new Error('La cuenta puente y la cuenta de pago deben pertenecer al workspace activo')
+          }
+          if (currentMirror.workspaceId === workspaceId) {
+            throw new Error('La cuenta puente debe reflejar otro workspace')
           }
           if (receivable.workspaceId !== mirrorWorkspaceId || to.workspaceId !== mirrorWorkspaceId) {
             throw new Error('Las cuentas espejo no pertenecen al workspace configurado')
@@ -1239,6 +1374,8 @@ export const useTransactionsStore = defineStore('transactions', {
       description: string;
       amount: number;
       categorySuggestion: string;
+      type?: StatementImportType;
+      counterpartyAccountId?: string | null;
     }>, options: { statementImportId?: string } = {}): Promise<Transaction[]> {
       const user = auth.currentUser
       const authStore = useAuthStore()
@@ -1256,10 +1393,21 @@ export const useTransactionsStore = defineStore('transactions', {
       const initiatingWorkspaceId = workspaceId
       const initiatingAccountId = accountId
       const expectedCurrency = account.currency || 'USD'
+      const rawImportId = resolveStatementImportId(options.statementImportId)
       const eligibleCategories = this.categories.filter(category =>
         category.workspaceId === null || category.workspaceId === workspaceId
       )
       const preparedRows = parsedRows.map(row => {
+        const effectiveType: StatementImportType = row.type ?? (row.amount > 0 ? 'income' : 'expense')
+        const counterpartyAccountId = effectiveType === 'transfer' ? (row.counterpartyAccountId ?? '').trim() : null
+        if (effectiveType === 'transfer') {
+          if (!counterpartyAccountId) {
+            throw new Error('Las transferencias importadas requieren una cuenta contraparte.')
+          }
+          if (counterpartyAccountId === initiatingAccountId) {
+            throw new Error('La cuenta contraparte de una transferencia debe ser diferente a la cuenta destino.')
+          }
+        }
         const suggestion = row.categorySuggestion.toLowerCase()
         const matchedCategory = eligibleCategories.find(category =>
           category.name.toLowerCase() === suggestion
@@ -1269,18 +1417,19 @@ export const useTransactionsStore = defineStore('transactions', {
         )
         return {
           ...row,
+          effectiveType,
+          counterpartyAccountId,
           dateValue: parseDateOnly(row.date),
-          categoryId: matchedCategory?.id ?? fallbackCategory?.id ?? ''
+          categoryId: effectiveType === 'transfer' ? '' : (matchedCategory?.id ?? fallbackCategory?.id ?? '')
         }
       })
-      const totalAmountChange = preparedRows.reduce((total, row) => total + row.amount, 0)
-      if (!Number.isFinite(totalAmountChange)) throw new Error('El total del extracto no es válido.')
       const addedLocalTxs: Transaction[] = []
       const transactionRefs = preparedRows.map(() => doc(collection(db, 'transactions')))
       const createdAt = new Date()
-      let finalBalance: number | null = null
-      let usePocketCallable = movementAccountIsPocketRelated(account)
-      let linkedBudgetId: string | null = null
+      let updatedBalances = new Map<string, number>()
+      let alreadyCommitted = false
+      let replayedImportTransactionIds: string[] = []
+      let useStatementCallable = movementAccountIsPocketRelated(account) || rawImportId !== null
 
       const assertCurrentContext = () => {
         if (!importContextIsCurrent(initiatingUserId, initiatingWorkspaceId)) {
@@ -1288,21 +1437,68 @@ export const useTransactionsStore = defineStore('transactions', {
         }
       }
       try {
-        if (!usePocketCallable) {
+        if (!useStatementCallable) {
           const accountRef = doc(db, 'accounts', initiatingAccountId)
+          const counterpartyIds = [...new Set(
+            preparedRows
+              .map(row => row.counterpartyAccountId)
+              .filter((id): id is string => typeof id === 'string' && id.length > 0)
+          )]
+          const counterpartyRefs = counterpartyIds.map(id => doc(db, 'accounts', id))
           try {
-            finalBalance = await runTransaction(db, async transaction => {
+            const commitOutcome = await runTransaction(db, async transaction => {
               assertCurrentContext()
-              const accountSnapshot = await transaction.get(accountRef)
+              const [accountSnapshot, firstTxSnapshot, ...counterpartySnapshots] = await Promise.all([
+                transaction.get(accountRef),
+                rawImportId ? transaction.get(transactionRefs[0]) : Promise.resolve(null),
+                ...counterpartyRefs.map(ref => transaction.get(ref))
+              ])
               if (!accountSnapshot.exists()) throw new Error('Cuenta no encontrada')
               const storedAccount = accountSnapshot.data() as Account
               if (storedAccount.workspaceId !== initiatingWorkspaceId ||
                   (storedAccount.currency || 'USD') !== expectedCurrency) {
                 throw new Error('La cuenta cambió de workspace o moneda durante la importación.')
               }
+              if (storedAccount.mirror) {
+                throw new Error('No se pueden importar transacciones directamente a una cuenta puente.')
+              }
               if (movementAccountIsPocketRelated(storedAccount)) throw new ImportMustUsePocketCallable()
-              // Rows of a linked account belong to its active budget (the rules require it).
-              linkedBudgetId = null
+
+              // Idempotent retry: if this statementImportId already committed, do not write or mutate balances again.
+              if (rawImportId && firstTxSnapshot?.exists()) {
+                const existingFirst = firstTxSnapshot.data()
+                if (existingFirst?.workspaceId !== initiatingWorkspaceId ||
+                    existingFirst?.statementImportId !== rawImportId) {
+                  throw new Error('Este identificador de importación ya pertenece a otro extracto.')
+                }
+                return {
+                  alreadyCommitted: true,
+                  balances: new Map<string, number>([[initiatingAccountId, Number(storedAccount.balance)]]),
+                  committedTxs: [] as Transaction[]
+                }
+              }
+
+              const counterpartyMap = new Map<string, Account>()
+              counterpartyIds.forEach((id, idx) => {
+                const snap = counterpartySnapshots[idx]
+                if (!snap || !snap.exists()) {
+                  throw new Error('Una cuenta contraparte de transferencia ya no existe.')
+                }
+                const cp = snap.data() as Account
+                if (cp.workspaceId !== initiatingWorkspaceId) {
+                  throw new Error('La cuenta contraparte debe pertenecer al mismo workspace.')
+                }
+                if ((cp.currency || 'USD') !== expectedCurrency) {
+                  throw new Error('Las transferencias importadas deben ser entre cuentas de la misma moneda.')
+                }
+                if (cp.mirror || movementAccountIsPocketRelated(cp)) {
+                  throw new Error('Las transferencias importadas no admiten cuentas puente ni cuentas con bolsillos como contraparte.')
+                }
+                counterpartyMap.set(id, cp)
+              })
+
+              // Rows of a linked account belong to its active budget (the rules require it; transfers never carry budgetId).
+              let linkedBudgetId: string | null = null
               if (typeof storedAccount.linkedBudgetId === 'string' && storedAccount.linkedBudgetId) {
                 const budgetSnapshot = await transaction.get(doc(db, 'budgets', storedAccount.linkedBudgetId))
                 const budget = budgetSnapshot.exists() ? budgetSnapshot.data() : null
@@ -1311,50 +1507,73 @@ export const useTransactionsStore = defineStore('transactions', {
                 }
               }
               const budgetField = linkedBudgetId ? { budgetId: linkedBudgetId } : {}
-              const currentBalance = Number(storedAccount.balance)
-              const balanceAfter = currentBalance + totalAmountChange
-              if (!Number.isFinite(currentBalance) || !Number.isFinite(balanceAfter)) {
-                throw new Error('El saldo de la cuenta no es válido.')
+              const importIdField = rawImportId ? { statementImportId: rawImportId } : {}
+
+              const accountDeltas = new Map<string, number>([[initiatingAccountId, 0]])
+              for (const id of counterpartyIds) accountDeltas.set(id, 0)
+
+              const committedTxs: Transaction[] = []
+              preparedRows.forEach((row, index) => {
+                const txId = transactionRefs[index].id
+                if (row.effectiveType === 'transfer') {
+                  const dir = planTransferDirection(initiatingAccountId, row.counterpartyAccountId!, row.amount)
+                  accountDeltas.set(initiatingAccountId, (accountDeltas.get(initiatingAccountId) ?? 0) + dir.targetDelta)
+                  accountDeltas.set(row.counterpartyAccountId!, (accountDeltas.get(row.counterpartyAccountId!) ?? 0) + dir.counterpartyDelta)
+                  const payload = {
+                    workspaceId: initiatingWorkspaceId,
+                    userId: initiatingUserId,
+                    accountId: dir.accountId,
+                    amount: dir.amount,
+                    description: row.description,
+                    categoryId: '',
+                    date: Timestamp.fromDate(row.dateValue),
+                    type: 'transfer' as TransactionType,
+                    toAccountId: dir.toAccountId,
+                    currency: expectedCurrency,
+                    createdAt,
+                    ...importIdField
+                  }
+                  transaction.set(doc(db, 'transactions', txId), payload)
+                  committedTxs.push({ id: txId, ...payload, date: row.dateValue })
+                } else {
+                  const signedAmount = row.effectiveType === 'expense' ? -Math.abs(row.amount) : Math.abs(row.amount)
+                  accountDeltas.set(initiatingAccountId, (accountDeltas.get(initiatingAccountId) ?? 0) + signedAmount)
+                  const payload = {
+                    workspaceId: initiatingWorkspaceId,
+                    userId: initiatingUserId,
+                    accountId: initiatingAccountId,
+                    amount: signedAmount,
+                    description: row.description,
+                    categoryId: row.categoryId,
+                    date: Timestamp.fromDate(row.dateValue),
+                    type: row.effectiveType as TransactionType,
+                    toAccountId: null,
+                    currency: expectedCurrency,
+                    createdAt,
+                    ...budgetField,
+                    ...importIdField
+                  }
+                  transaction.set(doc(db, 'transactions', txId), payload)
+                  committedTxs.push({ id: txId, ...payload, date: row.dateValue })
+                }
+              })
+
+              const balances = new Map<string, number>()
+              for (const [accId, delta] of accountDeltas.entries()) {
+                const stored = accId === initiatingAccountId ? storedAccount : counterpartyMap.get(accId)!
+                const currentBalance = Number(stored.balance)
+                const balanceAfter = roundMoney(currentBalance + delta)
+                if (!Number.isFinite(currentBalance) || !Number.isFinite(balanceAfter)) {
+                  throw new Error('El saldo de la cuenta no es válido.')
+                }
+                balances.set(accId, balanceAfter)
+                transaction.update(doc(db, 'accounts', accId), { balance: balanceAfter })
               }
-              const txData = preparedRows.map((row, index) => ({
-                workspaceId: initiatingWorkspaceId,
-                userId: initiatingUserId,
-                accountId: initiatingAccountId,
-                amount: row.amount,
-                description: row.description,
-                categoryId: row.categoryId,
-                date: Timestamp.fromDate(row.dateValue),
-                type: row.amount > 0 ? 'income' as TransactionType : 'expense' as TransactionType,
-                toAccountId: null,
-                currency: expectedCurrency,
-                createdAt,
-                ...budgetField,
-                id: transactionRefs[index].id
-              }))
-              for (const item of txData) {
-                const { id, ...data } = item
-                transaction.set(doc(db, 'transactions', id), data)
-              }
-              transaction.update(accountRef, { balance: balanceAfter })
-              return balanceAfter
+              return { alreadyCommitted: false, balances, committedTxs }
             })
-            for (const [index, row] of preparedRows.entries()) {
-              const txData = {
-                workspaceId: initiatingWorkspaceId,
-                userId: initiatingUserId,
-                accountId: initiatingAccountId,
-                amount: row.amount,
-                description: row.description,
-                categoryId: row.categoryId,
-                date: Timestamp.fromDate(row.dateValue),
-                type: row.amount > 0 ? 'income' as TransactionType : 'expense' as TransactionType,
-                toAccountId: null,
-                currency: expectedCurrency,
-                createdAt,
-                ...(linkedBudgetId ? { budgetId: linkedBudgetId } : {})
-              }
-              addedLocalTxs.push({ id: transactionRefs[index].id, ...txData, date: row.dateValue })
-            }
+            alreadyCommitted = commitOutcome.alreadyCommitted
+            updatedBalances = commitOutcome.balances
+            addedLocalTxs.push(...commitOutcome.committedTxs)
           } catch (error) {
             let relatedInFirestore = error instanceof ImportMustUsePocketCallable
             const firestoreCode = (error as { code?: string } | null)?.code
@@ -1373,59 +1592,116 @@ export const useTransactionsStore = defineStore('transactions', {
               }
             }
             if (!relatedInFirestore) throw error
-            usePocketCallable = true
+            useStatementCallable = true
           }
         }
 
-        if (usePocketCallable) {
+        if (useStatementCallable) {
           assertCurrentContext()
+          // Replay is decided before current pocket restrictions by the server receipt.
+          const callableImportId = rawImportId ?? crypto.randomUUID()
+          const callableRows = preparedRows.map(row => ({
+            date: row.date,
+            description: row.description,
+            amount: row.amount,
+            categoryId: row.effectiveType === 'transfer' ? '' : row.categoryId,
+            type: row.effectiveType,
+            ...(row.effectiveType === 'transfer' ? { counterpartyAccountId: row.counterpartyAccountId } : {})
+          }))
           const callable = httpsCallable(functions, 'importPocketStatement')
           const response = await callable({
             workspaceId: initiatingWorkspaceId,
             accountId: initiatingAccountId,
             expectedCurrency,
             // Idempotency key: callers reuse it when retrying the same statement import.
-            statementImportId: options.statementImportId ?? crypto.randomUUID(),
-            rows: preparedRows.map(row => ({
-              date: row.dateValue.toISOString(),
-              description: row.description,
-              amount: row.amount,
-              categoryId: row.categoryId
-            }))
+            statementImportId: callableImportId,
+            rows: callableRows
           })
-          const result = response.data as { balance: number; createdAt: string; transactions: Array<{ id: string }> }
-          if (!Number.isFinite(result.balance) || !Number.isFinite(new Date(result.createdAt).getTime()) ||
-              result.transactions.length !== preparedRows.length) {
+          const result = response.data as {
+            accountId: string
+            balance: number
+            balances?: Record<string, number>
+            createdAt: string
+            replayed?: boolean
+            transactionIds?: string[]
+            transactions: Array<{
+              id: string
+              date?: string
+              amount?: number
+              type?: string
+              accountId?: string
+              toAccountId?: string | null
+              categoryId?: string
+              description?: string
+              currency?: string
+              createdAt?: string
+              userId?: string
+              budgetId?: string
+            }>
+          }
+          const replayed = result.replayed === true
+          const receiptTransactionIds = result.transactionIds ?? result.transactions.map(transaction => transaction.id)
+          const balanceValues = Object.values(result.balances ?? {})
+          if ((!replayed && !Number.isFinite(result.balance)) ||
+              !Number.isFinite(new Date(result.createdAt).getTime()) ||
+              result.transactions.length > preparedRows.length ||
+              (!replayed && result.transactions.length !== preparedRows.length) ||
+              (replayed && receiptTransactionIds.length !== preparedRows.length) ||
+              balanceValues.some(balance => !Number.isFinite(balance))) {
             throw new Error('La respuesta del importador no coincide con las filas enviadas.')
           }
-          preparedRows.forEach((row, index) => {
-            const txData = {
+          alreadyCommitted = replayed
+          replayedImportTransactionIds = replayed ? receiptTransactionIds : []
+          if (result.balances && typeof result.balances === 'object') {
+            updatedBalances = new Map(Object.entries(result.balances).map(([id, balance]) => [id, Number(balance)]))
+          } else if (!replayed) {
+            updatedBalances = new Map([[initiatingAccountId, result.balance]])
+          }
+          for (const transaction of result.transactions) {
+            const rowIndex = receiptTransactionIds.indexOf(transaction.id)
+            const fallbackRow = preparedRows[rowIndex] ?? preparedRows[0]
+            const dateValue = typeof transaction.date === 'string' && Number.isFinite(new Date(transaction.date).getTime())
+              ? new Date(transaction.date)
+              : fallbackRow.dateValue
+            const createdAtValue = typeof transaction.createdAt === 'string' && Number.isFinite(new Date(transaction.createdAt).getTime())
+              ? new Date(transaction.createdAt)
+              : new Date(result.createdAt)
+            addedLocalTxs.push({
+              id: transaction.id,
               workspaceId: initiatingWorkspaceId,
-              userId: initiatingUserId,
-              accountId: initiatingAccountId,
-              amount: row.amount,
-              description: row.description,
-              categoryId: row.categoryId,
-              date: Timestamp.fromDate(row.dateValue),
-              type: row.amount > 0 ? 'income' as TransactionType : 'expense' as TransactionType,
-              toAccountId: null,
-              currency: expectedCurrency,
-              createdAt: new Date(result.createdAt)
-            }
-            addedLocalTxs.push({ id: result.transactions[index].id, ...txData, date: row.dateValue })
-          })
-          finalBalance = result.balance
+              ...(transaction.userId || initiatingUserId ? { userId: transaction.userId ?? initiatingUserId } : {}),
+              accountId: transaction.accountId ?? initiatingAccountId,
+              amount: Number(transaction.amount ?? fallbackRow.amount),
+              description: transaction.description ?? fallbackRow.description,
+              categoryId: transaction.categoryId ?? (fallbackRow.effectiveType === 'transfer' ? '' : fallbackRow.categoryId),
+              date: dateValue,
+              type: (transaction.type ?? fallbackRow.effectiveType) as TransactionType,
+              toAccountId: transaction.toAccountId ?? null,
+              currency: transaction.currency ?? expectedCurrency,
+              createdAt: createdAtValue,
+              statementImportId: callableImportId,
+              ...(transaction.budgetId ? { budgetId: transaction.budgetId } : {})
+            })
+          }
         }
 
         if (importContextIsCurrent(initiatingUserId, initiatingWorkspaceId)) {
-          const currentAccount = accountsStore.accounts.find(existing =>
-            existing.id === initiatingAccountId && existing.workspaceId === initiatingWorkspaceId
-          )
-          if (currentAccount && finalBalance !== null) currentAccount.balance = finalBalance
-          this.transactions = [...addedLocalTxs, ...this.transactions]
-          this.transactions.sort((a, b) => b.date.getTime() - a.date.getTime())
+          for (const [accId, nextBalance] of updatedBalances.entries()) {
+            const existingAccount = accountsStore.accounts.find(existing =>
+              existing.id === accId && existing.workspaceId === initiatingWorkspaceId
+            )
+            if (existingAccount) existingAccount.balance = nextBalance
+          }
+          if (alreadyCommitted && replayedImportTransactionIds.length > 0) {
+            const replayedIds = new Set(replayedImportTransactionIds)
+            this.transactions = this.transactions.filter(transaction => !replayedIds.has(transaction.id))
+          }
+          if (addedLocalTxs.length > 0) {
+            this.transactions = [...addedLocalTxs, ...this.transactions]
+            this.transactions.sort((a, b) => b.date.getTime() - a.date.getTime())
+          }
         }
-        return addedLocalTxs
+        return alreadyCommitted ? [] : addedLocalTxs
       } catch (error) {
         console.error('Error al importar lote de transacciones:', error)
         throw error
@@ -1463,11 +1739,6 @@ export const useTransactionsStore = defineStore('transactions', {
       const workspaceId = authStore.activeWorkspaceId
       if (!workspaceId) throw new Error('Workspace no inicializado')
       const normalizedAmount = normalizeTransactionAmount(updates.amount, updates.type)
-      const budgetChange = budgetChangeForEdit({
-        fromType: oldTx.type,
-        toType: updates.type,
-        linkedBudgetId: updates.linkedBudgetId ?? null
-      })
 
       if (transactionTouchesPocket(accountsStore, oldTx, updates)) {
         if (!workspaceId || oldTx.workspaceId !== workspaceId) throw new Error('La transacción no pertenece al workspace activo.')
@@ -1498,9 +1769,12 @@ export const useTransactionsStore = defineStore('transactions', {
           // The budget follows the edit in the same write as the pocket movement.
           const result = await commitPocketMovement({
             kind: 'updated', transactionId, workspaceId, userId: user.uid, next,
-            budgetPatch: budgetPatchFor(budgetChange)
+            linkedBudgetId: updates.linkedBudgetId ?? null
           })
-          const updatedTx = withBudgetChange({ ...oldTx, ...next, date: transactionDate }, budgetChange)
+          const updatedTx = withBudgetChange(
+            { ...oldTx, ...next, date: transactionDate },
+            result.budgetChange ?? { action: 'keep' }
+          )
           publishPocketDeltas(accountsStore, result.deltas, workspaceId, user.uid)
           if (authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === user.uid) {
             const currentIndex = this.transactions.findIndex(existing => existing.id === transactionId)
@@ -1519,78 +1793,151 @@ export const useTransactionsStore = defineStore('transactions', {
       this.loading = true
       try {
         const transactionDate = updates.date instanceof Date ? updates.date : new Date(updates.date)
-        const account = accountsStore.getAccountById(updates.accountId)
-        if (!account) throw new Error('Cuenta origen no encontrada')
-        if (account.workspaceId !== workspaceId) throw new Error('La cuenta origen no pertenece al workspace activo')
-        if (account.mirror) {
-          throw new Error('No puedes mover o editar una transacción hacia una cuenta puente fuera de una operación espejo')
-        }
+        const docRef = doc(db, 'transactions', transactionId)
 
-        if (updates.type === 'transfer') {
-          if (!updates.toAccountId || updates.toAccountId === updates.accountId) {
-            throw new Error('Las transferencias requieren una cuenta de destino diferente a la de origen')
+        const committed = await runTransaction(db, async (transaction) => {
+          const txSnap = await transaction.get(docRef)
+          if (!txSnap.exists()) throw new Error('La transacción ya no existe.')
+          const storedOld = txSnap.data() as any
+          if (storedOld.workspaceId !== workspaceId) {
+            throw new Error('La transacción no pertenece al workspace activo.')
           }
-          const destination = accountsStore.getAccountById(updates.toAccountId)
-          if (!destination || destination.workspaceId !== workspaceId) {
-            throw new Error('La cuenta destino no existe en el workspace activo')
+          if (storedOld.mirrorOf) {
+            throw new Error('Esta transacción es compartida; recarga antes de editarla.')
           }
-          if (destination.mirror) {
+          const liveBudgetChange = budgetChangeForEdit({
+            fromType: storedOld.type,
+            toType: updates.type,
+            linkedBudgetId: updates.linkedBudgetId ?? null
+          })
+          const budgetField = budgetPatchFor(liveBudgetChange) ?? {}
+
+          const uniqueAccountIds = [...new Set([
+            storedOld.accountId,
+            storedOld.type === 'transfer' ? storedOld.toAccountId : null,
+            updates.accountId,
+            updates.type === 'transfer' ? updates.toAccountId : null
+          ].filter((id): id is string => typeof id === 'string' && id.length > 0))]
+
+          const accountSnaps = await Promise.all(
+            uniqueAccountIds.map(id => transaction.get(doc(db, 'accounts', id)))
+          )
+          const liveAccounts = new Map<string, any>()
+          for (let i = 0; i < uniqueAccountIds.length; i++) {
+            if (accountSnaps[i].exists()) liveAccounts.set(uniqueAccountIds[i], accountSnaps[i].data())
+          }
+
+          const account = liveAccounts.get(updates.accountId)
+          if (!account) throw new Error('Cuenta origen no encontrada')
+          if (account.workspaceId !== workspaceId) {
+            throw new Error('La cuenta origen no pertenece al workspace activo')
+          }
+          if (account.mirror) {
             throw new Error('No puedes mover o editar una transacción hacia una cuenta puente fuera de una operación espejo')
           }
-        }
-        const installmentCount = updates.type === 'expense' && account.type === 'credit'
-          ? getInstallmentCount(updates.installments)
-          : 1
 
-        // 1. Revertir balances de las cuentas antiguas
-        if (oldTx.type === 'transfer' && oldTx.toAccountId) {
-          await accountsStore.updateAccountBalance(oldTx.accountId, oldTx.amount)
-          await accountsStore.updateAccountBalance(oldTx.toAccountId, -oldTx.amount)
-        } else {
-          await accountsStore.updateAccountBalance(oldTx.accountId, -oldTx.amount)
-        }
+          const storedOldAmount = Number(storedOld.amount)
+          const isSameTransferFinancials =
+            storedOld.type === 'transfer' &&
+            updates.type === 'transfer' &&
+            updates.accountId === storedOld.accountId &&
+            updates.toAccountId === storedOld.toAccountId &&
+            normalizedAmount === storedOldAmount &&
+            (storedOld.currency || 'USD') === (account.currency || 'USD')
 
-        // 2. Aplicar balances de las cuentas nuevas
-        if (updates.type === 'transfer' && updates.toAccountId) {
-          await accountsStore.updateAccountBalance(updates.accountId, -normalizedAmount)
-          await accountsStore.updateAccountBalance(updates.toAccountId, normalizedAmount)
-        } else {
-          await accountsStore.updateAccountBalance(updates.accountId, normalizedAmount)
-        }
+          if (updates.type === 'transfer') {
+            if (!updates.toAccountId || updates.toAccountId === updates.accountId) {
+              throw new Error('Las transferencias requieren una cuenta de destino diferente a la de origen')
+            }
+            const destination = liveAccounts.get(updates.toAccountId)
+            if (!destination || destination.workspaceId !== workspaceId) {
+              throw new Error('La cuenta destino no existe en el workspace activo')
+            }
+            if (destination.currency !== account.currency && !isSameTransferFinancials) {
+              throw new Error('Las transferencias solo se permiten entre cuentas de la misma moneda.')
+            }
+            if (destination.mirror) {
+              throw new Error('No puedes mover o editar una transacción hacia una cuenta puente fuera de una operación espejo')
+            }
+          }
 
-        // 3. Preparar documento de actualización
-        // Préstamos y transferencias no llevan categoría ni cuenta destino
-        const neutral = updates.type !== 'income' && updates.type !== 'expense'
-        const updatedFields = {
-          accountId: updates.accountId,
-          amount: normalizedAmount,
-          description: updates.description,
-          categoryId: neutral ? '' : updates.categoryId,
-          date: Timestamp.fromDate(transactionDate),
-          type: updates.type,
-          toAccountId: updates.type === 'transfer' ? updates.toAccountId : null,
-          receiptUrl: updates.receiptUrl,
-          notes: updates.notes ?? null,
-          installments: installmentCount,
-          userId: updates.userId || oldTx.userId,
-          currency: account.currency || 'USD',
-        }
-        // The budget follows the edit in the same write (linked account, type rules).
-        const budgetField = budgetPatchFor(budgetChange) ?? {}
+          if ([...liveAccounts.values()].some(movementAccountIsPocketRelated)) {
+            throw new Error('Una de las cuentas cambió a bolsillo; recarga e inténtalo de nuevo.')
+          }
 
-        // 4. Actualizar en Firestore
-        const docRef = doc(db, 'transactions', transactionId)
-        await updateDoc(docRef, { ...updatedFields, ...budgetField })
+          const installmentCount = updates.type === 'expense' && account.type === 'credit'
+            ? getInstallmentCount(updates.installments)
+            : 1
 
-        // 5. Actualizar en el estado local
+          const updatedBalances: Record<string, number> = {}
+          if (!isSameTransferFinancials) {
+            const deltas: Record<string, number> = {}
+            const addDelta = (accId: string, delta: number) => {
+              deltas[accId] = (deltas[accId] ?? 0) + delta
+            }
+            // 1. Revertir balances guardados de las cuentas antiguas
+            if (storedOld.type === 'transfer' && storedOld.toAccountId) {
+              addDelta(storedOld.accountId, storedOldAmount)
+              addDelta(storedOld.toAccountId, -storedOldAmount)
+            } else {
+              addDelta(storedOld.accountId, -storedOldAmount)
+            }
+            // 2. Aplicar balances de las cuentas nuevas
+            if (updates.type === 'transfer' && updates.toAccountId) {
+              addDelta(updates.accountId, -normalizedAmount)
+              addDelta(updates.toAccountId, normalizedAmount)
+            } else {
+              addDelta(updates.accountId, normalizedAmount)
+            }
+
+            for (const [accId, delta] of Object.entries(deltas)) {
+              const roundedDelta = roundMoney(delta)
+              if (roundedDelta === 0) continue
+              const liveAcc = liveAccounts.get(accId)
+              if (!liveAcc) continue
+              const nextBalance = roundMoney(Number(liveAcc.balance) + roundedDelta)
+              updatedBalances[accId] = nextBalance
+              transaction.update(doc(db, 'accounts', accId), { balance: nextBalance })
+            }
+          }
+
+          // 3. Preparar documento de actualización y escribir atómicamente con los saldos
+          const neutral = updates.type !== 'income' && updates.type !== 'expense'
+          const updatedFields = {
+            accountId: updates.accountId,
+            amount: normalizedAmount,
+            description: updates.description,
+            categoryId: neutral ? '' : updates.categoryId,
+            date: Timestamp.fromDate(transactionDate),
+            type: updates.type,
+            toAccountId: updates.type === 'transfer' ? updates.toAccountId : null,
+            receiptUrl: updates.receiptUrl ?? null,
+            notes: updates.notes ?? null,
+            installments: installmentCount,
+            userId: updates.userId || storedOld.userId,
+            currency: account.currency || 'USD',
+          }
+
+          transaction.update(docRef, { ...updatedFields, ...budgetField })
+          return { updatedFields, updatedBalances, budgetChange: liveBudgetChange }
+        })
+
+        // 4. Actualizar en el estado local solo si seguimos en el mismo workspace/sesión
         const updatedTx = withBudgetChange({
           ...oldTx,
-          ...updatedFields,
+          ...committed.updatedFields,
           date: transactionDate
-        }, budgetChange)
+        }, committed.budgetChange)
 
-        this.transactions[txIndex] = updatedTx
-        this.transactions.sort((a, b) => b.date.getTime() - a.date.getTime())
+        if (authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === user.uid) {
+          for (const [accId, balance] of Object.entries(committed.updatedBalances)) {
+            const idx = accountsStore.accounts.findIndex(acc => acc.id === accId)
+            if (idx !== -1) accountsStore.accounts[idx].balance = balance
+          }
+          const currentIdx = this.transactions.findIndex(t => t.id === transactionId)
+          if (currentIdx !== -1) this.transactions[currentIdx] = updatedTx
+          this.transactions.sort((a, b) => b.date.getTime() - a.date.getTime())
+        }
 
         return updatedTx
       } catch (error) {

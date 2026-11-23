@@ -202,6 +202,13 @@ test('month-end projection adds card statements of earlier purchases once and ex
     include: transaction => transaction.accountId === 'visa'
   })
   assert.deepEqual(onlyCard, { pace: 0, committed: 200 })
+
+  // S8: future-dated expenses in the current month are scheduled commitments, not daily pace.
+  const withFutureScheduled = splitMonthEndExpenses([
+    ...transactions,
+    { type: 'expense', amount: -300_000, date: new Date(2026, 10, 28), accountId: 'cash', currency: 'COP' }
+  ], now, { convert, billingFor })
+  assert.deepEqual(withFutureScheduled, { pace: 150_000, committed: 500_000 })
 })
 
 test('projection on the last day equals the actual month total', () => {

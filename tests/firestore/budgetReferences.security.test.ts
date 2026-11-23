@@ -388,7 +388,12 @@ test('a budget and the accounts it links are created together in one batch', asy
 
 test('bridge and pocket-related accounts cannot be linked to a budget', async () => {
   const mirror = { workspaceId: wsB, accountId: `${runId}-account-b`, sourceAccountId: `${runId}-account-a` }
-  const bridge = await createAccount({ mirror })
+  const bridgeId = id('bridge-account')
+  await privilegedDocument(`accounts/${bridgeId}`, {
+    workspaceId: wsA, userId: dualId, name: 'Bridge', type: 'checking', balance: 0, limit: 0, currency: 'USD',
+    mirror, createdAt: new Date('2026-10-01T00:00:00Z')
+  })
+  const bridge = accountRef(bridgeId)
   const budget = await createBudget()
   await updateDoc(budget, { linkedAccountIds: [bridge.id], updatedAt: serverTimestamp() })
   await deniedUnchanged(() => updateDoc(bridge, { linkedBudgetId: budget.id }))
@@ -483,4 +488,22 @@ test('archiving the linked budget frees its accounts', async () => {
   await updateDoc(ref, { budgetId: activeBudget.id })
   assert.equal((await dataOf(ref)).budgetId, activeBudget.id)
   await updateDoc(account, { linkedBudgetId: deleteField() })
+})
+
+test('S6: credit cards cannot be linked to a budget, linked accounts cannot become credit cards, and linked accounts cannot be deleted until unlinked', async () => {
+  const credit = await createAccount({ type: 'credit', balance: 0, limit: 1000 })
+  const budget = await createBudget()
+  await updateDoc(budget, { linkedAccountIds: [credit.id], updatedAt: serverTimestamp() })
+  await deniedUnchanged(() => updateDoc(credit, { linkedBudgetId: budget.id }))
+  await deniedUnchanged(() => setDoc(accountRef(id('credit-linked-create')), rawAccount({ type: 'credit', balance: 0, limit: 1000, linkedBudgetId: budget.id })))
+
+  const checking = await createAccount({ type: 'checking', balance: 0 })
+  const linkedBudget = await createLinkedBudget([checking.id])
+  await deniedUnchanged(() => updateDoc(checking, { type: 'credit' }))
+  await deniedUnchanged(() => deleteDoc(checking))
+  // Unlinking frees the account for deletion.
+  await updateDoc(checking, { linkedBudgetId: deleteField() })
+  await updateDoc(linkedBudget, { linkedAccountIds: deleteField(), updatedAt: serverTimestamp() })
+  await deleteDoc(checking)
+  assert.ok(!(await list('accounts', wsA)).some(([key]) => key === checking.id))
 })

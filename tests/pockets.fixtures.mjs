@@ -79,6 +79,7 @@ export async function createPocketFixture() {
     const authStoreModule = await vite.ssrLoadModule('/src/stores/authStore.ts')
     const accountsStoreModule = await vite.ssrLoadModule('/src/stores/accountsStore.ts')
     const transactionsStoreModule = await vite.ssrLoadModule('/src/stores/transactionsStore.ts')
+    const goalsStoreModule = await vite.ssrLoadModule('/src/stores/goalsStore.ts')
     const pocketsModule = await vite.ssrLoadModule('/src/lib/pockets.ts')
     const identity = await createUserWithEmailAndPassword(
       auth,
@@ -153,6 +154,7 @@ export async function createPocketFixture() {
       authStore,
       accountsStore,
       transactionsStore,
+      goalsStore: goalsStoreModule.useGoalsStore(),
       pockets: pocketsModule,
       db,
       identity,

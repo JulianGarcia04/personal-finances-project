@@ -22,10 +22,11 @@
               class="field"
             >
               <option value="" disabled>Selecciona una cuenta</option>
-              <option v-for="acc in accountsStore.accounts" :key="acc.id" :value="acc.id">
+              <option v-for="acc in importableAccounts" :key="acc.id" :value="acc.id">
                 {{ getAccountDisplayLabel(acc, accountsStore.accounts) }} ({{ acc.currency }})
               </option>
             </select>
+            <p class="text-[11px] text-text-muted pt-1">Las cuentas puente se omiten aquí: registra gastos compartidos desde Movimientos para crear sus dos patas.</p>
           </div>
 
           <div class="border-t border-border/50 pt-4 space-y-2">
@@ -123,7 +124,7 @@
             class="w-full min-h-11 py-3.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm tracking-wide shadow-glow-emerald cursor-pointer disabled:opacity-50 flex items-center justify-center space-x-2"
           >
             <span v-if="loading" class="w-4 h-4 border-2 border-background border-t-transparent rounded-full animate-spin"></span>
-            <span>{{ loading ? 'Analizando con Gemini 1.5...' : 'Procesar con Inteligencia Artificial' }}</span>
+            <span>{{ loading ? 'Analizando con Gemini...' : 'Procesar con Inteligencia Artificial' }}</span>
           </button>
         </div>
       </div>
@@ -155,24 +156,55 @@
         </div>
       </div>
 
+      <!-- Warnings (currency mismatch, duplicates, transfers needing counterparty) -->
+      <div
+        v-if="currencyMismatchWarning"
+        role="alert"
+        data-testid="import-currency-warning"
+        class="rounded-2xl border border-accent-amber/30 bg-accent-amber/10 px-4 py-3 text-xs text-accent-amber"
+      >
+        {{ currencyMismatchWarning }}
+      </div>
+      <div
+        v-if="duplicateCount > 0"
+        role="status"
+        data-testid="import-duplicate-warning"
+        class="rounded-2xl border border-accent-amber/25 bg-accent-amber/5 px-4 py-3 text-xs text-accent-amber"
+      >
+        Se detectaron <strong>{{ duplicateCount }}</strong> posibles duplicados con movimientos ya existentes en esta cuenta y quedaron desmarcados por defecto. Revísalos antes de importar.
+      </div>
+      <div
+        v-if="unsupportedTransferCount > 0"
+        role="status"
+        data-testid="import-unsupported-transfer-warning"
+        class="rounded-2xl border border-accent-amber/25 bg-accent-amber/5 px-4 py-3 text-xs text-accent-amber"
+      >
+        <strong>{{ unsupportedTransferCount }}</strong> {{ unsupportedTransferCount === 1 ? 'transferencia no se puede importar' : 'transferencias no se pueden importar' }} en una cuenta con bolsillos. Quedaron desmarcadas; regístralas desde el flujo de transferencias.
+      </div>
+      <p v-if="reviewError" role="alert" class="text-xs text-accent-rose font-semibold bg-accent-rose/10 px-4 py-2.5 rounded-xl border border-accent-rose/20">
+        {{ reviewError }}
+      </p>
+
       <!-- Table of items parsed (desktop) -->
       <div class="glass-panel rounded-3xl overflow-hidden shadow-xl border border-white/5 hidden md:block">
         <div class="overflow-x-auto">
           <table class="w-full text-left border-collapse">
             <thead>
               <tr class="border-b border-border/50 text-[10px] font-semibold text-text-secondary uppercase tracking-wider bg-slate-900/30">
-                <th class="py-4 px-6 w-12 text-center">
+                <th class="py-4 px-4 w-12 text-center">
                   <input 
                     type="checkbox" 
                     :checked="allChecked" 
+                    :disabled="selectableTransactions.length === 0"
                     @change="toggleCheckAll"
                     class="rounded bg-slate-800 border-border text-accent-emerald focus:ring-accent-emerald/20"
                   />
                 </th>
-                <th class="py-4 px-6 w-32">Fecha</th>
-                <th class="py-4 px-6">Descripción</th>
-                <th class="py-4 px-6 w-48">Categoría sugerida</th>
-                <th class="py-4 px-6 w-36 text-right">Monto</th>
+                <th class="py-4 px-4 w-32">Fecha</th>
+                <th class="py-4 px-4">Descripción</th>
+                <th class="py-4 px-4 w-36">Tipo</th>
+                <th class="py-4 px-4 w-52">Categoría / Contraparte</th>
+                <th class="py-4 px-4 w-36 text-right">Monto</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-border/30">
@@ -182,16 +214,17 @@
                 class="hover:bg-white/[0.01] transition-colors text-sm text-text-primary"
               >
                 <!-- Checkbox selection -->
-                <td class="py-3 px-6 text-center">
+                <td class="py-3 px-4 text-center">
                   <input 
                     type="checkbox" 
                     v-model="tx.checked"
+                    :disabled="Boolean(tx.unsupportedReason)"
                     class="rounded bg-slate-800 border-border text-accent-emerald focus:ring-accent-emerald/20"
                   />
                 </td>
 
                 <!-- Date input -->
-                <td class="py-3 px-6">
+                <td class="py-3 px-4">
                   <input 
                     type="date" 
                     v-model="tx.date"
@@ -199,18 +232,39 @@
                   />
                 </td>
 
-                <!-- Description input -->
-                <td class="py-3 px-6">
+                <!-- Description input + duplicate badge -->
+                <td class="py-3 px-4 space-y-1">
                   <input 
                     type="text" 
                     v-model="tx.description"
                     class="w-full px-2 py-1.5 rounded-lg bg-slate-900/50 border border-border/70 text-xs text-text-primary focus:outline-none focus:border-accent-emerald"
                   />
+                  <p v-if="tx.duplicateMatch" class="text-[10px] text-accent-amber font-medium">
+                    Posible duplicado: «{{ tx.duplicateMatch }}»
+                  </p>
+                  <p v-if="tx.unsupportedReason" class="text-[10px] text-accent-amber font-medium">
+                    {{ tx.unsupportedReason }}
+                  </p>
                 </td>
 
-                <!-- Category selector -->
-                <td class="py-3 px-6">
+                <!-- Type selector -->
+                <td class="py-3 px-4">
+                  <select
+                    v-model="tx.type"
+                    @change="handleRowTypeChange(tx)"
+                    aria-label="Tipo de movimiento"
+                    class="w-full px-2 py-1.5 rounded-lg bg-slate-900/50 border border-border/70 text-xs text-text-primary focus:outline-none focus:border-accent-emerald"
+                  >
+                    <option value="expense">Gasto</option>
+                    <option value="income">Ingreso</option>
+                    <option value="transfer" :disabled="targetIsPocketRelated">Transferencia</option>
+                  </select>
+                </td>
+
+                <!-- Category OR Counterparty Account selector -->
+                <td class="py-3 px-4 space-y-1">
                   <select 
+                    v-if="tx.type !== 'transfer'"
                     v-model="tx.categorySuggestion"
                     class="w-full px-2 py-1.5 rounded-lg bg-slate-900/50 border border-border/70 text-xs text-text-primary focus:outline-none focus:border-accent-emerald"
                   >
@@ -218,10 +272,26 @@
                       {{ cat.name }}
                     </option>
                   </select>
+                  <template v-else>
+                    <select
+                      v-model="tx.counterpartyAccountId"
+                      aria-label="Cuenta contraparte"
+                      class="w-full px-2 py-1.5 rounded-lg bg-slate-900/50 border text-xs text-text-primary focus:outline-none focus:border-accent-emerald"
+                      :class="tx.checked && !tx.counterpartyAccountId ? 'border-accent-amber' : 'border-border/70'"
+                    >
+                      <option value="">Selecciona cuenta ({{ selectedAccount?.currency }})</option>
+                      <option v-for="acc in transferCounterpartyAccounts" :key="acc.id" :value="acc.id">
+                        {{ tx.amount > 0 ? 'Desde: ' : 'Hacia: ' }}{{ getAccountDisplayLabel(acc, accountsStore.accounts) }}
+                      </option>
+                    </select>
+                    <p v-if="tx.checked && !tx.counterpartyAccountId" class="text-[10px] text-accent-amber">
+                      Elige contraparte o desmarca si ya está registrado.
+                    </p>
+                  </template>
                 </td>
 
                 <!-- Amount input -->
-                <td class="py-3 px-6">
+                <td class="py-3 px-4">
                   <input 
                     type="number" 
                     step="any"
@@ -247,6 +317,7 @@
               <input
                 type="checkbox"
                 v-model="tx.checked"
+                :disabled="Boolean(tx.unsupportedReason)"
                 class="w-5 h-5 shrink-0 rounded bg-slate-800 border-border text-accent-emerald focus:ring-accent-emerald/20"
               />
               <span>Incluir</span>
@@ -262,6 +333,12 @@
               />
             </div>
           </div>
+          <p v-if="tx.duplicateMatch" class="text-[11px] text-accent-amber font-medium">
+            Posible duplicado: «{{ tx.duplicateMatch }}»
+          </p>
+          <p v-if="tx.unsupportedReason" class="text-[11px] text-accent-amber font-medium">
+            {{ tx.unsupportedReason }}
+          </p>
           <input
             type="text"
             v-model="tx.description"
@@ -277,14 +354,41 @@
               class="field"
             />
             <select
-              v-model="tx.categorySuggestion"
-              aria-label="Categoría"
+              v-model="tx.type"
+              @change="handleRowTypeChange(tx)"
+              aria-label="Tipo de movimiento"
               class="field"
             >
-              <option v-for="cat in transactionsStore.categories" :key="cat.id" :value="cat.name">
-                {{ cat.name }}
+              <option value="expense">Gasto</option>
+              <option value="income">Ingreso</option>
+              <option value="transfer" :disabled="targetIsPocketRelated">Transferencia</option>
+            </select>
+          </div>
+          <select
+            v-if="tx.type !== 'transfer'"
+            v-model="tx.categorySuggestion"
+            aria-label="Categoría"
+            class="field"
+          >
+            <option v-for="cat in transactionsStore.categories" :key="cat.id" :value="cat.name">
+              {{ cat.name }}
+            </option>
+          </select>
+          <div v-else class="space-y-1">
+            <select
+              v-model="tx.counterpartyAccountId"
+              aria-label="Cuenta contraparte"
+              class="field"
+              :class="tx.checked && !tx.counterpartyAccountId ? 'border-accent-amber' : ''"
+            >
+              <option value="">Selecciona cuenta contraparte ({{ selectedAccount?.currency }})</option>
+              <option v-for="acc in transferCounterpartyAccounts" :key="acc.id" :value="acc.id">
+                {{ tx.amount > 0 ? 'Desde: ' : 'Hacia: ' }}{{ getAccountDisplayLabel(acc, accountsStore.accounts) }}
               </option>
             </select>
+            <p v-if="tx.checked && !tx.counterpartyAccountId" class="text-[11px] text-accent-amber">
+              Elige contraparte o desmarca si ya está registrado.
+            </p>
           </div>
         </div>
       </div>
@@ -294,12 +398,13 @@
 
 <script setup lang="ts">
 import { track } from '@/lib/analytics'
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
-import { getAccountDisplayLabel } from '@/lib/pockets'
+import { getAccountDisplayLabel, isPocketRelatedAccount } from '@/lib/pockets'
+import { findPotentialDuplicate, normalizeParsedStatementRow, type StatementImportType } from '@/lib/statementImport'
 
 const accountsStore = useAccountsStore()
 const settingsStore = useSettingsStore()
@@ -313,6 +418,8 @@ const MAX_STATEMENT_TEXT_CHARS = 200_000
 const dragOver = ref(false)
 const fileName = ref('')
 const errorMessage = ref('')
+const reviewError = ref('')
+const detectedCurrency = ref<string | null>(null)
 const loading = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 
@@ -321,29 +428,70 @@ interface ParsedTx {
   description: string;
   amount: number;
   categorySuggestion: string;
+  type: StatementImportType;
+  counterpartyAccountId: string;
+  duplicateMatch: string | null;
+  unsupportedReason: string | null;
   checked: boolean;
 }
 
 const parsedTransactions = ref<ParsedTx[]>([])
 const importingBatch = ref(false)
 
+// Bridge accounts replicate shared expenses into another workspace and cannot receive statement imports.
+const importableAccounts = computed(() =>
+  accountsStore.accounts.filter(acc => !acc.mirror)
+)
+const selectedAccount = computed(() =>
+  accountsStore.getAccountById(targetAccountId.value) ?? null
+)
+const targetIsPocketRelated = computed(() =>
+  Boolean(selectedAccount.value && isPocketRelatedAccount(selectedAccount.value))
+)
+const transferCounterpartyAccounts = computed(() => {
+  const target = selectedAccount.value
+  if (!target || targetIsPocketRelated.value) return []
+  return accountsStore.accounts.filter(acc =>
+    acc.id !== target.id &&
+    !acc.mirror &&
+    !isPocketRelatedAccount(acc) &&
+    acc.currency === target.currency
+  )
+})
+const currencyMismatchWarning = computed(() => {
+  if (!detectedCurrency.value || !selectedAccount.value) return ''
+  if (detectedCurrency.value === selectedAccount.value.currency) return ''
+  return `El extracto parece estar en ${detectedCurrency.value}, pero la cuenta seleccionada está en ${selectedAccount.value.currency}. Verifica la cuenta destino antes de importar.`
+})
+const duplicateCount = computed(() =>
+  parsedTransactions.value.filter(t => Boolean(t.duplicateMatch)).length
+)
+const unsupportedTransferCount = computed(() =>
+  parsedTransactions.value.filter(t => Boolean(t.unsupportedReason)).length
+)
+
 onMounted(async () => {
-  await accountsStore.fetchAccounts()
-  await transactionsStore.fetchCategories()
-  await settingsStore.loadSettings()
+  await Promise.all([
+    accountsStore.fetchAccounts(),
+    transactionsStore.fetchCategories(),
+    transactionsStore.fetchTransactions(),
+    settingsStore.loadSettings()
+  ])
 })
 
 const selectedTransactions = computed(() => {
   return parsedTransactions.value.filter(t => t.checked)
 })
 
+const selectableTransactions = computed(() => parsedTransactions.value.filter(t => !t.unsupportedReason))
+
 const allChecked = computed(() => {
-  return parsedTransactions.value.length > 0 && parsedTransactions.value.every(t => t.checked)
+  return selectableTransactions.value.length > 0 && selectableTransactions.value.every(t => t.checked)
 })
 
 const toggleCheckAll = () => {
   const current = allChecked.value
-  parsedTransactions.value.forEach(t => t.checked = !current)
+  selectableTransactions.value.forEach(t => t.checked = !current)
 }
 
 // Drag & Drop / File Select
@@ -395,6 +543,27 @@ const clearFile = () => {
   statementText.value = ''
 }
 
+const handleRowTypeChange = (tx: ParsedTx) => {
+  if (tx.type === 'expense' && tx.amount > 0) tx.amount = -tx.amount
+  else if (tx.type === 'income' && tx.amount < 0) tx.amount = Math.abs(tx.amount)
+  if (tx.type !== 'transfer') tx.counterpartyAccountId = ''
+  tx.unsupportedReason = tx.type === 'transfer' && targetIsPocketRelated.value
+    ? 'No se puede importar directamente una transferencia en una cuenta con bolsillos.'
+    : null
+  if (tx.unsupportedReason) tx.checked = false
+  reviewError.value = ''
+}
+
+watch(targetIsPocketRelated, pocketRelated => {
+  for (const transaction of parsedTransactions.value) {
+    if (transaction.type !== 'transfer') continue
+    transaction.unsupportedReason = pocketRelated
+      ? 'No se puede importar directamente una transferencia en una cuenta con bolsillos.'
+      : null
+    if (pocketRelated) transaction.checked = false
+  }
+})
+
 // Invocación a Gemini Flow
 const processWithIA = async () => {
   if (!targetAccountId.value) {
@@ -413,18 +582,32 @@ const processWithIA = async () => {
 
   loading.value = true
   errorMessage.value = ''
+  reviewError.value = ''
+  detectedCurrency.value = null
   
   try {
-    const rawTxs = await settingsStore.parseStatementText(
+    const result = await settingsStore.parseStatementText(
       pdfBase64.value ? undefined : statementText.value,
       pdfBase64.value || undefined
     )
-    
-    // Asignar el flag `checked` y normalizar datos
-    parsedTransactions.value = rawTxs.map((t: any) => ({
-      ...t,
-      checked: true
-    }))
+    detectedCurrency.value = result.detectedCurrency
+    const target = selectedAccount.value
+    const targetType = target?.type
+    const existing = transactionsStore.transactions
+
+    parsedTransactions.value = result.transactions.map((raw: any) => {
+      const normalized = normalizeParsedStatementRow(raw, targetType)
+      const dup = findPotentialDuplicate(normalized, targetAccountId.value, existing)
+      const unsupportedReason = targetIsPocketRelated.value && normalized.type === 'transfer'
+        ? 'No se puede importar directamente una transferencia en una cuenta con bolsillos.'
+        : null
+      return {
+        ...normalized,
+        duplicateMatch: dup ? (dup.description || 'Movimiento existente') : null,
+        unsupportedReason,
+        checked: !dup && !unsupportedReason
+      }
+    })
 
     if (parsedTransactions.value.length === 0) {
       errorMessage.value = 'La IA no pudo detectar ninguna transacción en el extracto provisto. Por favor verifica el contenido.'
@@ -442,12 +625,32 @@ let pendingImport: { fingerprint: string; statementImportId: string } | null = n
 
 // Confirmar importación
 const confirmBatchImport = async () => {
+  reviewError.value = ''
+  const selected = selectedTransactions.value
+  const unsupportedTransfer = selected.find(tx => tx.unsupportedReason)
+  if (unsupportedTransfer) {
+    reviewError.value = unsupportedTransfer.unsupportedReason ?? 'Desmarca las transferencias no disponibles en esta cuenta.'
+    return
+  }
+  const missingCounterparty = selected.find(tx => tx.type === 'transfer' && !tx.counterpartyAccountId)
+  if (missingCounterparty) {
+    reviewError.value = `Selecciona una cuenta contraparte para la transferencia «${missingCounterparty.description || 'sin descripción'}» o desmárcala si ya fue registrada.`
+    return
+  }
+  const invalidAmount = selected.find(tx => !Number.isFinite(tx.amount) || tx.amount === 0)
+  if (invalidAmount) {
+    reviewError.value = `El monto de «${invalidAmount.description || 'una fila'}» debe ser distinto de cero.`
+    return
+  }
+
   importingBatch.value = true
-  const rows = selectedTransactions.value.map(({ date, description, amount, categorySuggestion }) => ({
+  const rows = selected.map(({ date, description, amount, categorySuggestion, type, counterpartyAccountId }) => ({
     date,
     description,
-    amount,
-    categorySuggestion
+    amount: type === 'expense' ? -Math.abs(amount) : type === 'income' ? Math.abs(amount) : amount,
+    categorySuggestion,
+    type,
+    ...(type === 'transfer' ? { counterpartyAccountId } : {})
   }))
   const fingerprint = JSON.stringify([targetAccountId.value, rows])
   if (pendingImport?.fingerprint !== fingerprint) {
@@ -465,9 +668,9 @@ const confirmBatchImport = async () => {
     // Callable errors carry a client-safe Spanish message; other failures keep the generic text.
     const code = (err as { code?: unknown } | null)?.code
     const message = (err as { message?: unknown } | null)?.message
-    alert(typeof code === 'string' && code.startsWith('functions/') && typeof message === 'string' && message
+    reviewError.value = typeof message === 'string' && message && (typeof code !== 'string' || code.startsWith('functions/'))
       ? message
-      : 'Error al guardar las transacciones.')
+      : 'Error al guardar las transacciones.'
   } finally {
     importingBatch.value = false
   }
@@ -478,5 +681,8 @@ const resetImport = () => {
   statementText.value = ''
   fileName.value = ''
   pdfBase64.value = ''
+  detectedCurrency.value = null
+  reviewError.value = ''
+  pendingImport = null
 }
 </script>

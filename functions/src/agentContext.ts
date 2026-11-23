@@ -18,6 +18,8 @@ import {
   buildBudgetStatus,
   cardBillingByAccount,
   computeNetWorth,
+  getSavingsGoalProgressAmount,
+  isSavingsGoalAccountLinkable,
   previousPeriod,
   resolvePeriod,
   summarize,
@@ -25,7 +27,9 @@ import {
   SummaryOptions,
   SummaryTransaction
 } from "./agentQueries";
+import { roundMoney } from "./money";
 import { buildLegacyCategoryBudgetsPatch, parseLegacyCategoryBudgetCurrency } from "./legacyCategoryBudgets";
+import { effectiveWorkspaceExchangeRates } from "./budgetAlerts";
 import { cosineSimilarity, EMBEDDINGS_COLLECTION, isEmbeddable, queryEmbeddingInput, toVectorArray } from "./embeddings";
 
 // The chat agent's tools as plain definitions built from (db, context), with no
@@ -112,7 +116,11 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
   };
   // Fresh read: settings may change during the chat (saveCategoryBudgets, the app).
   const loadWorkspace = async () => (await db.collection('workspaces').doc(workspaceId).get()).data() ?? {};
-  const ratesOf = (ws: admin.firestore.DocumentData) => (ws.exchangeRates ?? {}) as Record<string, number>;
+  const ratesInfoOf = (ws: admin.firestore.DocumentData) => effectiveWorkspaceExchangeRates(ws, primaryCurrency);
+  const mismatchedFxNote = (mismatchedBase: string | null) =>
+    mismatchedBase
+      ? `Las tasas de cambio manuales del workspace están expresadas en ${mismatchedBase}, no en tu moneda principal (${primaryCurrency}); se ignoraron para evitar conversiones incorrectas. Actualízalas en Configuración → Región y moneda.`
+      : null;
 
   const movementTypes = ['income', 'expense', 'transfer', 'loan', 'loan_payment'] as const;
   const dateParam = (what: string) => z.string().optional()
@@ -122,7 +130,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
 
   define(
     'listAccounts',
-    `Obtiene las cuentas del workspace con saldo, moneda, tipo y saldo convertido a ${primaryCurrency} (balanceInPrimary), más totals.netWorth: el patrimonio neto calculado igual que el panel de control (incluye cupo disponible de tarjetas, bolsillos y cuentas puente). Úsalo para saldos, cupos y "¿cuál es mi patrimonio neto?".`,
+    `Obtiene las cuentas del workspace con saldo, moneda, tipo y saldo convertido a ${primaryCurrency} (balanceInPrimary), más totals.netWorth: el patrimonio neto calculado igual que el panel de control (activos menos deuda de tarjetas, bolsillos y cuentas puente; no incluye el cupo disponible de tarjetas). Úsalo para saldos, cupos y "¿cuál es mi patrimonio neto?".`,
     z.object({}),
     async () => {
       const [snapshot, ws] = await Promise.all([
@@ -147,7 +155,10 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
         if (data.mirror) account.bridge = true;
         return account;
       });
-      return computeNetWorth(accounts, primaryCurrency, ratesOf(ws));
+      const { rates, mismatchedBase } = ratesInfoOf(ws);
+      const result = computeNetWorth(accounts, primaryCurrency, rates);
+      const fxNote = mismatchedFxNote(mismatchedBase);
+      return fxNote ? { ...result, notes: [...result.notes, fxNote] } : result;
     }
   );
 
@@ -318,18 +329,29 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
 
   define(
     'listGoals',
-    'Obtiene la lista de todos los objetivos o metas de ahorro del workspace.',
+    'Obtiene las metas de ahorro del workspace. Las metas vinculadas muestran el saldo actual de su cuenta compatible; las virtuales usan su progreso guardado.',
     z.object({}),
     async () => {
-      const snapshot = await db.collection('goals').where('workspaceId', '==', workspaceId).get();
+      const [snapshot, accountSnapshot] = await Promise.all([
+        db.collection('goals').where('workspaceId', '==', workspaceId).get(),
+        db.collection('accounts').where('workspaceId', '==', workspaceId).get()
+      ]);
+      const accounts = new Map(accountSnapshot.docs.map(docSnap => [docSnap.id, docSnap.data()]));
       return snapshot.docs.map(docSnap => {
         const data = docSnap.data();
         const targetDate = data.targetDate?.toDate ? data.targetDate.toDate() : null;
+        const currentAmount = getSavingsGoalProgressAmount(data, workspaceId, accounts);
+        const linkedAccount = typeof data.linkedAccountId === 'string' ? accounts.get(data.linkedAccountId) : undefined;
         return {
           id: docSnap.id,
           name: data.name,
           targetAmount: data.targetAmount,
-          currentAmount: data.currentAmount,
+          currentAmount,
+          progressAvailable: currentAmount !== null,
+          ...(Object.hasOwn(data, 'linkedAccountId') ? {
+            linkedAccountId: data.linkedAccountId,
+            linkedAccountName: linkedAccount?.name ?? null
+          } : {}),
           currency: data.currency,
           targetDate: targetDate ? zonedDateKey(targetDate, timeZone) : null
         };
@@ -339,34 +361,54 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
 
   define(
     'createGoal',
-    'Crea un nuevo objetivo o meta de ahorro (por ejemplo: "Comprar carro" o "Vacaciones").',
+    'Crea una meta virtual de ahorro o la vincula opcionalmente a una cuenta corriente, de ahorros, efectivo o bolsillo compatible de la misma moneda. Las metas vinculadas muestran el saldo de la cuenta; sus aportes deben ser transferencias.',
     z.object({
       name: z.string().trim().min(1).describe('El nombre descriptivo de la meta'),
       targetAmount: z.number().positive().describe('Monto objetivo de ahorro (positivo)'),
       currentAmount: z.number().min(0).optional().describe('Monto inicial ya ahorrado (por defecto 0)'),
       currency: z.string().trim().length(3).describe('Código de moneda de 3 caracteres (ej. "COP", "USD")'),
+      linkedAccountId: z.string().trim().min(1).optional().describe('ID opcional de una cuenta no crediticia ni puente, en la misma moneda; obténlo de listAccounts'),
       targetDate: z.string().describe('Fecha estimada de cumplimiento en formato YYYY-MM-DD (día local del usuario)'),
     }),
-    async ({ name, targetAmount, currentAmount, currency, targetDate }) => {
+    async ({ name, targetAmount, currentAmount, currency, linkedAccountId, targetDate }) => {
       const parsedDate = parseLocalDate(targetDate, timeZone);
+      const normalizedCurrency = currency.toUpperCase();
+      let linkedAccount: Record<string, any> | undefined;
       const newGoalRef = db.collection('goals').doc();
       const newGoal = {
         workspaceId,
         userId,
         name,
         targetAmount: Number(targetAmount),
-        currentAmount: Number(currentAmount || 0),
-        currency: currency.toUpperCase(),
+        currentAmount: linkedAccountId === undefined ? roundMoney(Number(currentAmount || 0)) : 0,
+        ...(linkedAccountId !== undefined ? { linkedAccountId } : {}),
+        currency: normalizedCurrency,
         targetDate: Timestamp.fromDate(parsedDate),
         createdAt: FieldValue.serverTimestamp()
       };
-      await newGoalRef.set(newGoal);
+      // The link is validated and the goal written in one transaction, so a concurrent
+      // account edit cannot leave a newly created goal pointing at an ineligible account.
+      await db.runTransaction(async transaction => {
+        if (linkedAccountId !== undefined) {
+          const accountSnapshot = await transaction.get(
+            db.collection('accounts').where('workspaceId', '==', workspaceId)
+          );
+          const accounts = new Map(accountSnapshot.docs.map(docSnap => [docSnap.id, docSnap.data()]));
+          if (!isSavingsGoalAccountLinkable(linkedAccountId, normalizedCurrency, workspaceId, accounts)) {
+            throw new AgentToolError("La cuenta vinculada debe pertenecer al workspace, usar la misma moneda y no ser tarjeta ni cuenta puente.");
+          }
+          linkedAccount = accounts.get(linkedAccountId);
+        }
+        transaction.set(newGoalRef, newGoal);
+      });
       return {
         success: true,
         id: newGoalRef.id,
         name,
         targetAmount: newGoal.targetAmount,
-        currentAmount: newGoal.currentAmount,
+        currentAmount: linkedAccountId === undefined ? newGoal.currentAmount : roundMoney(Number(linkedAccount?.balance)),
+        progressAvailable: linkedAccountId === undefined || Number.isFinite(Number(linkedAccount?.balance)),
+        ...(linkedAccountId !== undefined ? { linkedAccountId, linkedAccountName: linkedAccount?.name ?? null } : {}),
         currency: newGoal.currency,
         targetDate: zonedDateKey(parsedDate, timeZone)
       };
@@ -375,19 +417,24 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
 
   define(
     'updateGoalAmount',
-    'Actualiza el monto ahorrado acumulado de una meta (envía el nuevo total, no el aporte).',
+    'Actualiza el monto guardado de una meta virtual (envía el nuevo total, no el aporte). No modifica metas vinculadas: registra una transferencia entre cuentas para cambiar su saldo.',
     z.object({
       goalId: z.string().min(1).describe('El ID del objetivo/meta de ahorro'),
       currentAmount: z.number().min(0).describe('El nuevo saldo acumulado de la meta'),
     }),
     async ({ goalId, currentAmount }) => {
       const goalRef = db.collection('goals').doc(goalId);
-      const goalDoc = await goalRef.get();
-      if (!goalDoc.exists || goalDoc.data()?.workspaceId !== workspaceId) {
-        throw new AgentToolError("La meta de ahorro no existe en el workspace activo.");
-      }
-      await goalRef.update({ currentAmount: Number(currentAmount) });
-      return { success: true, message: `Meta de ahorro actualizada a ${currentAmount}.` };
+      await db.runTransaction(async transaction => {
+        const goalDoc = await transaction.get(goalRef);
+        if (!goalDoc.exists || goalDoc.data()?.workspaceId !== workspaceId) {
+          throw new AgentToolError("La meta de ahorro no existe en el workspace activo.");
+        }
+        if (Object.hasOwn(goalDoc.data() ?? {}, 'linkedAccountId') && goalDoc.data()?.linkedAccountId != null) {
+          throw new AgentToolError("La meta está vinculada a una cuenta; su progreso cambia con transferencias entre cuentas.");
+        }
+        transaction.update(goalRef, { currentAmount: roundMoney(Number(currentAmount)) });
+      });
+      return { success: true, message: `Meta de ahorro actualizada a ${roundMoney(Number(currentAmount))}.` };
     }
   );
 
@@ -479,10 +526,16 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
   // for: all-time transactions of active event budgets and assigned income of archived ones
   // (budgetId in, chunks of 30), and the workspace's transfers when an active event budget links accounts.
   const loadBudgetBreakdown = async (): Promise<NonNullable<SummaryOptions['budgetBreakdown']>> => {
-    const snapshot = await db.collection('budgets').where('workspaceId', '==', workspaceId).get();
+    const [snapshot, accounts] = await Promise.all([
+      db.collection('budgets').where('workspaceId', '==', workspaceId).get(),
+      loadAccounts()
+    ]);
+    const creditAccountIds = new Set(
+      accounts.filter(docSnap => docSnap.data().type === 'credit').map(docSnap => docSnap.id)
+    );
     const budgets: SummaryBudget[] = snapshot.docs.map(docSnap => ({ ...docSnap.data(), id: docSnap.id }));
     const plan = budgetBreakdownQueries(budgets);
-    if (plan.eventIds.length === 0 && plan.archivedEventIds.length === 0) return { budgets };
+    if (plan.eventIds.length === 0 && plan.archivedEventIds.length === 0) return { budgets, creditAccountIds };
     const transactions = db.collection('transactions').where('workspaceId', '==', workspaceId);
     const chunksOf = (ids: string[]) =>
       Array.from({ length: Math.ceil(ids.length / 30) }, (_, index) => ids.slice(index * 30, index * 30 + 30));
@@ -491,7 +544,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
       ...chunksOf(plan.archivedEventIds).map(chunk => transactions.where('type', '==', 'income').where('budgetId', 'in', chunk).get()),
       ...(plan.transfers ? [transactions.where('type', '==', 'transfer').get()] : [])
     ]);
-    return { budgets, extraRows: toSummaryRows(snapshots.flatMap(result => result.docs)) };
+    return { budgets, extraRows: toSummaryRows(snapshots.flatMap(result => result.docs)), creditAccountIds };
   };
 
   define(
@@ -523,17 +576,20 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
         // byBudget is workspace-wide, so it is skipped for account/category filters.
         input.accountId || input.categoryId ? undefined : loadBudgetBreakdown()
       ]);
-      return summarize(rows, {
+      const { rates, mismatchedBase } = ratesInfoOf(ws);
+      const summary = summarize(rows, {
         ...input,
         period,
         now,
         timeZone,
         primaryCurrency,
-        exchangeRates: ratesOf(ws),
+        exchangeRates: rates,
         names,
         cardBilling,
         budgetBreakdown
       });
+      const fxNote = mismatchedFxNote(mismatchedBase);
+      return fxNote ? { ...summary, notes: [...summary.notes, fxNote] } : summary;
     }
   );
 
@@ -552,7 +608,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
         loadCardBilling()
       ]);
       const categoryBudgetCurrency = parseLegacyCategoryBudgetCurrency(ws);
-      const rates = ratesOf(ws);
+      const { rates, mismatchedBase } = ratesInfoOf(ws);
       const month = summarize(rows, {
         period, now, timeZone, primaryCurrency, exchangeRates: rates, names, cardBilling,
         groupBy: 'category', topN: 0
@@ -568,6 +624,10 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
         categoryBudgets: (ws.categoryBudgets ?? {}) as Record<string, number>,
         expenseLimit: ws.expenseLimit,
         summary: defaultBudgetMonth,
+        allExpensesTotal: month.totals.expenses,
+        capCurrency: categoryBudgetCurrency,
+        primaryCurrency,
+        exchangeRates: rates,
         names
       });
       const budgetIncome = Number(ws.budgetIncome) || 0;
@@ -578,6 +638,16 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
         savings: ws.budgetSavingsPercent !== undefined ? Number(ws.budgetSavingsPercent) : 20
       };
       const goalNames = new Map(goalsSnap.docs.map(docSnap => [docSnap.id, String(docSnap.data().name || 'Meta')]));
+      const notes = [...month.notes];
+      const fxNote = mismatchedFxNote(mismatchedBase);
+      if (fxNote) notes.push(fxNote);
+      if (budgets.categories.length > 0) {
+        if (categoryBudgetCurrency === null) {
+          notes.push('Moneda de los límites por categoría sin confirmar en Objetivos y Presupuestos: la comparación contra los límites está desactivada (campos en null).');
+        } else if (categoryBudgetCurrency !== primaryCurrency && budgets.totals.budget === null) {
+          notes.push(`Falta o es inválida la tasa de cambio manual para convertir los límites por categoría de ${categoryBudgetCurrency} a ${primaryCurrency}: la comparación contra los límites está desactivada (campos en null).`);
+        }
+      }
       return {
         currency: primaryCurrency,
         categoryBudgetCurrency,
@@ -596,7 +666,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
           categoryBudgets: budgets.categories,
           categoryBudgetTotals: budgets.totals
         },
-        notes: month.notes
+        notes
       };
     }
   );

@@ -86,18 +86,19 @@ export function getAccountDisplayLabel(account: Account, accounts: Account[]): s
     : `${account.name} · sin grupo (ID: ${account.id})`
 }
 
-/** Preserve ordinary transfer selection, but constrain any movement involving a pocket. */
+/** Require matching workspace/currency and exclude bridges for all transfers, plus pocket rules. */
 export function canTransferBetweenAccounts(source: Account, destination: Account, accounts: Account[]): boolean {
   if (source.id === destination.id) return false
-  if (!isPocketRelatedAccount(source) && !isPocketRelatedAccount(destination)) return true
   if (source.workspaceId !== destination.workspaceId || source.currency !== destination.currency ||
       source.mirror || destination.mirror) return false
+  if (!isPocketRelatedAccount(source) && !isPocketRelatedAccount(destination)) return true
 
   const eligibleTypes = ['checking', 'savings', 'cash', 'credit']
   if (!eligibleTypes.includes(source.type) || !eligibleTypes.includes(destination.type)) return false
-  if ((source.type === 'credit' || destination.type === 'credit') &&
-      (isPocketRelatedAccount(source.type === 'credit' ? source : destination) ||
-       isPocketAccount(source) || isPocketAccount(destination))) return false
+  if ((source.type === 'credit' && isPocketRelatedAccount(source)) ||
+      (destination.type === 'credit' && isPocketRelatedAccount(destination))) return false
+  // A pocket may pay a card; a card may not fund a pocket (no card advances into pockets).
+  if (source.type === 'credit' && isPocketAccount(destination)) return false
 
   const groups = groupAccountsByPocket(accounts)
   const validChildIds = new Set(groups.flatMap(group => group.pockets.map(child => child.id)))

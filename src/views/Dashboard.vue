@@ -50,6 +50,31 @@
 
     <!-- Dashboard Content when accounts exist -->
     <div v-else class="space-y-8 animate-fade-in">
+      <!-- FX rate mismatch / missing rate warning banner (S10) -->
+      <div
+        v-if="hasFxWarning"
+        role="alert"
+        data-testid="dashboard-fx-warning"
+        class="rounded-2xl border border-accent-amber/30 bg-accent-amber/10 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-accent-amber"
+      >
+        <p class="leading-relaxed">
+          <template v-if="fxWarning.mismatchedBase">
+            Tus tasas de cambio guardadas están expresadas en <strong>{{ fxWarning.mismatchedBase }}</strong>, pero tu moneda principal es <strong>{{ primaryCurrency }}</strong>. Se ignorarán hasta actualizarlas para evitar conversiones incorrectas.
+          </template>
+          <template v-else>
+            Faltan tasas de cambio válidas hacia <strong>{{ primaryCurrency }}</strong> para
+            <strong>{{ [...fxWarning.missingCurrencies, ...fxWarning.invalidCurrencies].join(', ') }}</strong>;
+            algunos indicadores consolidados podrían sumarse 1:1 hasta configurarlas.
+          </template>
+        </p>
+        <router-link
+          to="/settings?tab=regional"
+          class="shrink-0 inline-flex items-center justify-center min-h-9 px-3 py-1.5 rounded-lg border border-accent-amber/40 text-accent-amber hover:bg-accent-amber/15 font-semibold whitespace-nowrap"
+        >
+          Configurar tasas
+        </router-link>
+      </div>
+
       <!-- 0. Forward-looking KPIs (compact 2-column grid on mobile; spendable is the hero) -->
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
         <!-- Disponible para gastar (hero) -->
@@ -231,11 +256,11 @@
         <div class="glass-panel rounded-2xl p-4 sm:p-6 relative overflow-hidden group border border-white/5">
           <div class="absolute top-0 right-0 w-24 h-24 bg-accent-amber/5 rounded-full blur-xl pointer-events-none"></div>
           <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Tasa de Ahorro</span>
-          <h4 class="font-display font-bold text-xl sm:text-2xl mt-2 text-accent-amber tabular-nums truncate">
+          <h4 :class="['font-display font-bold text-xl sm:text-2xl mt-2 tabular-nums truncate', savingsRate < 0 || (monthlyIncome === 0 && monthlyExpenses > 0) ? 'text-accent-rose' : 'text-accent-amber']">
             {{ savingsRate.toFixed(1) }}%
           </h4>
           <span class="text-[10px] text-text-muted mt-1 block">
-            {{ savingsRate >= 0 ? 'Fondo acumulado del ingreso' : 'Estás gastando más de lo que ganas' }}
+            {{ savingsRate < 0 || (monthlyIncome === 0 && monthlyExpenses > 0) ? 'Estás gastando más de lo que ganas' : 'Fondo acumulado del ingreso' }}
           </span>
         </div>
       </div>
@@ -428,16 +453,20 @@
             <div v-for="goal in goalProgress" :key="goal.id" class="space-y-1.5">
               <div class="flex justify-between gap-2 text-xs">
                 <span class="min-w-0 text-text-primary font-semibold truncate">{{ goal.name }}</span>
-                <span class="shrink-0 text-accent-emerald font-semibold">{{ goal.percent }}%</span>
+                <span v-if="goal.percent !== null" class="shrink-0 text-accent-emerald font-semibold">{{ goal.percent }}%</span>
+                <span v-else class="shrink-0 text-accent-amber font-semibold">No disponible</span>
               </div>
-              <div class="w-full h-2 rounded-full bg-slate-950/60 overflow-hidden border border-white/5">
+              <div v-if="goal.percent !== null" class="w-full h-2 rounded-full bg-slate-950/60 overflow-hidden border border-white/5">
                 <div
                   class="h-full rounded-full bg-gradient-to-r from-accent-emerald to-accent-violet transition-all"
                   :style="{ width: Math.min(goal.percent, 100) + '%' }"
                 ></div>
               </div>
-              <p class="text-[10px] text-text-muted">
+              <p v-if="goal.current !== null" class="text-[10px] text-text-muted">
                 {{ formatCurrency(goal.current, goal.currency) }} / {{ formatCurrency(goal.target, goal.currency) }}
+              </p>
+              <p v-else class="text-[10px] text-accent-amber" role="status">
+                La cuenta vinculada no está disponible; no se muestra progreso desactualizado.
               </p>
             </div>
           </div>
@@ -555,6 +584,7 @@ import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useGoalsStore } from '@/stores/goalsStore'
+import { getSavingsGoalProgressAmount } from '@/lib/savingsGoals'
 import { Account, AccountType, Transaction } from '@/types'
 import { createCardBillingLookup, expenseAmountForMonth } from '@/lib/installments'
 import { BUDGET_BASIS_HINTS, BUDGET_BASIS_LABELS, budgetBasis } from '@/lib/budgetBasis'
@@ -584,7 +614,8 @@ import {
 } from '@/lib/dashboardMetrics'
 import { getNextOccurrence, daysUntil } from '@/lib/creditCycle'
 import { buildCardStatementLedger } from '@/lib/cardStatements'
-import { DEFAULT_MONTHLY_BUDGET_ID, budgetScopedMonthFilter, linkedBudgetForAccount } from '@/lib/budgets'
+import { DEFAULT_MONTHLY_BUDGET_ID, budgetScopedMonthFilter, linkedBudgetForAccount, resolveBudgetId } from '@/lib/budgets'
+import { detectFxWarnings, effectiveExchangeRates } from '@/lib/fx'
 import { reportAllBudgetsEstimatedMonthly, reportBudgetScope } from '@/lib/budgetReporting'
 import { 
   Plus as PlusIcon, 
@@ -654,6 +685,44 @@ watch(
 
 // Moneda principal: la elegida por el usuario en Settings
 const primaryCurrency = computed(() => settingsStore.currency || 'COP')
+const activeExchangeRates = computed(() =>
+  effectiveExchangeRates(goalsStore.exchangeRates, goalsStore.exchangeRatesBaseCurrency, primaryCurrency.value).rates
+)
+const fxWarning = computed(() => {
+  const currencies: Array<string | null | undefined> = []
+  for (const acc of accountsStore.accounts) currencies.push(acc.currency)
+  for (const tx of transactionsStore.transactions) currencies.push(tx.currency)
+  for (const entry of goalsStore.operatingBudgets) {
+    if (
+      !entry.budget.archived &&
+      (entry.budget.totalLimit !== undefined || Object.keys(entry.categoryCaps).length > 0)
+    ) {
+      currencies.push(entry.budget.capCurrency)
+    }
+  }
+  if (
+    goalsStore.categoryBudgetCurrency.status === 'confirmed' &&
+    Object.keys(goalsStore.categoryBudgets).length > 0
+  ) {
+    currencies.push(goalsStore.categoryBudgetCurrency.code)
+  }
+  return detectFxWarnings({
+    currencies,
+    reportingCurrency: primaryCurrency.value,
+    exchangeRates: goalsStore.exchangeRates,
+    exchangeRatesBaseCurrency: goalsStore.exchangeRatesBaseCurrency
+  })
+})
+const hasFxWarning = computed(() => {
+  if (settingsStore.loading || goalsStore.budgetSettingsLoading || !goalsStore.budgetSettingsContextKey) {
+    return false
+  }
+  return Boolean(
+    fxWarning.value.mismatchedBase ||
+    fxWarning.value.missingCurrencies.length ||
+    fxWarning.value.invalidCurrencies.length
+  )
+})
 
 // Billing days per credit card: card expenses count when their statement is paid. Payments
 // already made to the card count in the month they were made and only the unpaid rest of a
@@ -673,7 +742,7 @@ const allBudgetsEstimatedMonthly = computed(() => {
     transactions: transactionsStore.transactions,
     period: { year: now.getFullYear(), month: now.getMonth() },
     reportingCurrency: primaryCurrency.value,
-    exchangeRates: goalsStore.exchangeRates,
+    exchangeRates: activeExchangeRates.value,
     cardBilling: budgetBillingFor.value
   })
 })
@@ -713,9 +782,12 @@ const setFlowView = (view: FlowView) => {
 }
 
 // Budget each account is linked to: transfers into or out of linked accounts move funds.
+// Credit cards never count as linked funding accounts (card repayments are debt settlement).
 const linkableOperatingBudgets = computed(() => goalsStore.operatingBudgets.map(({ budget }) => budget))
-const linkedBudgetOfAccount = (accountId: string) =>
-  linkedBudgetForAccount(linkableOperatingBudgets.value, accountId)?.id ?? null
+const linkedBudgetOfAccount = (accountId: string) => {
+  if (accountsStore.getAccountById(accountId)?.type === 'credit') return null
+  return linkedBudgetForAccount(linkableOperatingBudgets.value, accountId)?.id ?? null
+}
 const budgetKinds = computed(() => new Map(goalsStore.operatingBudgets.map(({ budget }) => [budget.id, budget.kind])))
 // Same rule as the Goals planner ("Ingreso real del mes"), judged per calendar month.
 const budgetMonthFilter = (period: { year: number; month: number }) =>
@@ -723,7 +795,8 @@ const budgetMonthFilter = (period: { year: number; month: number }) =>
     year: period.year,
     month: period.month,
     kindOf: budgetId => budgetKinds.value.get(budgetId),
-    linkedBudgetOf: linkedBudgetOfAccount
+    linkedBudgetOf: linkedBudgetOfAccount,
+    convert
   })
 
 // Ingresos del mes actual
@@ -784,7 +857,7 @@ const budgetBreakdown = computed(() => {
         transactions: transactionsStore.transactions,
         period: { year: now.getFullYear(), month: now.getMonth() },
         reportingCurrency: primaryCurrency.value,
-        exchangeRates: goalsStore.exchangeRates,
+        exchangeRates: activeExchangeRates.value,
         cardBilling: budgetBillingFor.value
       })
     }))
@@ -863,7 +936,11 @@ const monthEndProjection = computed(() => {
   const all = splitMonthEndExpenses(transactionsStore.transactions, now, options)
   const budgeted = splitMonthEndExpenses(transactionsStore.transactions, now, {
     ...options,
-    include: t => Boolean(t.categoryId && budgets[t.categoryId] !== undefined)
+    include: t => Boolean(
+      t.categoryId &&
+      budgets[t.categoryId] > 0 &&
+      resolveBudgetId(t.budgetId) === DEFAULT_MONTHLY_BUDGET_ID
+    )
   })
   return {
     total: projectMonthEndExpenses({ paceExpensesToDate: all.pace, committedExpenses: all.committed, now }),
@@ -874,7 +951,7 @@ const monthEndProjection = computed(() => {
 const projectionStatus = computed(() =>
   projectionChecks({
     budgetedProjection: monthEndProjection.value.budgeted,
-    budgetTotal: budgetSummary.value?.totalBudget ?? 0,
+    budgetTotal: budgetSummary.value?.totalLimitForReporting ?? 0,
     totalProjection: monthEndProjection.value.total,
     expenseLimit: currentExpenseLimit.value
   })
@@ -954,7 +1031,7 @@ const currentExpenseLimit = computed(() => {
 const savingsRate = computed(() => {
   if (monthlyIncome.value === 0) return 0
   const savings = monthlyIncome.value - monthlyExpenses.value
-  return Math.max(0, (savings / monthlyIncome.value) * 100)
+  return (savings / monthlyIncome.value) * 100
 })
 
 // Lista de transacciones recientes
@@ -978,7 +1055,7 @@ const budgetSummary = computed(() => {
     transactions: transactionsStore.transactions,
     period: { year: now.getFullYear(), month: now.getMonth() },
     reportingCurrency: primaryCurrency.value,
-    exchangeRates: goalsStore.exchangeRates,
+    exchangeRates: activeExchangeRates.value,
     cardBilling: budgetBillingFor.value
   })
 
@@ -1029,15 +1106,15 @@ const budgetSummary = computed(() => {
     if (total === null || !comparison) return null
     return total + comparison.limitAmount
   }, capCurrency === null ? null : 0)
-  const cappedSpendForReporting = positiveCategoryIds.reduce<number | null>((total, catId) => {
+  const totalSpendForReporting = positiveCategoryIds.reduce<number | null>((total, catId) => {
     const comparison = report.categories[catId]?.comparison
     if (total === null || !comparison) return null
-    return total + Math.min(comparison.spentAmount, comparison.limitAmount)
+    return total + comparison.spentAmount
   }, capCurrency === null ? null : 0)
   const percent = positiveCategoryIds.length === 0
     ? capCurrency === null ? null : 0
-    : totalLimitForReporting !== null && totalLimitForReporting > 0 && cappedSpendForReporting !== null
-      ? Math.round((cappedSpendForReporting / totalLimitForReporting) * 100)
+    : totalLimitForReporting !== null && totalLimitForReporting > 0 && totalSpendForReporting !== null
+      ? Math.round((totalSpendForReporting / totalLimitForReporting) * 100)
       : null
 
   const allocations = ids.map(catId => report.categories[catId]?.monthlyAllocation)
@@ -1053,6 +1130,7 @@ const budgetSummary = computed(() => {
     rows: rows.slice(0, 4),
     percent,
     totalBudget,
+    totalLimitForReporting,
     totalSpentReal,
     capCurrency,
     reportingCurrency: report.reportingCurrency,
@@ -1062,14 +1140,17 @@ const budgetSummary = computed(() => {
 
 // Progreso de metas (widget)
 const goalProgress = computed(() =>
-  goalsStore.goals.slice(0, 4).map(g => ({
-    id: g.id,
-    name: g.name,
-    currency: g.currency,
-    current: g.currentAmount,
-    target: g.targetAmount,
-    percent: g.targetAmount > 0 ? Math.round((g.currentAmount / g.targetAmount) * 100) : 0
-  }))
+  goalsStore.goals.slice(0, 4).map(goal => {
+    const current = getSavingsGoalProgressAmount(goal, accountsStore.accounts, authStore.activeWorkspaceId)
+    return {
+      id: goal.id,
+      name: goal.name,
+      currency: goal.currency,
+      current,
+      target: goal.targetAmount,
+      percent: current === null ? null : goal.targetAmount > 0 ? Math.round((current / goal.targetAmount) * 100) : 0
+    }
+  })
 )
 
 // Agrupación de gastos por categoría para el gráfico de dona
@@ -1079,10 +1160,12 @@ const expensesByCategory = computed(() => {
 
   const groups: Record<string, number> = {}
   currentMonthExpenses.forEach(t => {
+    const amount = expenseAmountForMonth(t, now.getFullYear(), now.getMonth(), cardBillingFor.value(t.accountId))
+    if (amount === 0) return
     const cat = getCategory(t.categoryId)
     const name = cat ? cat.name : 'Otros'
     if (!groups[name]) groups[name] = 0
-    groups[name] += convert(expenseAmountForMonth(t, now.getFullYear(), now.getMonth(), cardBillingFor.value(t.accountId)), t.currency)
+    groups[name] += convert(amount, t.currency)
   })
   return groups
 })
@@ -1268,7 +1351,7 @@ const getAccountIcon = (type: AccountType) => {
 // ordenados por el vencimiento más cercano. Cuentas sin paymentDueDay configurado no aparecen.
 const upcomingCardPayments = computed(() => {
   return accountsStore.accounts
-    .filter(acc => acc.type === 'credit' && acc.paymentDueDay)
+    .filter(acc => acc.type === 'credit' && !acc.mirror && acc.paymentDueDay)
     .map(acc => {
       const dueDate = getNextOccurrence(acc.paymentDueDay!)
       // Sin statementClosingDay no se puede saber qué cae en el corte: se muestra

@@ -133,7 +133,7 @@ export const useSettingsStore = defineStore('settings', {
     },
 
     // Invoca la Cloud Function para procesar el extracto usando el Genkit Flow
-    async parseStatementText(text?: string, pdfBase64?: string): Promise<any[]> {
+    async parseStatementText(text?: string, pdfBase64?: string): Promise<{ transactions: any[]; detectedCurrency: string | null }> {
       const user = auth.currentUser
       if (!user) throw new Error('Usuario no autenticado')
 
@@ -162,7 +162,12 @@ export const useSettingsStore = defineStore('settings', {
         }
 
         const data = await response.json()
-        return data.transactions || []
+        const rawCurrency = typeof data.detectedCurrency === 'string' ? data.detectedCurrency.trim().toUpperCase() : ''
+        const detectedCurrency = /^[A-Z]{3}$/.test(rawCurrency) ? rawCurrency : null
+        return {
+          transactions: Array.isArray(data.transactions) ? data.transactions : [],
+          detectedCurrency
+        }
       } catch (error) {
         console.error('Error al analizar extracto:', error)
         throw error

@@ -164,6 +164,15 @@ test('a member can toggle budget alerts and confirm legacy cap units in the same
   assert.equal(stored.categoryBudgetCurrency, 'COP')
 })
 
+test('S10: a member can update exchangeRatesBaseCurrency with a valid ISO-3 code or null, rejecting malformed values', async () => {
+  const ref = doc(member.db, 'workspaces', workspaceId)
+  await updateDoc(ref, { exchangeRates: { USD: 4000 }, exchangeRatesBaseCurrency: 'COP' })
+  await updateDoc(ref, { exchangeRates: {}, exchangeRatesBaseCurrency: null })
+  await assert.rejects(updateDoc(ref, { exchangeRatesBaseCurrency: 'cop' }), denied)
+  await assert.rejects(updateDoc(ref, { exchangeRatesBaseCurrency: 'INVALID' }), denied)
+  await assert.rejects(updateDoc(ref, { exchangeRatesBaseCurrency: 123 }), denied)
+})
+
 test('an outsider cannot read or update the workspace', async () => {
   const ref = doc(outsider.db, 'workspaces', workspaceId)
   await assert.rejects(getDoc(ref), denied)

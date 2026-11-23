@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { DEFAULT_MONTHLY_BUDGET_ID } from './budgets.ts'
 import {
+  AccountSchema,
   OperatingBudgetDraftSchema,
   OperatingBudgetPatchSchema,
   OperatingBudgetRecordSchema,
@@ -145,4 +146,15 @@ test('stored budget records drop fields a newer client added instead of failing 
   assert.equal(parsed.name, 'Viaje')
   // Writes stay strict.
   assert.throws(() => OperatingBudgetRecordSchema.parse(stored))
+})
+
+test('AccountSchema rejects negative credit limits, invalid currency codes, and allows valid values', () => {
+  const base = { name: 'Visa', type: 'credit', balance: 0, currency: 'COP' }
+  assert.equal(AccountSchema.safeParse({ ...base, limit: 0 }).success, true)
+  assert.equal(AccountSchema.safeParse({ ...base, limit: 5_000_000 }).success, true)
+  assert.equal(AccountSchema.safeParse({ ...base, limit: -1 }).success, false)
+  assert.equal(AccountSchema.safeParse({ ...base, limit: Number.NaN }).success, false)
+  for (const currency of ['', '   ', '123', 'usd', 'CO', 'COPP']) {
+    assert.equal(AccountSchema.safeParse({ ...base, currency }).success, false)
+  }
 })

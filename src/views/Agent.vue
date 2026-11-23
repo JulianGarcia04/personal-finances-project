@@ -521,6 +521,7 @@ const requestReply = async (chatId: string) => {
   try {
     await accountsStore.fetchAccounts()
     await transactionsStore.fetchTransactions()
+    await goalsStore.fetchGoals()
     await goalsStore.loadBudgetSettings()
   } catch (syncErr) {
     console.error('Error al sincronizar datos tras la respuesta del asesor:', syncErr)

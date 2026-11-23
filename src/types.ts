@@ -7,6 +7,8 @@ export interface Workspace {
   expenseLimit?: number; // ponytail: simple number limit
   /** Explicit unit for legacy categoryBudgets; never inferred from currency or converted. */
   categoryBudgetCurrency?: string;
+  /** Target currency that manual `exchangeRates` convert into (e.g. 'COP' for USD -> COP). */
+  exchangeRatesBaseCurrency?: string | null;
   createdAt: string | Date;
 }
 
@@ -121,6 +123,7 @@ export interface Goal {
   targetAmount: number;
   currentAmount: number;
   currency: string;
+  linkedAccountId?: string;
   targetDate: Date;
   createdAt: Date;
 }
@@ -135,6 +138,8 @@ export interface BudgetSettings {
   categoryBudgets: Record<string, number>;
   // Tasas de cambio manuales hacia la moneda principal (currency -> cuántas unidades de la principal vale 1 unidad)
   exchangeRates: Record<string, number>;
+  // Moneda destino en la que están expresadas las tasas manuales (evita aplicar tasas viejas al cambiar de moneda)
+  exchangeRatesBaseCurrency?: string | null;
 }
 
 export type OperatingBudgetKind = 'monthly' | 'event';

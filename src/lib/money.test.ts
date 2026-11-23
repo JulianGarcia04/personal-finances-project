@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import * as money from './money.ts'
 import { splitMoney } from './money.ts'
 
 const cop = (val: number) =>
@@ -30,4 +31,13 @@ test('handles narrow no-break and regular spaces', () => {
 
 test('returns the whole string as the number part when there is no space', () => {
   assert.deepEqual(splitMoney('$1.000'), ['', '$1.000'])
+})
+
+test('S4: roundMoney eliminates IEEE-754 drift and negative zero', () => {
+  assert.equal(typeof money.roundMoney, 'function', 'roundMoney must be exported')
+  assert.equal(money.roundMoney(0.1 + 0.2), 0.3)
+  assert.equal(money.roundMoney(0.3 - 0.1 - 0.2), 0)
+  assert.equal(Object.is(money.roundMoney(-0.0001), 0), true)
+  assert.equal(money.roundMoney(-12.345), -12.35)
+  assert.equal(money.roundMoney(12.345), 12.35)
 })

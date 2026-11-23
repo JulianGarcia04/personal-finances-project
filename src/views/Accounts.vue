@@ -393,10 +393,15 @@
                 maxlength="3"
                 type="text"
                 required
-                :readonly="!!editingAccount?.parentAccountId"
+                :readonly="!!editCurrencyLockReason"
+                :disabled="!!editCurrencyLockReason"
+                :aria-describedby="editCurrencyLockReason ? 'edit-account-currency-lock' : undefined"
                 placeholder="COP, USD, EUR"
-                class="field uppercase"
+                class="field uppercase disabled:opacity-60 disabled:cursor-not-allowed"
               />
+              <p v-if="editCurrencyLockReason" id="edit-account-currency-lock" class="text-[10px] text-text-muted leading-snug">
+                {{ editCurrencyLockReason }}
+              </p>
             </div>
           </div>
 
@@ -463,28 +468,33 @@
               <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Workspace que pone la plata</label>
               <select
                 v-model="editMirror.workspaceId"
+                :disabled="!!editMirrorLockReason"
                 @change="loadMirrorAccounts()"
-                class="field focus:border-accent-violet"
+                class="field focus:border-accent-violet disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 <option value="">Sin espejo — cuenta normal</option>
                 <option v-for="ws in otherWorkspaces" :key="ws.id" :value="ws.id">{{ ws.name }}</option>
               </select>
+              <p v-if="editMirrorLockReason" class="text-[10px] text-text-muted leading-snug">
+                {{ editMirrorLockReason }}
+              </p>
             </div>
 
             <div v-if="editMirror.workspaceId" class="space-y-3.5 animate-fade-in">
               <p v-if="loadingMirrorAccounts" class="text-[11px] text-text-muted">Cargando cuentas…</p>
-              <p v-else-if="mirrorAccounts.length < 2" class="text-[11px] text-accent-rose">
-                Ese workspace necesita al menos dos cuentas: la que paga y una de "por cobrar".
+              <p v-else-if="eligibleMirrorAccounts.length < 2" class="text-[11px] text-accent-rose">
+                Ese workspace necesita al menos dos cuentas compatibles en {{ editAcc.currency.toUpperCase() }} (sin bolsillos ni espejo): la que paga y una de "por cobrar".
               </p>
               <template v-else>
                 <div class="space-y-1">
                   <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Cuenta que paga (allá)</label>
                   <select
                     v-model="editMirror.sourceAccountId"
-                    class="field focus:border-accent-violet"
+                    :disabled="!!editMirrorLockReason"
+                    class="field focus:border-accent-violet disabled:opacity-60 disabled:cursor-not-allowed"
                   >
                     <option value="" disabled>Ej. tu tarjeta de crédito</option>
-                    <option v-for="acc in mirrorAccounts" :key="acc.id" :value="acc.id" :disabled="acc.id === editMirror.accountId">
+                    <option v-for="acc in eligibleMirrorAccounts" :key="acc.id" :value="acc.id" :disabled="acc.id === editMirror.accountId">
                       {{ acc.name }} ({{ acc.currency }})
                     </option>
                   </select>
@@ -494,10 +504,11 @@
                   <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Cuenta "por cobrar" (allá)</label>
                   <select
                     v-model="editMirror.accountId"
-                    class="field focus:border-accent-violet"
+                    :disabled="!!editMirrorLockReason"
+                    class="field focus:border-accent-violet disabled:opacity-60 disabled:cursor-not-allowed"
                   >
                     <option value="" disabled>Ej. "Por cobrar – Casa", saldo 0</option>
-                    <option v-for="acc in mirrorAccounts" :key="acc.id" :value="acc.id" :disabled="acc.id === editMirror.sourceAccountId">
+                    <option v-for="acc in eligibleMirrorAccounts" :key="acc.id" :value="acc.id" :disabled="acc.id === editMirror.sourceAccountId">
                       {{ acc.name }} ({{ acc.currency }})
                     </option>
                   </select>
@@ -639,14 +650,18 @@ import { useAuthStore } from '@/stores/authStore'
 import { Account, AccountType } from '@/types'
 import { AccountSchema } from '@/schemas'
 import { getNextOccurrence, daysUntil, expenseAmountForCycle } from '@/lib/creditCycle'
+import { buildCardStatementLedger } from '@/lib/cardStatements'
 import { toLocalDateKey } from '@/lib/dates'
 import { splitMoney } from '@/lib/money'
+import { getAccountCurrencyLockReason } from '@/lib/accountRules'
+import { sameMirrorConfig } from '@/lib/mirror'
 import {
   canTransferBetweenAccounts,
   getAccountDisplayLabel,
   getAccountPocketTotals,
   groupAccountsByPocket,
-  isPocketAccount
+  isPocketAccount,
+  isPocketRelatedAccount
 } from '@/lib/pockets'
 import {
   Plus as PlusIcon,
@@ -692,12 +707,44 @@ const newAcc = ref<{
 })
 
 onMounted(async () => {
-  await Promise.all([accountsStore.fetchAccounts(), workspacesStore.fetchMyWorkspaces()])
+  await Promise.all([
+    accountsStore.fetchAccounts(),
+    workspacesStore.fetchMyWorkspaces(),
+    transactionsStore.fetchTransactions()
+  ])
 })
 
 const accountGroups = computed(() => groupAccountsByPocket(accountsStore.accounts, authStore.activeWorkspaceId || undefined))
 const editingAccountId = ref('')
 const editingAccount = computed(() => accountsStore.accounts.find(account => account.id === editingAccountId.value) ?? null)
+const editCurrencyLockReason = computed(() => {
+  const account = editingAccount.value
+  if (!account) return null
+  const hasTransactions = transactionsStore.transactions.some(
+    tx => tx.accountId === account.id || tx.toAccountId === account.id
+  )
+  return getAccountCurrencyLockReason(account, hasTransactions)
+})
+const editMirrorLockReason = computed(() => {
+  const account = editingAccount.value
+  if (!account) return null
+  if (isPocketRelatedAccount(account)) return 'Una cuenta con bolsillos o un bolsillo no puede ser cuenta puente.'
+  if (account.linkedBudgetId) return 'Esta cuenta está ligada a un presupuesto: quítala del presupuesto antes de cambiar el espejo.'
+  if (Number(account.balance) !== 0) {
+    return account.mirror
+      ? 'Liquida el saldo a 0 antes de cambiar o quitar la configuración de espejo.'
+      : 'Solo puedes configurar espejo en una cuenta con saldo 0.'
+  }
+  return null
+})
+const eligibleMirrorAccounts = computed(() => {
+  const targetCurrency = editAcc.value.currency.trim().toUpperCase()
+  const current = editingAccount.value?.mirror
+  return mirrorAccounts.value.filter(acc =>
+    (acc.id === current?.accountId || acc.id === current?.sourceAccountId) ||
+    (!acc.mirror && !isPocketRelatedAccount(acc) && acc.currency === targetCurrency)
+  )
+})
 
 const canCreatePocket = (account: Account) =>
   !isPocketAccount(account) && !account.mirror && ['checking', 'savings'].includes(account.type)
@@ -826,8 +873,8 @@ const saveAccount = async () => {
     name: newAcc.value.name,
     type: newAcc.value.type,
     balance: newAcc.value.balance,
-    limit: newAcc.value.limit,
-    currency: newAcc.value.currency.toUpperCase(),
+    limit: newAcc.value.type === 'credit' ? newAcc.value.limit : 0,
+    currency: newAcc.value.currency.trim().toUpperCase(),
     statementClosingDay: newAcc.value.statementClosingDay || null,
     paymentDueDay: newAcc.value.paymentDueDay || null
   })
@@ -903,10 +950,11 @@ const closeEditAccountModal = () => {
 
 const saveEditedAccount = async () => {
   const accountBeingEdited = editingAccount.value
-  const currency = editAcc.value.currency.toUpperCase()
+  const currency = editAcc.value.currency.trim().toUpperCase()
   // Validar con el mismo schema (balance queda por fuera, no se edita)
   const validation = AccountSchema.pick({ name: true, type: true, limit: true, currency: true, statementClosingDay: true, paymentDueDay: true }).safeParse({
     ...editAcc.value,
+    limit: editAcc.value.type === 'credit' ? editAcc.value.limit : 0,
     currency,
     statementClosingDay: editAcc.value.statementClosingDay || null,
     paymentDueDay: editAcc.value.paymentDueDay || null
@@ -928,6 +976,14 @@ const saveEditedAccount = async () => {
     return
   }
 
+  const nextMirror = workspaceId ? { workspaceId, sourceAccountId, accountId } : null
+  const mirrorChanged = !accountBeingEdited?.parentAccountId &&
+    !sameMirrorConfig(accountBeingEdited?.mirror ?? null, nextMirror)
+  if (mirrorChanged && editMirrorLockReason.value) {
+    alert(editMirrorLockReason.value)
+    return
+  }
+
   loading.value = true
   try {
     await accountsStore.updateAccount(editingAccountId.value, {
@@ -936,11 +992,8 @@ const saveEditedAccount = async () => {
       statementClosingDay: editAcc.value.statementClosingDay || null,
       paymentDueDay: editAcc.value.paymentDueDay || null
     })
-    if (!accountBeingEdited?.parentAccountId) {
-      await accountsStore.setAccountMirror(
-        editingAccountId.value,
-        workspaceId ? { workspaceId, sourceAccountId, accountId } : null
-      )
+    if (mirrorChanged) {
+      await accountsStore.setAccountMirror(editingAccountId.value, nextMirror)
     }
     closeEditAccountModal()
   } catch (err: any) {
@@ -1019,17 +1072,33 @@ const closingDaysUntil = (account: Account) =>
 const dueDaysUntil = (account: Account) =>
   account.paymentDueDay ? daysUntil(getNextOccurrence(account.paymentDueDay)) : 0
 
-// Total a pagar en el próximo corte: suma las cuotas de este ciclo de facturación
-// para todas las transacciones de la cuenta.
+// Total pendiente por pagar en el próximo corte: usa el mismo ledger de extractos que el Dashboard
+// (descuenta pagos ya hechos a la tarjeta y nunca supera la deuda actual).
 const cycleChargeAmount = (account: Account) => {
   if (!account.statementClosingDay) return 0
-  return transactionsStore.transactions
+  const debt = Math.max(0, -account.balance)
+  if (debt === 0) return 0
+  if (account.paymentDueDay) {
+    const dueDate = getNextOccurrence(account.paymentDueDay)
+    const billing = { statementClosingDay: account.statementClosingDay, paymentDueDay: account.paymentDueDay }
+    return Math.min(
+      buildCardStatementLedger(account, billing, transactionsStore.transactions)
+        .pendingThrough(dueDate.getFullYear() * 12 + dueDate.getMonth()),
+      debt
+    )
+  }
+  const cycleTotal = transactionsStore.transactions
     .filter(t => t.accountId === account.id)
     .reduce((sum, t) => sum + expenseAmountForCycle(t, account.statementClosingDay!), 0)
+  return Math.min(cycleTotal, debt)
 }
 
 const handleDelete = async (id: string, name: string) => {
   const account = accountsStore.getAccountById(id)
+  if (account?.linkedBudgetId) {
+    alert(`La cuenta "${name}" está ligada a un presupuesto. Quítala del presupuesto en Metas y Presupuestos antes de eliminarla.`)
+    return
+  }
   const warning = account && isPocketAccount(account)
     ? `Solo se puede eliminar el bolsillo "${name}" si tiene saldo cero y no conserva movimientos; el historial no se borra.`
     : account?.childAccountIds?.length

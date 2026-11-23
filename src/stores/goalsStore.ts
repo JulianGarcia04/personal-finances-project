@@ -11,7 +11,9 @@ import {
   getDoc,
   updateDoc,
   deleteDoc,
-  runTransaction
+  runTransaction,
+  type DocumentData,
+  type DocumentReference
 } from 'firebase/firestore'
 import {
   createBudgetWorkspaceAdapter,
@@ -27,6 +29,12 @@ import { createBudgetPersistence, type BudgetLinkOptions } from '../lib/budgetPe
 import { createBudgetCategoryCapsPersistence } from '../lib/budgetCategoryCapsPersistence.ts'
 import { DEFAULT_MONTHLY_BUDGET_ID } from '../lib/budgets.ts'
 import { toDateValue } from '../lib/dates.ts'
+import { convertWithRates, normalizeFxBaseCurrency } from '../lib/fx.ts'
+import {
+  isSavingsGoalAccountLinkable,
+  updateVirtualGoalAmountAtomically,
+  type SavingsGoalProgressTransactionRunner
+} from '../lib/savingsGoals.ts'
 
 interface GoalsState {
   goals: Goal[];
@@ -37,6 +45,7 @@ interface GoalsState {
   budgetAllocations: Record<string, number>;
   categoryBudgets: Record<string, number>;
   exchangeRates: Record<string, number>;
+  exchangeRatesBaseCurrency: string | null;
   operatingBudgets: BudgetWorkspaceBudgetSnapshot[];
   categoryBudgetCurrency: CategoryBudgetCurrencyState;
   budgetSettingsContextKey: string | null;
@@ -51,6 +60,7 @@ interface GoalsState {
 export interface GoalsBudgetSettingsDocument extends Partial<BudgetSettings> {
   categoryBudgetCurrency?: string
   budgetAlertsEnabled?: boolean
+  exchangeRatesBaseCurrency?: string | null
 }
 
 export type LegacyBudgetSettingsPatch = BudgetSettings
@@ -91,6 +101,7 @@ const resetWorkspaceBudgetState = (state: GoalsState): void => {
   state.budgetAllocations = {}
   state.categoryBudgets = {}
   state.exchangeRates = {}
+  state.exchangeRatesBaseCurrency = null
   state.operatingBudgets = []
   state.categoryBudgetCurrency = { ...defaultCategoryBudgetCurrency }
   state.budgetSettingsError = null
@@ -104,7 +115,10 @@ export const buildLegacyBudgetSettingsPatch = (settings: BudgetSettings): Legacy
   budgetSavingsPercent: Number(settings.budgetSavingsPercent),
   budgetAllocations: settings.budgetAllocations,
   categoryBudgets: settings.categoryBudgets,
-  exchangeRates: settings.exchangeRates
+  exchangeRates: settings.exchangeRates,
+  ...(settings.exchangeRatesBaseCurrency !== undefined
+    ? { exchangeRatesBaseCurrency: normalizeFxBaseCurrency(settings.exchangeRatesBaseCurrency) }
+    : {})
 })
 
 const budgetByName = (entries: readonly BudgetWorkspaceBudgetSnapshot[]): BudgetWorkspaceBudgetSnapshot[] =>
@@ -210,6 +224,7 @@ export const createGoalsBudgetActions = (
         state.budgetAllocations = ownNumericRecord(workspace?.budgetAllocations)
         state.categoryBudgets = ownNumericRecord(snapshot.legacy.categoryBudgets)
         state.exchangeRates = ownNumericRecord(snapshot.legacy.exchangeRates)
+        state.exchangeRatesBaseCurrency = normalizeFxBaseCurrency(workspace?.exchangeRatesBaseCurrency)
         state.categoryBudgetCurrency = snapshot.legacy.categoryBudgetCurrency
         state.budgetAlertsEnabled = workspace?.budgetAlertsEnabled !== false
         state.operatingBudgets = budgetByName(snapshot.budgets.map(entry => ({
@@ -241,6 +256,9 @@ export const createGoalsBudgetActions = (
       state.budgetAllocations = ownNumericRecord(patch.budgetAllocations)
       state.categoryBudgets = ownNumericRecord(patch.categoryBudgets)
       state.exchangeRates = ownNumericRecord(patch.exchangeRates)
+      if (patch.exchangeRatesBaseCurrency !== undefined) {
+        state.exchangeRatesBaseCurrency = normalizeFxBaseCurrency(patch.exchangeRatesBaseCurrency)
+      }
     },
 
     async createOperatingBudget(draft: OperatingBudgetDraft, options: BudgetLinkOptions = {}): Promise<OperatingBudget> {
@@ -371,6 +389,7 @@ export const useGoalsStore = defineStore('goals', {
     budgetAllocations: {},
     categoryBudgets: {},
     exchangeRates: {},
+    exchangeRatesBaseCurrency: null,
     operatingBudgets: [],
     categoryBudgetCurrency: { ...defaultCategoryBudgetCurrency },
     budgetSettingsContextKey: null,
@@ -382,13 +401,9 @@ export const useGoalsStore = defineStore('goals', {
   }),
   getters: {
     getGoalById: (state) => (id: string): Goal | undefined => state.goals.find(g => g.id === id),
-    // Convierte un monto a la moneda principal usando las tasas manuales.
-    // ponytail: si no hay tasa configurada, se suma tal cual (1:1) — el usuario configura las tasas en Objetivos & Presupuesto.
-    convertToPrimary: (state) => (amount: number, currency: string, primaryCurrency: string): number => {
-      if (!currency || currency === primaryCurrency) return amount
-      const rate = state.exchangeRates[currency]
-      return rate ? amount * rate : amount
-    }
+    // Convierte un monto a la moneda principal usando las tasas manuales solo cuando coinciden con la moneda base.
+    convertToPrimary: (state) => (amount: number, currency: string, primaryCurrency: string): number =>
+      convertWithRates(amount, currency, primaryCurrency, state.exchangeRates, state.exchangeRatesBaseCurrency)
   },
   actions: {
     // 1. Cargar Objetivos de Ahorro
@@ -413,6 +428,7 @@ export const useGoalsStore = defineStore('goals', {
             currency: data.currency || 'USD',
             targetDate: toDateValue(data.targetDate),
             createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate() : new Date(data.createdAt),
+            ...(Object.hasOwn(data, 'linkedAccountId') ? { linkedAccountId: data.linkedAccountId as string } : {}),
           } as Goal)
         })
         this.goals = goalsList
@@ -424,17 +440,27 @@ export const useGoalsStore = defineStore('goals', {
     },
 
     // 2. Agregar Objetivo
-    async addGoal({ name, targetAmount, currentAmount = 0, currency = 'USD', targetDate }: {
+    async addGoal({ name, targetAmount, currentAmount = 0, currency = 'USD', targetDate, linkedAccountId }: {
       name: string;
       targetAmount: number;
       currentAmount?: number;
       currency?: string;
       targetDate: Date;
+      linkedAccountId?: string;
     }): Promise<Goal> {
       const { db, auth, authStore } = await loadGoalsRuntime()
       const user = auth.currentUser
       const workspaceId = authStore.activeWorkspaceId
       if (!user || !workspaceId) throw new Error('Usuario o Workspace no autenticado')
+
+      if (linkedAccountId !== undefined) {
+        const { useAccountsStore } = await import('./accountsStore.ts')
+        const accountsStore = useAccountsStore()
+        const account = accountsStore.getAccountById(linkedAccountId)
+        if (!account || !isSavingsGoalAccountLinkable(account, accountsStore.accounts, workspaceId, currency)) {
+          throw new Error('La cuenta vinculada debe pertenecer al workspace y usar la misma moneda; no se admiten tarjetas ni cuentas puente.')
+        }
+      }
 
       this.loading = true
       try {
@@ -443,8 +469,9 @@ export const useGoalsStore = defineStore('goals', {
           userId: user.uid,
           name,
           targetAmount: Number(targetAmount),
-          currentAmount: Number(currentAmount),
+          currentAmount: linkedAccountId === undefined ? Number(currentAmount) : 0,
           currency,
+          ...(linkedAccountId !== undefined ? { linkedAccountId } : {}),
           targetDate: Timestamp.fromDate(targetDate),
           createdAt: Timestamp.fromDate(new Date())
         }
@@ -456,8 +483,9 @@ export const useGoalsStore = defineStore('goals', {
           userId: user.uid,
           name,
           targetAmount: Number(targetAmount),
-          currentAmount: Number(currentAmount),
+          currentAmount: linkedAccountId === undefined ? Number(currentAmount) : 0,
           currency,
+          ...(linkedAccountId !== undefined ? { linkedAccountId } : {}),
           targetDate,
           createdAt: new Date()
         }
@@ -475,18 +503,61 @@ export const useGoalsStore = defineStore('goals', {
     async updateGoalAmount(goalId: string, currentAmount: number): Promise<void> {
       this.loading = true
       try {
-        const { db } = await loadGoalsRuntime()
+        const { db, authStore } = await loadGoalsRuntime()
+        const workspaceId = authStore.activeWorkspaceId
+        if (!workspaceId) throw new Error('Workspace no inicializado')
         const goalRef = doc(db, 'goals', goalId)
-        await updateDoc(goalRef, {
-          currentAmount: Number(currentAmount)
+        const runGoalTransaction: SavingsGoalProgressTransactionRunner = update =>
+          runTransaction(db, transaction => update({
+            get: reference => transaction.get(reference as DocumentReference<DocumentData>),
+            update: (reference, patch) => { transaction.update(reference as DocumentReference<DocumentData>, patch) }
+          }))
+        const nextAmount = await updateVirtualGoalAmountAtomically({
+          runTransaction: runGoalTransaction,
+          goalReference: goalRef,
+          workspaceId,
+          amount: Number(currentAmount),
+          mode: 'set'
         })
 
         const index = this.goals.findIndex(g => g.id === goalId)
-        if (index !== -1) {
-          this.goals[index].currentAmount = Number(currentAmount)
+        if (authStore.activeWorkspaceId === workspaceId && index !== -1) {
+          this.goals[index].currentAmount = nextAmount
         }
       } catch (error) {
         console.error('Error al actualizar saldo de la meta:', error)
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+
+    async contributeToGoal(goalId: string, amount: number): Promise<void> {
+      this.loading = true
+      try {
+        const { db, authStore } = await loadGoalsRuntime()
+        const workspaceId = authStore.activeWorkspaceId
+        if (!workspaceId) throw new Error('Workspace no inicializado')
+        const goalRef = doc(db, 'goals', goalId)
+        const runGoalTransaction: SavingsGoalProgressTransactionRunner = update =>
+          runTransaction(db, transaction => update({
+            get: reference => transaction.get(reference as DocumentReference<DocumentData>),
+            update: (reference, patch) => { transaction.update(reference as DocumentReference<DocumentData>, patch) }
+          }))
+        const nextAmount = await updateVirtualGoalAmountAtomically({
+          runTransaction: runGoalTransaction,
+          goalReference: goalRef,
+          workspaceId,
+          amount: Number(amount),
+          mode: 'contribute'
+        })
+
+        const index = this.goals.findIndex(goal => goal.id === goalId)
+        if (authStore.activeWorkspaceId === workspaceId && index !== -1) {
+          this.goals[index].currentAmount = nextAmount
+        }
+      } catch (error) {
+        console.error('Error al aportar a la meta de ahorro:', error)
         throw error
       } finally {
         this.loading = false

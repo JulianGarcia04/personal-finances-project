@@ -7,10 +7,13 @@ import {
   cardBillingByAccount,
   computeNetWorth,
   convertToPrimary,
+  getSavingsGoalProgressAmount,
+  isSavingsGoalAccountLinkable,
   monthlyAverages,
   resolvePeriod,
   summarize,
-  SummaryTransaction
+  SummaryTransaction,
+  type SavingsGoalAccountSnapshot
 } from "./agentQueries";
 import { AgentToolError, NameMaps } from "./agentTools";
 
@@ -22,6 +25,47 @@ const NAMES: NameMaps = {
   accounts: new Map([["bank", "Banco"], ["usd", "Cuenta USD"], ["card", "Visa"], ["bridge", "Puente"], ["eur", "Cuenta EUR"]]),
   categories: new Map([["food", "Comida"], ["tech", "Tecnología"], ["fun", "Ocio"], ["salary", "Salario"]])
 };
+
+test("agent goal progress keeps legacy goals virtual and reads a validated linked account's live balance", () => {
+  const accounts = new Map([
+    ["goal-account", { workspaceId: "workspace-a", type: "savings", balance: 84, currency: "COP" }],
+    ["checking", { workspaceId: "workspace-a", type: "checking", balance: 100, currency: "COP" }],
+    ["rounding", { workspaceId: "workspace-a", type: "checking", balance: 1.005, currency: "COP" }]
+  ]);
+  const legacyGoal = { currentAmount: 12, currency: "COP" };
+  const linkedGoal = { currentAmount: 1, currency: "COP", linkedAccountId: "goal-account" };
+
+  assert.equal(getSavingsGoalProgressAmount(legacyGoal, "workspace-a", accounts), 12);
+  assert.equal(getSavingsGoalProgressAmount(linkedGoal, "workspace-a", accounts), 84);
+  assert.equal(getSavingsGoalProgressAmount(linkedGoal, "workspace-b", accounts), null);
+  assert.equal(getSavingsGoalProgressAmount({ linkedAccountId: "rounding", currency: "COP" }, "workspace-a", accounts), 1.01);
+  assert.equal(getSavingsGoalProgressAmount({ currentAmount: 1.005 }, "workspace-a", accounts), 1.01);
+});
+
+test("agent goal links accept valid pockets and reject wrong-workspace, wrong-currency, credit, bridge, and malformed pockets", () => {
+  const parent = { workspaceId: "workspace-a", type: "checking", currency: "COP", childAccountIds: ["pocket"] };
+  const pocket = { workspaceId: "workspace-a", type: "savings", currency: "COP", parentAccountId: "parent", balance: 60 };
+  const accounts = new Map<string, SavingsGoalAccountSnapshot>([["parent", parent], ["pocket", pocket]]);
+
+  assert.equal(isSavingsGoalAccountLinkable("pocket", "COP", "workspace-a", accounts), true);
+  assert.equal(isSavingsGoalAccountLinkable("pocket", "USD", "workspace-a", accounts), false);
+  assert.equal(isSavingsGoalAccountLinkable("pocket", "COP", "workspace-b", accounts), false);
+  assert.equal(isSavingsGoalAccountLinkable("pocket", "COP", "workspace-a", new Map<string, SavingsGoalAccountSnapshot>([
+    ["pocket", { ...pocket, balance: Number.NaN }]
+  ])), false);
+  assert.equal(isSavingsGoalAccountLinkable("pocket", "COP", "workspace-a", new Map<string, SavingsGoalAccountSnapshot>([
+    ["pocket", { ...pocket, balance: "60" }]
+  ])), false);
+  assert.equal(isSavingsGoalAccountLinkable("card", "COP", "workspace-a", new Map<string, SavingsGoalAccountSnapshot>([
+    ["card", { workspaceId: "workspace-a", type: "credit", currency: "COP", balance: -60 }]
+  ])), false);
+  assert.equal(isSavingsGoalAccountLinkable("bridge", "COP", "workspace-a", new Map<string, SavingsGoalAccountSnapshot>([
+    ["bridge", { workspaceId: "workspace-a", type: "checking", currency: "COP", mirror: { workspaceId: "workspace-b" } }]
+  ])), false);
+  assert.equal(isSavingsGoalAccountLinkable("pocket", "COP", "workspace-a", new Map<string, SavingsGoalAccountSnapshot>([
+    ["pocket", { ...pocket, parentAccountId: "missing" }]
+  ])), false);
+});
 
 const tx = (id: string, type: string, amount: number, iso: string, extra: Partial<SummaryTransaction> = {}): SummaryTransaction => ({
   id, type, amount, date: new Date(iso), currency: "COP", accountId: "bank", categoryId: "", description: id, ...extra
@@ -216,9 +260,68 @@ test("buildBudgetStatus compares category budgets and the expense limit with the
     { categoryId: "tech", categoryName: "Tecnología", limit: 150_000, spent: 100_000, remaining: 50_000, percentUsed: 67, exceeded: false },
     { categoryId: "ghost", categoryName: "Categoría desconocida", limit: 50_000, spent: 0, remaining: 50_000, percentUsed: 0, exceeded: false }
   ]);
-  assert.deepEqual(status.totals, { budget: 500_000, spent: 490_000, percentUsed: 80 });
+  assert.deepEqual(status.totals, { budget: 500_000, spent: 490_000, percentUsed: 98 });
   assert.deepEqual(status.expenseLimit, { limit: 400_000, spent: 490_020, remaining: -90_020, percentUsed: 123, exceeded: true });
   assert.equal(buildBudgetStatus({ categoryBudgets: {}, expenseLimit: 0, summary: month, names: NAMES }).expenseLimit, null);
+});
+
+test("S9: buildBudgetStatus converts categoryBudgets using categoryBudgetCurrency, disables comparison when unconfirmed/missing rate, and evaluates expenseLimit on all monthly expenses", () => {
+  const month = run({ preset: "this_month" }, { groupBy: "category" });
+  // Confirmed USD caps converted to COP at 4000; expenseLimit evaluated on allExpensesTotal (900_000), not default-only summary.totals.expenses.
+  const converted = buildBudgetStatus({
+    categoryBudgets: { food: 100 },
+    expenseLimit: 800_000,
+    summary: month,
+    allExpensesTotal: 900_000,
+    capCurrency: "USD",
+    primaryCurrency: "COP",
+    exchangeRates: { USD: 4000 },
+    names: NAMES
+  });
+  assert.equal(converted.categories[0].limit, 400_000);
+  assert.equal(converted.categories[0].percentUsed, 98);
+  assert.equal(converted.totals.budget, 400_000);
+  assert.equal(converted.expenseLimit?.spent, 900_000);
+  assert.equal(converted.expenseLimit?.exceeded, true);
+
+  // Unconfirmed capCurrency (null) or missing rate disables comparison instead of comparing 1:1.
+  const unconfirmed = buildBudgetStatus({
+    categoryBudgets: { food: 100 },
+    expenseLimit: null,
+    summary: month,
+    capCurrency: null,
+    primaryCurrency: "COP",
+    exchangeRates: { USD: 4000 },
+    names: NAMES
+  });
+  assert.equal(unconfirmed.categories[0].percentUsed, null);
+  assert.equal(unconfirmed.categories[0].remaining, null);
+  assert.equal(unconfirmed.totals.percentUsed, null);
+
+  const missingRate = buildBudgetStatus({
+    categoryBudgets: { food: 100 },
+    expenseLimit: null,
+    summary: month,
+    capCurrency: "EUR",
+    primaryCurrency: "COP",
+    exchangeRates: { USD: 4000 },
+    names: NAMES
+  });
+  assert.equal(missingRate.categories[0].percentUsed, null);
+  assert.equal(missingRate.totals.percentUsed, null);
+
+  // Zero-valued legacy caps do not inflate totals.percentUsed or mark exceeded.
+  const withZeroCap = buildBudgetStatus({
+    categoryBudgets: { tech: 200_000, food: 0 },
+    expenseLimit: null,
+    summary: month,
+    capCurrency: "COP",
+    primaryCurrency: "COP",
+    exchangeRates: {},
+    names: NAMES
+  });
+  assert.equal(withZeroCap.totals.percentUsed, 50);
+  assert.equal(withZeroCap.categories.find(c => c.categoryId === "food")?.exceeded, false);
 });
 
 test("computeNetWorth sums every account per currency and converts each currency total like the dashboard", () => {
@@ -367,6 +470,26 @@ test("byBudget counts a transfer from an unlinked account into a linked account 
     { id: "ventas", name: "Ventas Casa", kind: "event", funds: 1_200_000, spent: 300_000, available: 900_000 }
   ]);
   assert.equal(s.totals.income, 6_000_000);
+});
+
+test("byBudget never erases monthly expenses when a budget is funded only by transfers from unlinked accounts, and ignores credit cards in linkedAccountIds", () => {
+  const cardBudget = { id: "cardB", name: "Tarjeta", kind: "monthly", archived: false, linkedAccountIds: ["visaCard"] };
+  const rows = [
+    tx("salary", "income", 5_000_000, "2026-10-01T17:00:00Z", { categoryId: "salary" }),
+    tx("move", "transfer", 1_000_000, "2026-10-02T17:00:00Z", { accountId: "bank", toAccountId: "ventasAcct" }),
+    tx("spend", "expense", -1_000_000, "2026-10-03T17:00:00Z", { categoryId: "fun", budgetId: "ventas" }),
+    tx("repay", "transfer", 500_000, "2026-10-04T17:00:00Z", { accountId: "bank", toAccountId: "visaCard" }),
+    tx("cardSpend", "expense", -500_000, "2026-10-05T17:00:00Z", { categoryId: "food", budgetId: "cardB" })
+  ];
+  const s = runBudgets(rows, { preset: "this_month" }, {
+    budgetBreakdown: { budgets: [VENTAS, cardBudget], creditAccountIds: new Set(["visaCard"]) }
+  });
+  assert.equal(s.byBudget?.monthlyIncome, 5_000_000);
+  assert.equal(s.byBudget?.monthlyExpense, 1_500_000);
+  // Card repayment transfer must never show up as Fondos for cardBudget.
+  assert.deepEqual(s.byBudget?.budgets.find(b => b.id === "cardB"), {
+    id: "cardB", name: "Tarjeta", kind: "monthly", funds: null, spent: 500_000, available: null
+  });
 });
 
 test("byBudget uses all-time rows of event budgets and lists only active budgets with movements", () => {

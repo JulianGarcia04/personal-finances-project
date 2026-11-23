@@ -163,12 +163,17 @@ test('related transfer endpoints require eligible accounts in one workspace and 
   assert.equal(pocketUi.canTransferBetweenAccounts(pocket, otherBank, accounts), true)
   assert.equal(pocketUi.canTransferBetweenAccounts(bank, pocket, accounts), true)
   assert.equal(pocketUi.canTransferBetweenAccounts(pocket, otherCurrency, accounts), false)
-  assert.equal(pocketUi.canTransferBetweenAccounts(pocket, credit, accounts), false)
+  assert.equal(pocketUi.canTransferBetweenAccounts(pocket, credit, accounts), true, 'a pocket can pay a same-currency card')
   assert.equal(pocketUi.canTransferBetweenAccounts(pocket, mirror, accounts), false)
-  assert.equal(pocketUi.canTransferBetweenAccounts(otherBank, credit, accounts), true, 'ordinary transfers keep legacy eligibility')
+  assert.equal(pocketUi.canTransferBetweenAccounts(otherBank, credit, accounts), true, 'ordinary transfers keep same-currency eligibility')
+  assert.equal(pocketUi.canTransferBetweenAccounts(otherBank, otherCurrency, accounts), false, 'ordinary cross-currency transfers are blocked')
+  assert.equal(pocketUi.canTransferBetweenAccounts(otherCurrency, otherBank, accounts), false, 'ordinary cross-currency transfers are blocked in reverse')
+  assert.equal(pocketUi.canTransferBetweenAccounts(otherBank, mirror, accounts), false, 'ordinary transfers into a bridge are blocked')
+  assert.equal(pocketUi.canTransferBetweenAccounts(mirror, otherBank, accounts), false, 'ordinary transfers out of a bridge are blocked')
+  assert.equal(pocketUi.canTransferBetweenAccounts(otherBank, { ...otherBank, id: 'ws-2-bank', workspaceId: 'workspace-2' }, accounts), false, 'cross-workspace ordinary transfers are blocked')
 })
 
-test('bank accounts with pockets retain ordinary credit-card payment eligibility', () => {
+test('bank accounts with pockets and their pockets can pay credit cards, but cards cannot fund pockets', () => {
   const bank = account({ id: 'bank', type: 'savings', balance: 700, childAccountIds: ['pocket'] })
   const pocket = account({ id: 'pocket', type: 'savings', parentAccountId: bank.id, balance: 300 })
   const credit = account({ id: 'credit', type: 'credit', balance: -500, limit: 2_000 })
@@ -177,11 +182,32 @@ test('bank accounts with pockets retain ordinary credit-card payment eligibility
 
   assert.equal(pocketUi.canTransferBetweenAccounts(bank, credit, accounts), true)
   assert.equal(pocketUi.canTransferBetweenAccounts(credit, bank, accounts), true)
-  assert.equal(pocketUi.canTransferBetweenAccounts(pocket, credit, accounts), false)
+  assert.equal(pocketUi.canTransferBetweenAccounts(pocket, credit, accounts), true)
   assert.equal(pocketUi.canTransferBetweenAccounts(credit, pocket, accounts), false)
+  assert.equal(pocketUi.canTransferBetweenAccounts(pocket, { ...credit, currency: 'USD' }, accounts), false)
+  assert.equal(pocketUi.canTransferBetweenAccounts(pocket, { ...credit, workspaceId: 'other' }, accounts), false)
+  assert.equal(pocketUi.canTransferBetweenAccounts(pocket, {
+    ...credit,
+    mirror: { workspaceId: 'other', accountId: 'receivable', sourceAccountId: 'source' }
+  }, accounts), false)
   assert.equal(pocketUi.canTransferBetweenAccounts(bank, { ...credit, currency: 'USD' }, accounts), false)
   assert.equal(pocketUi.canTransferBetweenAccounts(bank, { ...credit, workspaceId: 'other' }, accounts), false)
   assert.deepEqual(accounts, before)
+})
+
+test('only registered pockets can pay ordinary credit cards', () => {
+  const bank = account({ id: 'bank', type: 'savings', balance: 700, childAccountIds: ['pocket'] })
+  const pocket = account({ id: 'pocket', type: 'savings', parentAccountId: bank.id, balance: 300 })
+  const credit = account({ id: 'credit', type: 'credit', balance: -500, limit: 2_000 })
+  const orphan = account({ id: 'orphan', type: 'savings', parentAccountId: 'missing-bank', balance: 10 })
+  const foreignBank = account({ id: 'foreign-bank', type: 'savings', workspaceId: 'other', balance: 0, childAccountIds: ['foreign-pocket'] })
+  const foreignPocket = account({ id: 'foreign-pocket', type: 'savings', parentAccountId: foreignBank.id, balance: 10 })
+  const accounts = [bank, pocket, credit, orphan, foreignBank, foreignPocket]
+
+  assert.equal(pocketUi.canTransferBetweenAccounts(orphan, credit, accounts), false)
+  assert.equal(pocketUi.canTransferBetweenAccounts(foreignPocket, credit, accounts), false)
+  assert.equal(pocketUi.canTransferBetweenAccounts(pocket, { ...credit, childAccountIds: ['x'] }, accounts), false)
+  assert.equal(pocketUi.canTransferBetweenAccounts(pocket, { ...credit, parentAccountId: bank.id }, accounts), false)
 })
 
 test('display totals exclude malformed foreign or unregistered child records', () => {
