@@ -554,3 +554,33 @@ test('S12: Firestore allows virtual and compatible linked goals, but rejects inv
   )
   assert.equal((await adminDb.collection('goals').doc(validRootGoalId).get()).data().linkedAccountId, sameCurrency.id)
 })
+
+test('movements of a deleted account stay as history with a clear message instead of permission-denied', async () => {
+  const { accountsStore, transactionsStore, adminDb, identity, workspaceId } = fixture
+  const { Timestamp } = requireFunctions('firebase-admin/firestore')
+  const bank = await accountsStore.addAccount({ name: 'History bank', type: 'checking', balance: 1_000, currency: 'COP' })
+  const date = new Date('2026-05-10T12:00:00.000Z')
+  const seed = async (id, data) => adminDb.collection('transactions').doc(id).set({
+    workspaceId, userId: identity.user.uid, categoryId: 'food', createdAt: Timestamp.now(), currency: 'COP',
+    date: Timestamp.fromDate(date), description: 'History', receiptUrl: null, toAccountId: null, ...data
+  })
+  const deletedAccountId = `deleted-account-${Date.now()}`
+  const expenseId = `history-expense-${Date.now()}`
+  const transferId = `history-transfer-${Date.now()}`
+  await seed(expenseId, { accountId: deletedAccountId, amount: -50, type: 'expense' })
+  await seed(transferId, { accountId: bank.id, toAccountId: deletedAccountId, amount: 100, type: 'transfer', categoryId: '' })
+  await accountsStore.fetchAccounts()
+  await transactionsStore.fetchTransactions()
+
+  for (const id of [expenseId, transferId]) {
+    const stored = (await adminDb.collection('transactions').doc(id).get()).data()
+    await assert.rejects(transactionsStore.deleteTransaction(id), /La cuenta de este movimiento fue eliminada/)
+    await assert.rejects(transactionsStore.updateTransaction(id, {
+      accountId: stored.accountId, toAccountId: stored.toAccountId, amount: stored.amount, type: stored.type,
+      description: 'Renamed', categoryId: stored.categoryId, date, receiptUrl: null, notes: null, installments: 1
+    }), /La cuenta de este movimiento fue eliminada/)
+    assert.deepEqual((await adminDb.collection('transactions').doc(id).get()).data(), stored)
+  }
+  assert.equal((await adminDb.collection('accounts').doc(bank.id).get()).data().balance, 1_000)
+})
+

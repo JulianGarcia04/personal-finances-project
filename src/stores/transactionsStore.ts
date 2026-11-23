@@ -22,6 +22,7 @@ import { createCardBillingLookup, expenseAmountForDate, getInstallmentCount } fr
 import { parseDateOnly, toDateValue } from '@/lib/dates'
 import { roundMoney } from '@/lib/money'
 import { planTransferDirection, resolveStatementImportId, type StatementImportType } from '@/lib/statementImport'
+import { DELETED_ACCOUNT_HISTORY_MESSAGE, referencesDeletedAccount } from '@/lib/deletedAccountHistory'
 import { createExpenseBudgetAssigner, selectBudgetExpenses } from '@/lib/transactionClassification'
 import { budgetChangeForEdit, budgetIdToPersist, type EditBudgetChange } from '@/lib/budgets'
 import { 
@@ -174,6 +175,26 @@ async function callBridgeSettlement(request: BridgeSettlementRequest): Promise<v
 
 function importContextIsCurrent(userId: string, workspaceId: string): boolean {
   return auth.currentUser?.uid === userId && useAuthStore().activeWorkspaceId === workspaceId
+}
+
+// Reading a deleted account is denied by the rules, so a movement that references one is
+// rejected up front with a clear message instead of a Firestore permission error.
+async function assertAccountsStillExist(
+  movement: Pick<Transaction, 'workspaceId' | 'type' | 'accountId' | 'toAccountId'>
+): Promise<void> {
+  const accountsStore = useAccountsStore()
+  const authStore = useAuthStore()
+  const referencesDeleted = () => referencesDeletedAccount(
+    movement,
+    accountsStore.accounts,
+    accountsStore.loadedWorkspaceId === authStore.activeWorkspaceId ? accountsStore.loadedWorkspaceId : null
+  )
+  if (!referencesDeleted()) return
+  // Another member may have added the account after the last load: refuse only when a
+  // successful refresh still cannot find it.
+  if (await accountsStore.fetchAccounts() && referencesDeleted()) {
+    throw new Error(DELETED_ACCOUNT_HISTORY_MESSAGE)
+  }
 }
 
 async function commitPocketMovement(options: {
@@ -836,6 +857,7 @@ export const useTransactionsStore = defineStore('transactions', {
     async deleteTransaction(transactionId: string): Promise<void> {
       const tx = this.transactions.find(t => t.id === transactionId)
       if (!tx) return
+      await assertAccountsStillExist(tx)
       if (!canDeleteMirrorTransaction(tx)) {
         throw new Error(
           tx.reversedBy || tx.reversedAt
@@ -1731,6 +1753,7 @@ export const useTransactionsStore = defineStore('transactions', {
       const txIndex = this.transactions.findIndex(t => t.id === transactionId)
       if (txIndex === -1) throw new Error('Transacción no encontrada en el estado local')
       const oldTx = this.transactions[txIndex]
+      await assertAccountsStillExist(oldTx)
 
       // Una pata espejo nunca se edita sola: editarla así desincronizaría el otro workspace.
       if (oldTx.mirrorOf) return this.updateSharedExpense(oldTx, updates)

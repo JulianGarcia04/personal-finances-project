@@ -4,6 +4,7 @@ import { test } from 'node:test'
 import ts from 'typescript'
 import { DEFAULT_MONTHLY_BUDGET_ID, budgetChangeForEdit, canAssignBudget, canCarryBudget, resolveBudgetId } from '../lib/budgets.ts'
 import { toDateValue, toLocalDateKey } from '../lib/dates.ts'
+import { DELETED_ACCOUNT_HISTORY_MESSAGE, referencesDeletedAccount } from '../lib/deletedAccountHistory.ts'
 
 const componentSource = readFileSync(new URL('./Transactions.vue', import.meta.url), 'utf8')
 const templateEnd = componentSource.indexOf('<script setup lang="ts">')
@@ -215,12 +216,96 @@ test('pre-fills the edit form with the local calendar day of an evening movement
     showEditModal: ref(false),
     resolveBudgetId,
     toDateValue,
-    toLocalDateKey
+    toLocalDateKey,
+    referencesDeletedAccount,
+    DELETED_ACCOUNT_HISTORY_MESSAGE,
+    accountsStore: { accounts: [{ id: 'a1' }], fetchAccounts: async () => true },
+    loadedAccountsWorkspaceId: () => 'ws-1',
+    alert: () => assert.fail('an existing account must open the edit form')
   })
 
   openEditModal({ id: 'tx-1', type: 'expense', accountId: 'a1', amount: -10, description: 'Dinner', date: new Date(2026, 9, 15, 21, 0) })
 
   assert.equal(editTx.value.date, '2026-10-15')
+})
+
+const deletedAccountEditHarness = (refresh: () => Promise<boolean>) => {
+  const ref = <Value>(value: Value) => ({ value })
+  const editTx = ref<Record<string, unknown>>({})
+  const editingTxId = ref('')
+  const alerts: string[] = []
+  const accountsStore = { accounts: [{ id: 'a1' }], fetchAccounts: refresh }
+  const openEditModal = evaluateComponentFunction<(tx: Record<string, unknown>) => Promise<void>>('openEditModal', {
+    editingTxId,
+    editBudgetId: ref(''),
+    editingOriginalBudgetId: ref(''),
+    editingOriginalType: ref(''),
+    editTx,
+    editUploadedReceiptUrl: ref(''),
+    editSelectedFileName: ref(''),
+    editReceiptError: ref(''),
+    showEditModal: ref(false),
+    resolveBudgetId,
+    toDateValue,
+    toLocalDateKey,
+    referencesDeletedAccount,
+    DELETED_ACCOUNT_HISTORY_MESSAGE,
+    accountsStore,
+    loadedAccountsWorkspaceId: () => 'ws-1',
+    alert: (message: string) => alerts.push(message)
+  })
+  return { openEditModal, accountsStore, alerts, editingTxId, editTx }
+}
+
+test('a movement of a deleted account explains it is history instead of opening the edit form', async () => {
+  let refreshes = 0
+  const harness = deletedAccountEditHarness(async () => {
+    refreshes++
+    harness.accountsStore.accounts = [{ id: 'a1' }, { id: 'late' }]
+    return true
+  })
+
+  await harness.openEditModal({ id: 'tx-2', workspaceId: 'ws-1', type: 'expense', accountId: 'deleted', amount: -10, description: 'Old', date: new Date(2026, 4, 10) })
+
+  assert.deepEqual(harness.alerts, [DELETED_ACCOUNT_HISTORY_MESSAGE])
+  assert.equal(refreshes, 1, 'accounts are refreshed once before refusing')
+  assert.equal(harness.editingTxId.value, '')
+  assert.deepEqual(harness.editTx.value, {})
+
+  // An account another member created after the last load is found by the refresh.
+  await harness.openEditModal({ id: 'tx-3', workspaceId: 'ws-1', type: 'expense', accountId: 'late', amount: -10, description: 'New', date: new Date(2026, 10, 10) })
+  assert.equal(harness.editingTxId.value, 'tx-3')
+  assert.deepEqual(harness.alerts, [DELETED_ACCOUNT_HISTORY_MESSAGE])
+})
+
+test('a failed account refresh never reports an existing account as deleted', async () => {
+  const harness = deletedAccountEditHarness(async () => false)
+
+  await harness.openEditModal({ id: 'tx-4', workspaceId: 'ws-1', type: 'expense', accountId: 'late', amount: -10, description: 'New', date: new Date(2026, 10, 10) })
+
+  assert.deepEqual(harness.alerts, [])
+  assert.equal(harness.editingTxId.value, 'tx-4')
+})
+
+test('a row left over from the previous workspace is not judged against the new workspace accounts', async () => {
+  const harness = deletedAccountEditHarness(async () => assert.fail('no refresh is needed for another workspace'))
+
+  await harness.openEditModal({ id: 'tx-5', workspaceId: 'ws-0', type: 'expense', accountId: 'old-bank', amount: -10, description: 'Old workspace', date: new Date(2026, 10, 10) })
+
+  assert.deepEqual(harness.alerts, [])
+  assert.equal(harness.editingTxId.value, 'tx-5')
+})
+
+test('a missing account is labelled as deleted only once its workspace accounts have loaded', () => {
+  const accountName = (loadedWorkspaceId: string | null) => evaluateComponentFunction<(id: string, workspaceId?: string) => string>('getAccountName', {
+    accountsStore: { accounts: [], getAccountById: () => undefined },
+    getAccountDisplayLabel: () => 'unused',
+    loadedAccountsWorkspaceId: () => loadedWorkspaceId
+  })
+
+  assert.equal(accountName('ws-1')('deleted', 'ws-1'), 'Cuenta eliminada')
+  assert.equal(accountName(null)('deleted', 'ws-1'), 'Desconocida')
+  assert.equal(accountName('ws-1')('deleted', 'ws-0'), 'Desconocida')
 })
 
 test('date input defaults never use the UTC day', () => {

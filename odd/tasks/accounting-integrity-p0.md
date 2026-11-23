@@ -93,4 +93,30 @@ como puedo hacer pagos a mi tarjeta ?" Evidence: `src/lib/pockets.ts:90-112`, `d
   - The real `firebase deploy --project vault-41b34 --only firestore:rules,functions,hosting:app` exited 0. It released the rules, updated 9 functions (including `importPocketStatement`, `chatWithAgent`, `bridgeSettlement`) and released `hosting[vault-41b34]`. The landing was not redeployed.
   - Live check: `vault-41b34.web.app` and `app.finances.lynor.cloud` both serve `assets/index-DToJ_GM2.js`, the same hash as the local build, and that file contains the T9 message.
   - Not verified in production: real user flows (pocket → card payment, linked goals, keyed import replay), and whether legacy production documents still pass the tightened rules.
+- **L17 (2026-11-23, user, verbatim):** "si" to pushing `main`. `main` was pushed (`da8f251..bbf836e`), which supersedes the "Not pushed" note in L16. CI run `45187958776` "Deploy to Firebase Hosting on merge" ended success, and the live bundle is still `index-DToJ_GM2.js`.
+- **L18 (2026-11-23, user, verbatim):** "comprueba los datos en producción para evitar \"permiso denegado\"".
+  - Read-only scan of `vault-41b34` (Admin SDK + ADC) against every condition the deployed rules newly require of stored docs:
+    - Accounts with a missing or non-ISO currency: 0.
+    - Credit cards carrying `linkedBudgetId`: 0.
+    - Orphan budget links: 0.
+    - Cross-currency settlement or mirror legs: 0.
+    - Invalid linked goals: 0.
+  - 4 reversal-related rows are undeletable by design (S3).
+  - 23 orphan transactions (2026-05..06, one workspace, one deleted account) are denied on edit and delete under BOTH the old and the new rules: the rules deny reading a missing account. This is pre-existing.
+  - Emulator probes ruled out the expression-limit risk for metadata-only pocket edits.
+- **L19 (2026-11-23, user, verbatim):** "vamos por la opción 1".
+  - Decision: keep the 23 orphans as read-only history and show a clear message instead of "permiso denegado". No data or rules change.
+  - Branch: `fix/orphan-transaction-history`.
+  - Changes:
+    - `referencesDeletedAccount` and `DELETED_ACCOUNT_HISTORY_MESSAGE` (`src/lib/deletedAccountHistory.ts`).
+    - `accountsStore.loadedWorkspaceId`.
+    - A guard at the top of `deleteTransaction` and `updateTransaction`. It refreshes the accounts once before refusing, so an account created by another member is not treated as deleted.
+    - `Transactions.vue`: the edit modal shows the message, and rows show "Cuenta eliminada".
+  - RED: the helper module was missing. GREEN: `pnpm test` 415/415, build ok, emulator pockets/imports/bridges/accounting 65/65, including the new integration test.
+  - Risk: item 3 (shared edit/delete path).
+  - Independent false-positive verifier: no app-created transaction shape triggers the guard. It found two race-only false positives:
+    - A row left over from the previous workspace was judged against the new workspace's accounts.
+    - A failed account refresh still refused the edit.
+  - Both were fixed in one correction: the guard now only judges movements of the loaded, active workspace, and `fetchAccounts` returns true only on success, so a refusal requires a successful refresh. The verifier's probes were added as view regression tests.
+  - Recheck: `pnpm test` 417/417, build ok, emulator 65/65.
 
