@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
+import * as Vue from 'vue'
+import { compileScript, parse } from 'vue/compiler-sfc'
+import * as Router from 'vue-router'
 import ts from 'typescript'
 import { toDateValue, toLocalDateKey } from '../lib/dates.ts'
 import { createCardBillingLookup, expenseAmountForDate } from '../lib/installments.ts'
@@ -625,4 +629,231 @@ test('budget planner labels show the configured percentages, not fixed 50/30/20'
 test('plan vs real title shows the configured split, not a fixed 50/30/20', () => {
   assertContains(/Tu plan \{\{ needsPercent \}\}\/\{\{ wantsPercent \}\}\/\{\{ savingsPercent \}\} vs este mes \(real\)/, 'the title must show the configured percentages')
   assertNotContains(/Tu plan 50\/30\/20 vs este mes/, 'the title must not show a fixed split')
+})
+
+// Render the real SFCs and RouterLinks without a browser, Firebase or a canvas backend.
+class ViewNode {
+  parent: ViewNode | null = null
+  children: ViewNode[] = []
+  props: Record<string, any> = {}
+  chartData?: number[]
+  tag: string
+  text: string
+  constructor(tag: string, text = '') { this.tag = tag; this.text = text }
+  get content(): string { return (this.text + this.children.map(child => child.content).join('')).trim() }
+  get descendants(): ViewNode[] { return this.children.flatMap(child => [child, ...child.descendants]) }
+  focus() { focusedNode = this }
+  get focused() { return focusedNode === this }
+  getContext() { return this }
+  closest(selector: string): ViewNode | null {
+    return selector === `#${this.props.id}` ? this : this.parent?.closest(selector) ?? null
+  }
+  find(tag: string, text: string): ViewNode {
+    const node = this.descendants.find(node => node.tag === tag && node.content === text)
+    assert.ok(node, `expected <${tag}> with text ${JSON.stringify(text)}`)
+    return node
+  }
+  async click() {
+    assert.equal(typeof this.props.onClick, 'function', `expected a clickable <${this.tag}>`)
+    await this.props.onClick({ button: 0, currentTarget: this, preventDefault() {} })
+    await Vue.nextTick()
+  }
+  getAttribute(name: string) { return this.props[name] }
+}
+let focusedNode: ViewNode | null = null
+
+const detach = (node: ViewNode) => {
+  if (!node.parent) return
+  node.parent.children.splice(node.parent.children.indexOf(node), 1)
+  node.parent = null
+}
+const renderer = Vue.createRenderer<ViewNode, ViewNode>({
+  createElement: tag => Vue.markRaw(new ViewNode(tag)),
+  createText: text => new ViewNode('#text', text),
+  createComment: () => new ViewNode('#comment'),
+  insert(node, parent, anchor = null) {
+    detach(node)
+    node.parent = parent
+    if (anchor) parent.children.splice(parent.children.indexOf(anchor), 0, node)
+    else parent.children.push(node)
+  },
+  remove: detach,
+  parentNode: node => node.parent,
+  nextSibling: node => node.parent?.children[node.parent.children.indexOf(node) + 1] ?? null,
+  setText(node, text) { node.text = text },
+  setElementText(node, text) { node.text = text; node.children = [] },
+  patchProp(node, key, _previous, next) { node.props[key] = next }
+})
+
+const requireModule = createRequire(import.meta.url)
+const noOp = () => undefined
+const MockSheet = (props: { open: boolean; title: string }, { slots }: Vue.SetupContext) =>
+  props.open ? Vue.h('div', { role: 'dialog', 'aria-label': props.title }, [slots.default?.(), slots.footer?.()]) : null
+class MockChart {
+  static register() {}
+  private canvas: ViewNode
+  constructor(canvas: ViewNode, config: { data: { datasets: { data: number[] }[] } }) {
+    this.canvas = canvas
+    canvas.chartData = config.data.datasets[0].data
+  }
+  destroy() { this.canvas.chartData = undefined }
+}
+
+const mountNavigation = async (t: import('node:test').TestContext, path: string, showSidebar = false) => {
+  const account = { id: 'cash', name: 'Efectivo', type: 'cash', currency: 'COP', balance: 100 }
+  const stores = {
+    authStore: { isAuthenticated: true, activeWorkspaceId: 'workspace-a' },
+    settingsStore: { currency: 'COP', loadSettings: noOp },
+    workspacesStore: { workspaces: [], activeWorkspaceProfiles: {} },
+    accountsStore: { accounts: [account], netWorthByCurrency: { COP: 100 }, getAccountById: () => account, fetchAccounts: noOp },
+    transactionsStore: { transactions: [], categories: [], fetchCategories: noOp, fetchTransactions: noOp },
+    goalsStore: {
+      goals: [{ id: 'trip', name: 'Viaje', targetAmount: 100, currentAmount: 25, currency: 'COP', targetDate: new Date(2030, 0, 1) }],
+      categoryBudgets: { food: 100 }, categoryBudgetCurrency: { status: 'confirmed', code: 'COP' },
+      operatingBudgets: [], exchangeRates: {}, convertToPrimary: (amount: number) => amount,
+      budgetIncome: 100, budgetNeedsPercent: 55, budgetWantsPercent: 25, budgetSavingsPercent: 20,
+      fetchGoals: noOp, loadBudgetSettings: noOp
+    }
+  }
+  const loadComponent = (file: string) => {
+    const source = readFileSync(new URL(file, import.meta.url), 'utf8')
+    const { descriptor, errors } = parse(source, { filename: file })
+    assert.deepEqual(errors, [])
+    const { content } = compileScript(descriptor, { id: file, inlineTemplate: true })
+    const script = ts.transpile(content, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS })
+    const exports = {} as { default: Vue.Component }
+    new Function('exports', 'require', script)(exports, (id: string) => {
+      if (id === 'vue') return { ...Vue, Transition: (_: unknown, { slots }: Vue.SetupContext) => slots.default?.(), vModelText: {}, vModelSelect: {} }
+      if (id === 'vue-router') return Router
+      if (id === 'chart.js') return { Chart: MockChart, registerables: [] }
+      if (id === '@/lib/analytics') return { track: noOp }
+      if (id === '@/components/ui/useBodyScrollLock') return { useBodyScrollLock: noOp }
+      if (id.endsWith('/BaseSheet.vue')) return { default: MockSheet }
+      if (id.endsWith('/BudgetBasisSwitch.vue')) return { default: () => Vue.h('div', 'Consumo del mes / Pagos del mes') }
+      if (id.endsWith('.vue')) return { default: () => null }
+      if (id.startsWith('@/stores/')) {
+        const name = id.slice('@/stores/'.length) as keyof typeof stores
+        return { [`use${name[0].toUpperCase()}${name.slice(1)}`]: () => stores[name] }
+      }
+      return requireModule(id.startsWith('@/') ? `../${id.slice(2)}.ts` : id)
+    })
+    return exports.default
+  }
+  const router = Router.createRouter({
+    history: Router.createMemoryHistory(),
+    routes: [
+      { path: '/', name: 'Dashboard', component: () => Promise.resolve(loadComponent('./Dashboard.vue')) },
+      { path: '/goals', name: 'Goals', component: () => Promise.resolve(loadComponent('./Goals.vue')) },
+      ...['accounts', 'transactions', 'settings'].map(path => ({ path: `/${path}`, component: () => null }))
+    ]
+  })
+  await router.push(path)
+  const root = new ViewNode('root')
+  const sidebar = showSidebar ? loadComponent('../components/Sidebar.vue') : null
+  const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document')
+  if (sidebar) {
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: { get activeElement() { return focusedNode }, addEventListener: noOp, removeEventListener: noOp }
+    })
+  }
+  const app = renderer.createApp({ render: () => [sidebar && Vue.h(sidebar), Vue.h(Router.RouterView)] })
+  t.after(() => {
+    try { app.unmount() } finally {
+      focusedNode = null
+      if (sidebar) {
+        if (documentDescriptor) Object.defineProperty(globalThis, 'document', documentDescriptor)
+        else Reflect.deleteProperty(globalThis, 'document')
+      }
+    }
+  })
+  app.use(router).mount(root)
+  await new Promise(setImmediate)
+  const stepHistory = async (delta: number) => {
+    await new Promise<void>(resolve => {
+      const stop = router.afterEach(() => { stop(); resolve() })
+      router.go(delta)
+    })
+    await Vue.nextTick()
+  }
+  return { root, router, stepHistory }
+}
+
+test('P1 S1: section links follow direct URLs and history, with separate workflows and a live planner', async t => {
+  const { root, router, stepHistory } = await mountNavigation(t, '/goals?tab=savings')
+  const nodes = () => root.descendants
+  const sectionLinks = () => nodes().filter(node => node.tag === 'a' && node.props.href?.startsWith('/goals'))
+  const currentLinks = () => sectionLinks().filter(node => node.props['aria-current'] === 'page').map(node => node.props.href)
+  const assertSavings = () => {
+    assert.ok(root.find('h2', 'Metas de ahorro').focused)
+    root.find('h4', 'Viaje')
+    assert.deepEqual(currentLinks(), ['/goals?tab=savings'])
+    assert.ok(!nodes().some(node => node.tag === 'canvas' || node.props['data-testid'] === 'goals-budget-basis'))
+    assert.ok(!nodes().some(node => node.tag === 'button' && node.content === 'Nuevo presupuesto'))
+  }
+  assertSavings()
+  await root.find('button', 'Nuevo Objetivo').click()
+  assert.ok(nodes().some(node => node.props.id === 'create-goal-form'))
+  await root.find('button', 'Cancelar').click()
+  const contribute = nodes().find(node => node.props['aria-label'] === 'Aportar saldo')
+  assert.ok(contribute)
+  await contribute.click()
+  assert.ok(nodes().some(node => node.props.id === 'contribute-goal-form'))
+  await root.find('button', 'Cancelar').click()
+
+  await root.find('a', 'Presupuestos').click()
+  assert.equal(router.currentRoute.value.fullPath, '/goals')
+  const assertBudgets = () => {
+    assert.ok(root.find('h2', 'Presupuestos').focused)
+    assert.deepEqual(currentLinks(), ['/goals'])
+    assert.deepEqual(nodes().find(node => node.tag === 'canvas')?.chartData, [55, 25, 20])
+    assert.ok(nodes().some(node => node.props['data-testid'] === 'goals-budget-basis'))
+    assert.ok(!nodes().some(node => node.props['aria-label'] === 'Aportar saldo' || node.content === 'Nuevo Objetivo'))
+  }
+  assertBudgets()
+  const previousCanvas = nodes().find(node => node.tag === 'canvas')!
+  await root.find('button', 'Nuevo presupuesto').click()
+  assert.ok(nodes().some(node => node.props.id === 'operating-budget-form'))
+  await stepHistory(-1)
+  assertSavings()
+  assert.equal(previousCanvas.chartData, undefined, 'leaving budgets must release the canvas')
+  assert.ok(!nodes().some(node => node.props.role === 'dialog'))
+  await stepHistory(1)
+  assertBudgets()
+  assert.ok(!nodes().some(node => node.props.role === 'dialog'), 'history must not reopen a sheet from another section')
+  await router.push('/goals?tab=unknown')
+  assertBudgets()
+})
+
+test('P1 S1: Dashboard links open savings and retain both bare budget destinations', async t => {
+  const { root, router } = await mountNavigation(t, '/')
+  await root.find('button', 'Por presupuesto').click()
+  assert.equal(root.find('a', 'Ver presupuestos').props.href, '/goals')
+  assert.equal(root.find('a', 'Ajustar').props.href, '/goals')
+  await root.find('a', 'Ver metas').click()
+  assert.equal(router.currentRoute.value.fullPath, '/goals?tab=savings')
+  root.find('h2', 'Metas de ahorro')
+})
+
+test('P1 S1: sidebar drawer and mobile shortcuts identify the correct section', async t => {
+  const { root, router } = await mountNavigation(t, '/goals', true)
+  const drawer = root.descendants.find(node => node.props.id === 'app-drawer')!
+  const more = root.find('button', 'Más')
+  const activeDrawerPaths = () => drawer.descendants.filter(node => node.tag === 'a' && node.props['aria-current'] === 'page').map(node => node.props.href)
+  const budgetShortcut = root.descendants.find(node => node.tag === 'a' && node.props.href === '/goals' && !drawer.descendants.includes(node))
+  assert.ok(budgetShortcut)
+  root.find('h2', 'Presupuestos')
+  assert.deepEqual(activeDrawerPaths(), ['/goals'])
+  assert.equal(budgetShortcut.props['aria-current'], 'page')
+  await more.click()
+  assert.equal(more.props['aria-expanded'], true)
+  assert.ok(drawer.descendants.find(node => node.props['aria-label'] === 'Cerrar menú')?.focused)
+  await drawer.find('a', 'Metas de ahorro').click()
+  assert.equal(router.currentRoute.value.fullPath, '/goals?tab=savings')
+  assert.equal(more.props['aria-expanded'], false)
+  assert.deepEqual(activeDrawerPaths(), ['/goals?tab=savings'])
+  assert.equal(budgetShortcut.props['aria-current'], undefined)
+  await budgetShortcut.click()
+  assert.equal(router.currentRoute.value.fullPath, '/goals')
+  assert.equal(budgetShortcut.props['aria-current'], 'page')
 })

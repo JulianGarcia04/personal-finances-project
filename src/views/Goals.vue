@@ -1,37 +1,58 @@
 <template>
   <div class="max-w-6xl mx-auto space-y-8 pb-12">
-    <!-- Header -->
-    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-      <div class="min-w-0">
-        <h2 class="font-display font-bold text-2xl sm:text-3xl text-text-primary tracking-tight">
-          Objetivos & Presupuesto
-        </h2>
-        <p class="text-text-secondary text-sm mt-1">Crea metas de ahorro a largo plazo y define la distribución de tus ingresos mensuales.</p>
-      </div>
+    <div class="space-y-5">
+      <nav aria-label="Presupuestos y metas de ahorro" class="grid grid-cols-2 sm:inline-grid gap-1.5 rounded-xl border border-border bg-slate-950/45 p-1.5">
+        <RouterLink v-for="section in sections" :key="section.id" :to="section.to" custom v-slot="{ href, navigate }">
+          <a
+            :href="href"
+            @click="navigate"
+            :aria-current="activeSection === section ? 'page' : undefined"
+            :class="[
+              'min-h-11 flex items-center justify-center gap-2 rounded-lg px-2.5 sm:px-4 py-2 text-center text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-emerald',
+              activeSection === section ? 'bg-accent-emerald/10 text-accent-emerald' : 'text-text-secondary hover:bg-white/5 hover:text-text-primary'
+            ]"
+          >
+            <component :is="section.icon" class="hidden min-[375px]:block w-4 h-4 shrink-0" aria-hidden="true" />
+            <span>{{ section.label }}</span>
+          </a>
+        </RouterLink>
+      </nav>
 
-      <div class="grid grid-cols-1 min-[380px]:grid-cols-2 sm:flex sm:flex-wrap items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div class="min-w-0">
+          <h2
+            :key="activeSection.id"
+            ref="sectionHeading"
+            tabindex="-1"
+            class="scroll-mt-[calc(5rem+env(safe-area-inset-top))] lg:scroll-mt-6 font-display font-bold text-2xl sm:text-3xl text-text-primary tracking-tight focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent-emerald"
+          >
+            {{ activeSection.label }}
+          </h2>
+          <p class="text-text-secondary text-sm mt-1">{{ activeSection.description }}</p>
+        </div>
+
         <button
-          @click="openBudgetModal()"
-          class="inline-flex items-center justify-center min-h-11 space-x-2 px-4 py-2.5 sm:py-3 rounded-xl bg-slate-900 border border-border text-text-primary font-display font-semibold text-sm hover:bg-slate-800 transition-all cursor-pointer"
-        >
-          <PlusIcon class="w-4 h-4 shrink-0 text-accent-emerald" />
-          <span class="truncate">Nuevo presupuesto</span>
-        </button>
-        <button 
+          v-if="isSavingsSection"
           @click="showCreateModal = true"
-          class="inline-flex items-center justify-center min-h-11 space-x-2 px-5 py-2.5 sm:py-3 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm transition-all shadow-glow-emerald cursor-pointer"
+          class="shrink-0 inline-flex items-center justify-center min-h-11 gap-2 px-5 py-2.5 sm:py-3 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm transition-all shadow-glow-emerald cursor-pointer"
         >
           <PlusIcon class="w-4 h-4 shrink-0" />
-          <span class="truncate">Nuevo Objetivo</span>
+          <span>Nuevo Objetivo</span>
+        </button>
+        <button
+          v-else
+          @click="openBudgetModal()"
+          class="shrink-0 inline-flex items-center justify-center min-h-11 gap-2 px-4 py-2.5 sm:py-3 rounded-xl bg-slate-900 border border-border text-text-primary font-display font-semibold text-sm hover:bg-slate-800 transition-all cursor-pointer"
+        >
+          <PlusIcon class="w-4 h-4 shrink-0 text-accent-emerald" />
+          <span>Nuevo presupuesto</span>
         </button>
       </div>
     </div>
 
-    <!-- Main Grid layout -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-      
-      <!-- Left: Savings Goals (2 cols) -->
-      <div class="lg:col-span-2 space-y-6">
+    <div class="grid min-w-0">
+      <!-- Savings goal cards -->
+      <div v-if="isSavingsSection" class="space-y-6">
         <h3 class="font-display font-bold text-xl text-text-primary flex items-center space-x-2">
           <TargetIcon class="w-5 h-5 text-accent-emerald" />
           <span>Tus Metas de Ahorro</span>
@@ -135,8 +156,8 @@
         </div>
       </div>
 
-      <!-- Right: Budget Planner (1 col) -->
-      <div class="space-y-6">
+      <!-- Budget planner -->
+      <div v-else class="w-full max-w-lg space-y-6">
         <h3 class="font-display font-bold text-xl text-text-primary flex items-center space-x-2">
           <PiggyBankIcon class="w-5 h-5 text-accent-emerald" />
           <span>Plan de Presupuesto</span>
@@ -247,12 +268,12 @@
     </div>
 
     <!-- Additional operating budgets; the protected legacy baseline remains below. -->
-    <section class="glass-panel rounded-2xl p-4 sm:p-5 border border-white/5 space-y-3" data-testid="goals-budget-basis" aria-labelledby="budget-basis-heading">
+    <section v-if="!isSavingsSection" class="glass-panel rounded-2xl p-4 sm:p-5 border border-white/5 space-y-3" data-testid="goals-budget-basis" aria-labelledby="budget-basis-heading">
       <h3 id="budget-basis-heading" class="font-display font-semibold text-sm text-text-primary">Cómo se cuentan los gastos en tus presupuestos</h3>
       <BudgetBasisSwitch />
     </section>
 
-    <section class="space-y-5" aria-labelledby="additional-budgets-heading">
+    <section v-if="!isSavingsSection" class="space-y-5" aria-labelledby="additional-budgets-heading">
       <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div class="min-w-0">
           <h3 id="additional-budgets-heading" class="font-display font-bold text-lg sm:text-xl text-text-primary flex items-center gap-2">
@@ -412,8 +433,8 @@
       </div>
     </section>
 
-    <!-- Category Budgets (presupuesto mensual recurrente) -->
-    <div class="space-y-6">
+    <!-- Recurring monthly category budgets -->
+    <div v-if="!isSavingsSection" class="space-y-6">
       <h3 class="font-display font-bold text-lg sm:text-xl text-text-primary flex items-center space-x-2">
         <WalletIcon class="w-5 h-5 shrink-0 text-accent-emerald" />
         <span>Presupuesto Mensual por Categoría · Presupuesto base mensual protegido</span>
@@ -575,7 +596,7 @@
     </div>
 
     <!-- Sheet: Create or edit an additional operating budget -->
-    <BaseSheet :open="showBudgetModal" :title="editingOperatingBudget ? 'Editar presupuesto' : 'Nuevo presupuesto'" :close-on-backdrop="false" @close="showBudgetModal = false">
+    <BaseSheet :open="!isSavingsSection && showBudgetModal" :title="editingOperatingBudget ? 'Editar presupuesto' : 'Nuevo presupuesto'" :close-on-backdrop="false" @close="showBudgetModal = false">
         <p class="text-[11px] text-text-muted mb-4">Los límites son nominales en la moneda indicada; no se convierten al cambiar la moneda de visualización.</p>
         <form id="operating-budget-form" class="space-y-4" @submit.prevent="handleSaveOperatingBudget">
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -692,7 +713,7 @@
     </BaseSheet>
 
     <!-- Sheet: Create Savings Goal -->
-    <BaseSheet :open="showCreateModal" title="Nuevo Objetivo de Ahorro" :close-on-backdrop="false" @close="showCreateModal = false">
+    <BaseSheet :open="isSavingsSection && showCreateModal" title="Nuevo Objetivo de Ahorro" :close-on-backdrop="false" @close="showCreateModal = false">
         <form id="create-goal-form" @submit.prevent="handleCreateGoal" class="space-y-4">
           <!-- Goal Name -->
           <div class="space-y-1.5">
@@ -796,7 +817,7 @@
     </BaseSheet>
 
     <!-- Sheet: Contribute funds -->
-    <BaseSheet :open="showContributeModal" :title="`Aportar a: ${selectedGoal?.name ?? ''}`" :close-on-backdrop="false" @close="showContributeModal = false">
+    <BaseSheet :open="isSavingsSection && showContributeModal" :title="`Aportar a: ${selectedGoal?.name ?? ''}`" :close-on-backdrop="false" @close="showContributeModal = false">
         <form id="contribute-goal-form" @submit.prevent="handleContribute" class="space-y-4">
           <div v-if="selectedGoal && hasGoalAccountLink(selectedGoal)" class="space-y-1.5" data-testid="goal-contribution-source">
             <label for="contribute-account" class="block text-xs font-semibold text-text-secondary">Transferir desde</label>
@@ -863,7 +884,7 @@
     </BaseSheet>
 
     <!-- Move existing default-budget movements into an event budget -->
-    <BaseSheet :open="!!moveSheetBudget" :title="'Mover movimientos'" :close-on-backdrop="!movingMovements" @close="closeMoveSheet">
+    <BaseSheet :open="!isSavingsSection && !!moveSheetBudget" :title="'Mover movimientos'" :close-on-backdrop="!movingMovements" @close="closeMoveSheet">
       <div class="space-y-3" data-testid="budget-move-sheet">
         <p class="text-[11px] text-text-secondary">
           Elige qué movimientos pasan a <strong class="text-text-primary">«{{ moveSheetBudget?.name }}»</strong>. Están en el presupuesto mensual predeterminado y salen de una cuenta ligada o son de una categoría con tope<span v-if="moveSheetBudget?.startDate || moveSheetBudget?.endDate">, dentro del periodo del presupuesto</span>. Desmarca los que no quieras mover.
@@ -914,7 +935,8 @@
 
 <script setup lang="ts">
 import { track } from '@/lib/analytics'
-import { ref, reactive, onMounted, computed, watch, nextTick } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount, computed, watch, nextTick, useTemplateRef } from 'vue'
+import { RouterLink, useRoute } from 'vue-router'
 import { useGoalsStore } from '@/stores/goalsStore'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
@@ -958,6 +980,16 @@ const accountsStore = useAccountsStore()
 const transactionsStore = useTransactionsStore()
 const settingsStore = useSettingsStore()
 const authStore = useAuthStore()
+const route = useRoute()
+
+const sections = [
+  { id: 'budgets', to: '/goals', label: 'Presupuestos', description: 'Organiza tus gastos y planifica la distribución de tus ingresos mensuales.', icon: WalletIcon },
+  { id: 'savings', to: '/goals?tab=savings', label: 'Metas de ahorro', description: 'Crea metas de ahorro y sigue el progreso hacia tus objetivos.', icon: TargetIcon }
+] as const
+const activeSection = computed(() => route.query.tab === 'savings' ? sections[1] : sections[0])
+const isSavingsSection = computed(() => activeSection.value.id === 'savings')
+const sectionHeading = useTemplateRef<HTMLHeadingElement>('sectionHeading')
+const focusSectionHeading = () => sectionHeading.value?.focus()
 
 // State
 const showCreateModal = ref(false)
@@ -1054,7 +1086,7 @@ const savingsPercent = ref(20)
 const categoryBudgetInputs = reactive<Record<string, number | null>>({})
 
 // Chart reference
-const budgetChartRef = ref<HTMLCanvasElement | null>(null)
+const budgetChartRef = useTemplateRef<HTMLCanvasElement>('budgetChartRef')
 let budgetChart: Chart | null = null
 
 // Computed
@@ -1176,6 +1208,7 @@ const isPercentSumValid = computed(() => {
 })
 
 onMounted(async () => {
+  focusSectionHeading()
   await goalsStore.fetchGoals()
   await goalsStore.loadBudgetSettings()
   await accountsStore.fetchAccounts()
@@ -1188,13 +1221,6 @@ onMounted(async () => {
   wantsPercent.value = goalsStore.budgetWantsPercent
   savingsPercent.value = goalsStore.budgetSavingsPercent
   Object.assign(categoryBudgetInputs, goalsStore.categoryBudgets)
-
-  renderBudgetChart()
-})
-
-// Listen to percent changes to rerender chart
-watch([needsPercent, wantsPercent, savingsPercent], () => {
-  renderBudgetChart()
 })
 
 // Methods
@@ -1304,6 +1330,18 @@ const closeMoveSheet = () => {
   moveSelectedIds.value = new Set()
   moveError.value = ''
 }
+// History navigation can leave a section while one of its sheets is open.
+watch(isSavingsSection, savings => {
+  if (savings) {
+    showBudgetModal.value = false
+    closeMoveSheet()
+  } else {
+    showCreateModal.value = false
+    showContributeModal.value = false
+  }
+})
+watch(isSavingsSection, focusSectionHeading, { flush: 'post' })
+
 const toggleMoveCandidate = (transactionId: string) => {
   const next = new Set(moveSelectedIds.value)
   if (next.has(transactionId)) next.delete(transactionId)
@@ -1604,9 +1642,14 @@ const adjustSliders = (changed: 'needs' | 'wants' | 'savings') => {
   }
 }
 
+const destroyBudgetChart = () => {
+  budgetChart?.destroy()
+  budgetChart = null
+}
+
 // Chart.js initialization
 const renderBudgetChart = () => {
-  if (budgetChart) budgetChart.destroy()
+  destroyBudgetChart()
   if (!budgetChartRef.value) return
 
   const ctx = budgetChartRef.value.getContext('2d')
@@ -1644,6 +1687,10 @@ const renderBudgetChart = () => {
     }
   })
 }
+
+// The canvas only exists in Budgets. Render after it mounts and release it when it leaves.
+watch([budgetChartRef, needsPercent, wantsPercent, savingsPercent], renderBudgetChart, { flush: 'post' })
+onBeforeUnmount(destroyBudgetChart)
 
 // Create new Goal
 const handleCreateGoal = async () => {

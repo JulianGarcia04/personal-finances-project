@@ -445,7 +445,7 @@
         <div v-if="goalProgress.length > 0" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
           <div class="flex items-center justify-between">
             <h4 class="font-display font-bold text-base text-text-primary">Tus Metas de Ahorro</h4>
-            <router-link to="/goals" class="-my-3 -mr-2 inline-flex items-center min-h-11 px-2 shrink-0 text-xs text-accent-emerald font-semibold hover:underline">
+            <router-link to="/goals?tab=savings" class="-my-3 -mr-2 inline-flex items-center min-h-11 px-2 shrink-0 text-xs text-accent-emerald font-semibold hover:underline">
               Ver metas
             </router-link>
           </div>
