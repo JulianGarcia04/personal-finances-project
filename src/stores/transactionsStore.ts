@@ -245,9 +245,9 @@ async function commitPocketMovement(options: {
       const recordedCurrency = isNewMovement ? options.next?.currency : before?.currency
       if (recordedCurrency !== source.currency) throw new Error('La moneda del movimiento debe coincidir con su cuenta.')
       const target = movement.toAccountId ? accounts.get(movement.toAccountId) : undefined
-      if (movement.type === 'transfer' && (source.type === 'credit' || target?.type === 'credit') &&
-          (isPocketAccount(source) || (target && isPocketAccount(target)))) {
-        throw new Error('Las transferencias con tarjetas requieren cuentas principales, no bolsillos.')
+      // A pocket may pay a card; a card may not fund a pocket (no card advances into pockets).
+      if (movement.type === 'transfer' && source.type === 'credit' && target && isPocketAccount(target)) {
+        throw new Error('Una tarjeta de crédito no puede transferir dinero a un bolsillo.')
       }
       if (movement.type === 'transfer') {
         const destination = movement.toAccountId && accounts.get(movement.toAccountId)

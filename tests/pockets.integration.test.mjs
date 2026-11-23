@@ -339,7 +339,7 @@ test('client cashflows change wealth, internal transfers stay neutral, and rejec
     balance: 100, limit: 0, currency: 'COP'
   })
   const beforeTransactions = await adminDb.collection('transactions').where('workspaceId', '==', workspaceId).get()
-  const beforeBalances = await Promise.all([parent.id, pocket.id, sameCurrencyBank.id, usd.id].map(id => adminDb.collection('accounts').doc(id).get()))
+  const beforeBalances = await Promise.all([parent.id, pocket.id, sameCurrencyBank.id, usd.id, credit.id].map(id => adminDb.collection('accounts').doc(id).get()))
   await assert.rejects(transactionsStore.addTransaction({
     accountId: pocket.id, toAccountId: usd.id, amount: 10, description: 'Wrong currency',
     categoryId: '', date, type: 'transfer'
@@ -349,9 +349,9 @@ test('client cashflows change wealth, internal transfers stay neutral, and rejec
     categoryId: '', date, type: 'transfer'
   }))
   await assert.rejects(transactionsStore.addTransaction({
-    accountId: pocket.id, toAccountId: credit.id, amount: 10, description: 'Credit destination',
+    accountId: credit.id, toAccountId: pocket.id, amount: 10, description: 'Card advance into a pocket',
     categoryId: '', date, type: 'transfer'
-  }))
+  }), /tarjeta de crédito no puede transferir dinero a un bolsillo/)
   await assert.rejects(transactionsStore.addTransaction({
     accountId: pocket.id, toAccountId: 'missing-account', amount: 10, description: 'Missing destination',
     categoryId: '', date, type: 'transfer'
@@ -364,7 +364,7 @@ test('client cashflows change wealth, internal transfers stay neutral, and rejec
   }))
   const [afterTransactions, afterBalances] = await Promise.all([
     adminDb.collection('transactions').where('workspaceId', '==', workspaceId).get(),
-    Promise.all([parent.id, pocket.id, sameCurrencyBank.id, usd.id].map(id => adminDb.collection('accounts').doc(id).get()))
+    Promise.all([parent.id, pocket.id, sameCurrencyBank.id, usd.id, credit.id].map(id => adminDb.collection('accounts').doc(id).get()))
   ])
   assert.equal(afterTransactions.size, beforeTransactions.size)
   assert.deepEqual(afterBalances.map(snapshot => snapshot.data().balance), beforeBalances.map(snapshot => snapshot.data().balance))
@@ -1008,6 +1008,64 @@ test('Admin delete refuses one leg of a mirror pair and leaves both legs and bal
 })
 
 for (const channel of ['client', 'server']) {
+  test(`S14: ${channel} pocket pays a credit card without touching the parent available balance`, async () => {
+    const { accountsStore, transactionsStore, adminDb, identity, workspaceId } = fixture
+    const { mutateWorkspaceTransaction } = functionsRequire('./lib/pockets.js')
+    const bank = await accountsStore.addAccount({ name: 'Pocket payer bank', type: 'savings', balance: 700_000, currency: 'COP' })
+    const pocket = await accountsStore.addAccount({
+      name: 'Card payments', type: 'savings', balance: 200_000, currency: 'COP', parentAccountId: bank.id
+    })
+    const card = await accountsStore.addAccount({
+      name: 'Pocket-paid card', type: 'credit', balance: -300_000, limit: 2_000_000, currency: 'COP'
+    })
+    const ids = [bank.id, pocket.id, card.id]
+    const balances = async () => Promise.all(ids.map(async id =>
+      (await adminDb.collection('accounts').doc(id).get()).data().balance
+    ))
+    const cashflowRows = async () => (await adminDb.collection('transactions').where('workspaceId', '==', workspaceId).get())
+      .docs.filter(row => row.data().type !== 'transfer').map(row => row.id).sort()
+    const payment = {
+      accountId: pocket.id, toAccountId: card.id, amount: 100_000, type: 'transfer',
+      description: 'Pago tarjeta desde bolsillo', categoryId: '', date: new Date('2026-11-21T12:00:00.000Z'),
+      receiptUrl: null, notes: null, installments: 1
+    }
+    const mutate = async (kind, transactionId, next) => channel === 'client'
+      ? kind === 'created' ? transactionsStore.addTransaction(next)
+        : kind === 'updated' ? transactionsStore.updateTransaction(transactionId, next)
+          : transactionsStore.deleteTransaction(transactionId)
+      : mutateWorkspaceTransaction(adminDb, {
+        kind, transactionId, userId: identity.user.uid, workspaceId, ...(next ? { movement: next } : {})
+      })
+    const assertBalances = async expected => {
+      assert.deepEqual(await balances(), expected)
+      assert.equal(expected.reduce((total, balance) => total + balance, 0), 400_000, 'net worth stays unchanged')
+      await accountsStore.fetchAccounts()
+      assert.deepEqual(ids.map(id => accountsStore.getAccountById(id)?.balance), expected)
+    }
+
+    await assertBalances([500_000, 200_000, -300_000])
+    const cashflowBefore = await cashflowRows()
+    const created = await mutate('created', undefined, payment)
+    await assertBalances([500_000, 100_000, -200_000])
+    const stored = (await adminDb.collection('transactions').doc(created.id).get()).data()
+    assert.deepEqual({
+      type: stored.type, accountId: stored.accountId, toAccountId: stored.toAccountId,
+      amount: stored.amount, currency: stored.currency, categoryId: stored.categoryId
+    }, { type: 'transfer', accountId: pocket.id, toAccountId: card.id, amount: 100_000, currency: 'COP', categoryId: '' })
+    assert.equal('budgetId' in stored, false)
+    assert.deepEqual(await cashflowRows(), cashflowBefore, 'no income or expense is created')
+
+    await mutate('updated', created.id, { ...payment, amount: 150_000 })
+    await assertBalances([500_000, 50_000, -150_000])
+
+    await assert.rejects(mutate('updated', created.id, { ...payment, amount: 200_001 }), /saldo/i)
+    await assertBalances([500_000, 50_000, -150_000])
+
+    await mutate('deleted', created.id)
+    await assertBalances([500_000, 200_000, -300_000])
+    assert.equal((await adminDb.collection('transactions').doc(created.id).get()).exists, false)
+  })
+
   for (const hasPockets of [false, true]) {
     test(`${channel} card payments preserve create/edit/delete balances ${hasPockets ? 'with pockets' : 'without pockets'}`, async () => {
       const { accountsStore, transactionsStore, db, adminDb, identity, workspaceId } = fixture
@@ -1066,7 +1124,7 @@ for (const channel of ['client', 'server']) {
 
       if (pocket) {
         for (const invalid of [
-          { ...movement, accountId: pocket.id },
+          { ...movement, accountId: pocket.id, amount: 201 },
           { ...movement, accountId: card.id, toAccountId: pocket.id },
           { ...movement, amount: 701 }
         ]) {
@@ -1075,18 +1133,19 @@ for (const channel of ['client', 'server']) {
           assert.deepEqual(await snapshot(), unchanged)
         }
         const unchanged = await snapshot()
-        await assert.rejects(mutate('updated', created.id, { ...movement, accountId: pocket.id }), /bolsillo|tarjeta/i)
+        await assert.rejects(mutate('updated', created.id, { ...movement, accountId: card.id, toAccountId: pocket.id }), /bolsillo|tarjeta/i)
         await assert.rejects(updateDoc(doc(db, 'transactions', created.id), { amount: 101 }), error => error?.code === 'permission-denied')
         assert.deepEqual(await snapshot(), unchanged)
 
         const forged = doc(collection(db, 'transactions'))
         const batch = writeBatch(db)
-        batch.set(forged, { ...stored.data(), accountId: pocket.id, amount: 10 })
+        // A card advance into a pocket stays invalid even when every balance is consistent.
+        batch.set(forged, { ...stored.data(), accountId: card.id, toAccountId: pocket.id, amount: 10 })
         batch.update(doc(db, 'accounts', pocket.id), {
-          balance: 190, pocketActivity: true, lastPocketMovementId: forged.id, lastPocketMovementType: 'created'
+          balance: 210, pocketActivity: true, lastPocketMovementId: forged.id, lastPocketMovementType: 'created'
         })
         batch.update(doc(db, 'accounts', card.id), {
-          balance: -390, lastPocketMovementId: forged.id, lastPocketMovementType: 'created'
+          balance: -410, lastPocketMovementId: forged.id, lastPocketMovementType: 'created'
         })
         await assert.rejects(batch.commit(), error => error?.code === 'permission-denied')
         assert.deepEqual(await snapshot(), unchanged)

@@ -95,9 +95,10 @@ export function canTransferBetweenAccounts(source: Account, destination: Account
 
   const eligibleTypes = ['checking', 'savings', 'cash', 'credit']
   if (!eligibleTypes.includes(source.type) || !eligibleTypes.includes(destination.type)) return false
-  if ((source.type === 'credit' || destination.type === 'credit') &&
-      (isPocketRelatedAccount(source.type === 'credit' ? source : destination) ||
-       isPocketAccount(source) || isPocketAccount(destination))) return false
+  if ((source.type === 'credit' && isPocketRelatedAccount(source)) ||
+      (destination.type === 'credit' && isPocketRelatedAccount(destination))) return false
+  // A pocket may pay a card; a card may not fund a pocket (no card advances into pockets).
+  if (source.type === 'credit' && isPocketAccount(destination)) return false
 
   const groups = groupAccountsByPocket(accounts)
   const validChildIds = new Set(groups.flatMap(group => group.pockets.map(child => child.id)))

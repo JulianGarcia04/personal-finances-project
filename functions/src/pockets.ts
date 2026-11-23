@@ -282,9 +282,9 @@ function assertSupportedPocketMovement(
     throw new Error('El monto y la moneda del movimiento no son válidos.')
   }
   if (data.mirrorOf) throw new Error('Los movimientos espejo no se pueden combinar con bolsillos.')
-  if (movement.type === 'transfer' && (source.type === 'credit' || destination?.type === 'credit') &&
-      (source.parentAccountId != null || destination?.parentAccountId != null)) {
-    throw new Error('Las transferencias con tarjetas requieren cuentas principales, no bolsillos.')
+  // A pocket may pay a card; a card may not fund a pocket (no card advances into pockets).
+  if (movement.type === 'transfer' && source.type === 'credit' && destination?.parentAccountId != null) {
+    throw new Error('Una tarjeta de crédito no puede transferir dinero a un bolsillo.')
   }
   if (movement.type === 'transfer') {
     if (!destination || movement.accountId === movement.toAccountId || amount <= 0 ||

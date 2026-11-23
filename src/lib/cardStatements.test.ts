@@ -26,6 +26,16 @@ test('an early payment counts in the month it was paid, not again in the due mon
   assert.equal(amountIn(purchase, NOV), 0)
 })
 
+test('a payment funded by a pocket settles the statement once, like a payment from its bank', () => {
+  const purchase = expense('2026-10-03', 1000)
+  const fromPocket = { ...payment('2026-10-04', 1000), accountId: 'savings-pocket' }
+  const amountIn = paymentsView([purchase, fromPocket], 0)
+  assert.equal(amountIn(purchase, OCT), 1000)
+  assert.equal(amountIn(purchase, NOV), 0)
+  const ledger = buildCardStatementLedger(card(0), { statementClosingDay: 15, paymentDueDay: 4 }, [purchase, fromPocket])
+  assert.equal(ledger.pendingThrough(2026 * 12 + 10), 0)
+})
+
 test('the unpaid rest of a statement stays in its payment month', () => {
   const purchase = expense('2026-10-03', 1000)
   const amountIn = paymentsView([purchase, payment('2026-10-20', 400)], -600)

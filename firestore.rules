@@ -442,13 +442,13 @@ service cloud.firestore {
       return sourceDelta + destinationDelta;
     }
 
+    // A pocket may pay a card; a card may not fund a pocket (no card advances into pockets).
     function validPocketTransferShape(data, workspaceId, source) {
       let destination = get(accountPath(data.toAccountId));
       return data.toAccountId is string && data.accountId != data.toAccountId &&
         isFiniteNumber(data.amount) && data.amount > 0 && destination != null &&
         destination.data.currency == source.data.currency &&
-        (!(source.data.type == 'credit' || destination.data.type == 'credit') ||
-          (hasNoParent(source.data) && hasNoParent(destination.data))) &&
+        (source.data.type != 'credit' || hasNoParent(destination.data)) &&
         validMovementEndpointData(data.toAccountId, workspaceId, destination.data);
     }
 
