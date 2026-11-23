@@ -118,7 +118,7 @@
               <span class="tabular-nums"><span class="whitespace-nowrap font-semibold">{{ formatKpi(projectionStatus.budget.projected) }}</span> de <span class="whitespace-nowrap">{{ formatKpi(projectionStatus.budget.cap) }}</span></span>
             </div>
             <div v-if="projectionStatus.limit" :class="projectionStatus.limit.exceeds ? 'text-accent-amber' : 'text-text-secondary'">
-              <span class="block">{{ projectionStatus.limit.exceeds ? '⚠️ ' : '' }}Límite de gastos</span>
+              <span class="block">{{ projectionStatus.limit.exceeds ? '⚠️ ' : '' }}Tope del presupuesto mensual base</span>
               <span class="tabular-nums"><span class="whitespace-nowrap font-semibold">{{ formatKpi(projectionStatus.limit.projected) }}</span> de <span class="whitespace-nowrap">{{ formatKpi(projectionStatus.limit.cap) }}</span></span>
             </div>
           </div>
@@ -240,14 +240,13 @@
             </div>
           </div>
 
-          <!-- ponytail: limit indicator -->
           <div v-if="currentExpenseLimit > 0" class="mt-3">
-            <div class="flex justify-between text-[10px] mb-1">
-              <span class="text-text-secondary">Límite{{ flowView === 'budget' ? ' (todos los gastos)' : '' }}: {{ formatPrimaryCurrency(currentExpenseLimit) }}</span>
-              <span :class="allMonthlyExpenses > currentExpenseLimit ? 'text-accent-rose' : 'text-accent-emerald'">{{ Math.round((allMonthlyExpenses / currentExpenseLimit) * 100) }}%</span>
+            <div class="flex justify-between gap-2 text-[10px] mb-1">
+              <span class="text-text-secondary">Tope del presupuesto mensual base: {{ formatPrimaryCurrency(currentExpenseLimit) }}</span>
+              <span :class="baseExpenseLimitExceeded ? 'text-accent-rose' : 'text-accent-emerald'">{{ Math.round(baseExpenseLimitPercent) }}%</span>
             </div>
             <div class="w-full h-1 bg-white/10 rounded-full overflow-hidden">
-              <div class="h-full rounded-full" :class="allMonthlyExpenses > currentExpenseLimit ? 'bg-accent-rose' : 'bg-accent-emerald'" :style="{ width: Math.min((allMonthlyExpenses / currentExpenseLimit) * 100, 100) + '%' }"></div>
+              <div class="h-full rounded-full" :class="baseExpenseLimitExceeded ? 'bg-accent-rose' : 'bg-accent-emerald'" :style="{ width: Math.min(baseExpenseLimitPercent, 100) + '%' }"></div>
             </div>
           </div>
         </div>
@@ -836,12 +835,10 @@ const getMoMData = (type: 'income' | 'expense', view: FlowView) => {
 const incomeData = computed(() => getMoMData('income', flowView.value))
 const monthlyIncome = computed(() => incomeData.value.current)
 
-// Gastos del mes actual y comparativa. Runway and the workspace expense limit always use
-// every expense: they describe the money leaving the accounts, not the budget view.
+// Gastos del mes actual y comparativa. Runway always uses every expense.
 const allExpensesData = computed(() => getMoMData('expense', 'all'))
 const expensesData = computed(() => flowView.value === 'all' ? allExpensesData.value : getMoMData('expense', 'budget'))
 const monthlyExpenses = computed(() => expensesData.value.current)
-const allMonthlyExpenses = computed(() => allExpensesData.value.current)
 
 // Funds, spending and available of each active additional budget, as on the Goals budget cards.
 const budgetBreakdown = computed(() => {
@@ -927,24 +924,27 @@ const spendable = computed(() =>
 
 // Proyección de cierre: purchases made this month at the current daily pace plus
 // amounts of earlier purchases already imputed to this month (later installments and
-// card statements due this month), added once. `budgeted` only counts categories with
-// a budget, so it can be compared with the budget total.
+// card statements due this month), added once. Keep the all-budget forecast, the
+// base cap comparison and the narrower comparison against category caps separate.
 const monthEndProjection = computed(() => {
   const now = new Date()
   const budgets = goalsStore.categoryBudgets
+  const transactions = transactionsStore.transactions
   const options = { convert, billingFor: cardBillingFor.value }
-  const all = splitMonthEndExpenses(transactionsStore.transactions, now, options)
-  const budgeted = splitMonthEndExpenses(transactionsStore.transactions, now, {
+  const all = splitMonthEndExpenses(transactions, now, options)
+  const baseTransactions = transactions.filter(t => resolveBudgetId(t.budgetId) === DEFAULT_MONTHLY_BUDGET_ID)
+  const base = splitMonthEndExpenses(baseTransactions, now, options)
+  const budgeted = splitMonthEndExpenses(baseTransactions, now, {
     ...options,
-    include: t => Boolean(
-      t.categoryId &&
-      budgets[t.categoryId] > 0 &&
-      resolveBudgetId(t.budgetId) === DEFAULT_MONTHLY_BUDGET_ID
-    )
+    include: t => Boolean(t.categoryId && budgets[t.categoryId] > 0)
   })
+  const project = ({ pace, committed }: typeof all) =>
+    projectMonthEndExpenses({ paceExpensesToDate: pace, committedExpenses: committed, now })
   return {
-    total: projectMonthEndExpenses({ paceExpensesToDate: all.pace, committedExpenses: all.committed, now }),
-    budgeted: projectMonthEndExpenses({ paceExpensesToDate: budgeted.pace, committedExpenses: budgeted.committed, now })
+    total: project(all),
+    budgeted: project(budgeted),
+    base: project(base),
+    baseSpent: base.pace + base.committed
   }
 })
 
@@ -952,7 +952,7 @@ const projectionStatus = computed(() =>
   projectionChecks({
     budgetedProjection: monthEndProjection.value.budgeted,
     budgetTotal: budgetSummary.value?.totalLimitForReporting ?? 0,
-    totalProjection: monthEndProjection.value.total,
+    baseProjection: monthEndProjection.value.base,
     expenseLimit: currentExpenseLimit.value
   })
 )
@@ -1021,12 +1021,16 @@ const memberExpenses = computed(() => {
   }).sort((a, b) => b.amount - a.amount)
 })
 
-// ponytail: current limit
+// The base cap retains its workspace value and reporting currency.
 const currentExpenseLimit = computed(() => {
   if (!authStore.activeWorkspaceId) return 0
   const ws = workspacesStore.workspaces.find(w => w.id === authStore.activeWorkspaceId)
   return ws?.expenseLimit || 0
 })
+const baseExpenseLimitPercent = computed(() => currentExpenseLimit.value > 0
+  ? (monthEndProjection.value.baseSpent / currentExpenseLimit.value) * 100
+  : 0)
+const baseExpenseLimitExceeded = computed(() => monthEndProjection.value.baseSpent > currentExpenseLimit.value)
 
 const savingsRate = computed(() => {
   if (monthlyIncome.value === 0) return 0

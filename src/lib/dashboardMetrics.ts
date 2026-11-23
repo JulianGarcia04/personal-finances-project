@@ -194,17 +194,17 @@ export interface ProjectionCheck {
 }
 
 // Compare like with like: the projection of budgeted categories against the budget
-// total, and the projection of all spending against the workspace expense limit.
+// total, and the entire base monthly projection against the base expense cap.
 // A check is null when its cap is not configured.
 export const projectionChecks = (
-  { budgetedProjection, budgetTotal, totalProjection, expenseLimit }:
-  { budgetedProjection: number; budgetTotal: number; totalProjection: number; expenseLimit: number }
+  { budgetedProjection, budgetTotal, baseProjection, expenseLimit }:
+  { budgetedProjection: number; budgetTotal: number; baseProjection: number; expenseLimit: number }
 ): { budget: ProjectionCheck | null; limit: ProjectionCheck | null } => {
   const check = (projected: number, cap: number): ProjectionCheck | null =>
     cap > 0 ? { projected, cap, exceeds: projected > cap } : null
   return {
     budget: check(budgetedProjection, budgetTotal),
-    limit: check(totalProjection, expenseLimit)
+    limit: check(baseProjection, expenseLimit)
   }
 }
 

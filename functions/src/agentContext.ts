@@ -595,7 +595,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
 
   define(
     'getWorkspaceSettings',
-    'Configuración financiera del workspace: moneda principal, tasas de cambio, límite de gasto mensual, ingreso declarado y reparto 50/30/20, asignaciones a metas y presupuestos por categoría con el gasto real del mes en curso (gastado, restante y % usado). Úsalo para preguntas de presupuestos, límites, tasas o "¿cómo voy este mes?".',
+    'Configuración financiera del workspace: moneda principal, tasas de cambio, tope total del presupuesto mensual base, ingreso declarado y reparto 50/30/20, asignaciones a metas y presupuestos por categoría con el gasto real del mes en curso (gastado, restante y % usado). currentMonth.expenseLimit incluye los gastos sin presupuesto asignado y excluye los de otros presupuestos; currentMonth.totals sigue incluyendo todos los presupuestos. El tope se configura en Presupuestos. Úsalo para preguntas de presupuestos, límites, tasas o "¿cómo voy este mes?".',
     z.object({}),
     async () => {
       const now = clock();
@@ -624,7 +624,6 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
         categoryBudgets: (ws.categoryBudgets ?? {}) as Record<string, number>,
         expenseLimit: ws.expenseLimit,
         summary: defaultBudgetMonth,
-        allExpensesTotal: month.totals.expenses,
         capCurrency: categoryBudgetCurrency,
         primaryCurrency,
         exchangeRates: rates,

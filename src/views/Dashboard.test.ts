@@ -249,18 +249,20 @@ test('Dashboard budget estimate counts this month\'s card purchases by consumpti
   assert.equal(estimateFor('payment').value.amount, 60)
 })
 
-test('Dashboard month-end projection adds card statements of earlier purchases once without extrapolating them', () => {
+test('Dashboard projects card statements once, preserving the all-budget and category projections separately from the base cap', () => {
   const now = new Date()
   const transactions = [
-    currentMonthExpense({ amount: -50, accountId: 'visa', date: previousMonthFirstDay(), categoryId: 'food' }),
-    currentMonthExpense({ amount: -10, accountId: 'cash', categoryId: 'food' }),
-    currentMonthExpense({ amount: -30, accountId: 'cash', categoryId: 'travel' })
+    currentMonthExpense({ amount: -50, accountId: 'visa', date: previousMonthFirstDay(), categoryId: 'food', currency: 'EUR' }),
+    currentMonthExpense({ amount: -10, accountId: 'cash', categoryId: 'food', budgetId: DEFAULT_MONTHLY_BUDGET_ID }),
+    currentMonthExpense({ amount: -30, accountId: 'cash', categoryId: 'travel' }),
+    currentMonthExpense({ amount: -100, accountId: 'visa', date: previousMonthFirstDay(), budgetId: 'archived-event' }),
+    currentMonthExpense({ amount: -20, accountId: 'cash', budgetId: 'extra-monthly' })
   ]
-  const projection = evaluateComputed<{ total: number; budgeted: number }>('monthEndProjection', {
+  const projection = evaluateComputed<{ total: number; budgeted: number; base: number; baseSpent: number }>('monthEndProjection', {
     computed: computedDependency,
     transactionsStore: { transactions },
     goalsStore: { categoryBudgets: { food: 100 } },
-    convert: (amount: number) => amount,
+    convert: (amount: number, currency: string) => currency === 'EUR' ? amount * 2 : amount,
     cardBillingFor: billingDependency([visa]),
     splitMonthEndExpenses,
     projectMonthEndExpenses,
@@ -270,8 +272,12 @@ test('Dashboard month-end projection adds card statements of earlier purchases o
   const elapsed = now.getDate()
   const days = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
 
-  assert.equal(projection.value.total, (40 / elapsed) * days + 50)
-  assert.equal(projection.value.budgeted, (10 / elapsed) * days + 50)
+  assert.deepEqual(projection.value, {
+    total: (60 / elapsed) * days + 200,
+    budgeted: (10 / elapsed) * days + 100,
+    base: (40 / elapsed) * days + 100,
+    baseSpent: 140
+  })
 })
 
 test('S8: Dashboard reports uncapped budget percent, reporting-currency limit for projection, negative savingsRate, omits $0 historical categories, and excludes bridge cards from upcoming payments', () => {

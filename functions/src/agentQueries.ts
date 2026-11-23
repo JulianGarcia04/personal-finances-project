@@ -785,16 +785,15 @@ export interface BudgetStatus {
 }
 
 /**
- * Budget vs actual for a month summary grouped by category. Aligns with Dashboard
- * `budgetSummary`: per-row and global percents are uncapped `spent / limit`, caps are
- * converted from `capCurrency` to `primaryCurrency` via manual FX (disabled when
- * unconfirmed or rate missing), and `expenseLimit` uses all monthly expenses.
+ * Budget vs actual for the base monthly summary grouped by category. Per-row and
+ * category total percents are uncapped `spent / limit`. Category caps are converted
+ * from `capCurrency` to `primaryCurrency` via manual FX (disabled when unconfirmed
+ * or rate missing). The base `expenseLimit` is already in the reporting currency.
  */
 export function buildBudgetStatus({
   categoryBudgets,
   expenseLimit,
   summary,
-  allExpensesTotal,
   capCurrency,
   primaryCurrency,
   exchangeRates,
@@ -803,7 +802,6 @@ export function buildBudgetStatus({
   categoryBudgets: Record<string, number>;
   expenseLimit: number | null | undefined;
   summary: FinancialSummary;
-  allExpensesTotal?: number;
   capCurrency?: string | null;
   primaryCurrency?: string;
   exchangeRates?: Record<string, number>;
@@ -856,7 +854,7 @@ export function buildBudgetStatus({
     .sort((a, b) => (b.percentUsed ?? -1) - (a.percentUsed ?? -1));
 
   const limit = Number(expenseLimit) || 0;
-  const monthSpent = allExpensesTotal ?? summary.totals.expenses;
+  const monthSpent = summary.totals.expenses;
   const roundedBudget = budgetTotal === null ? null : round2(budgetTotal);
   return {
     categories,

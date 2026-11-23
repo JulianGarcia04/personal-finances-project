@@ -30,6 +30,10 @@ test('existing settings tabs are unchanged', () => {
   }
 })
 
+test('P1 S3: settings no longer edits the base budget expense limit', () => {
+  assert.equal(/expenseLimitInput|updateWorkspaceLimit|Límite de gastos mensual/.test(settings), false)
+})
+
 test('data tab deletes the account only after typing the confirmation word', () => {
   const tab = settings.slice(settings.indexOf(`<template v-else-if="activeTab === 'data'">`))
   assert.match(tab, /Eliminar mi cuenta/)

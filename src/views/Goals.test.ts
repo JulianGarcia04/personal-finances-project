@@ -6,10 +6,12 @@ import { test } from 'node:test'
 import * as Vue from 'vue'
 import { compileScript, parse } from 'vue/compiler-sfc'
 import * as Router from 'vue-router'
+import { createPinia, disposePinia } from 'pinia'
 import ts from 'typescript'
 import { toDateValue, toLocalDateKey } from '../lib/dates.ts'
 import { canTransferBetweenAccounts } from '../lib/pockets.ts'
 import { isReservedBudgetName } from '../schemas.ts'
+import type { Transaction } from '../types.ts'
 
 const goalsPath = fileURLToPath(new URL('./Goals.vue', import.meta.url))
 const goalsView = readFileSync(goalsPath, 'utf8')
@@ -630,12 +632,43 @@ const MockSheet = (props: { open: boolean; title: string }, { slots }: Vue.Setup
 const mountNavigation = async (t: import('node:test').TestContext, path: string, showSidebar = false) => {
   const account = { id: 'cash', name: 'Efectivo', type: 'cash', currency: 'COP', balance: 100 }
   const incomeSaves: number[] = []
+  const limitSaves: [string, number][] = []
+  let persistLimit = async () => {}
+  const authStore = Vue.reactive({ isAuthenticated: true, user: { uid: 'user-a' }, activeWorkspaceId: 'workspace-a' })
+  const pinia = createPinia()
+  const db = {}
+  const storeSource = readFileSync(new URL('../stores/workspacesStore.ts', import.meta.url), 'utf8')
+  const script = ts.transpile(storeSource.replaceAll('import.meta.env', '({})'), {
+    target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS
+  })
+  const storeModule = {} as typeof import('../stores/workspacesStore.ts')
+  new Function('exports', 'require', script)(storeModule, (id: string) => {
+    if (id === '@/lib/firebase') return { db, auth: {} }
+    if (id === './authStore') return { useAuthStore: () => authStore }
+    if (id === 'firebase/firestore') return {
+      doc: (client: object, collection: string, workspaceId: string) => {
+        assert.equal(client, db)
+        assert.equal(collection, 'workspaces')
+        return workspaceId
+      },
+      updateDoc: async (workspaceId: string, data: { expenseLimit: number }) => {
+        assert.deepEqual(Object.keys(data), ['expenseLimit'])
+        limitSaves.push([workspaceId, data.expenseLimit])
+        await persistLimit()
+      }
+    }
+    return requireModule(id)
+  })
+  const workspacesStore = storeModule.useWorkspacesStore(pinia)
+  workspacesStore.workspaces = Object.entries({ 'workspace-a': 2500, 'workspace-b': 125 }).map(([id, expenseLimit]) => ({
+    id, name: id, expenseLimit, currency: 'COP', ownerId: 'user-a', members: ['user-a'], createdAt: '2026-01-01'
+  }))
   const stores = {
-    authStore: Vue.reactive({ isAuthenticated: true, user: { uid: 'user-a' }, activeWorkspaceId: 'workspace-a' }),
+    authStore,
     settingsStore: { currency: 'COP', loadSettings: noOp },
-    workspacesStore: { workspaces: [], activeWorkspaceProfiles: {}, fetchMyWorkspaces: noOp },
+    workspacesStore,
     accountsStore: { accounts: [account], netWorthByCurrency: { COP: 100 }, getAccountById: () => account, fetchAccounts: noOp },
-    transactionsStore: { transactions: [], categories: [], fetchCategories: noOp, fetchTransactions: noOp },
+    transactionsStore: Vue.reactive({ transactions: [] as Transaction[], categories: [], fetchCategories: noOp, fetchTransactions: noOp }),
     goalsStore: Vue.reactive({
       goals: [{ id: 'trip', name: 'Viaje', targetAmount: 100, currentAmount: 25, currency: 'COP', targetDate: new Date(2030, 0, 1) }],
       categoryBudgets: { food: 100 }, categoryBudgetCurrency: { status: 'confirmed', code: 'COP' },
@@ -659,7 +692,7 @@ const mountNavigation = async (t: import('node:test').TestContext, path: string,
         vModelText: { mounted: syncInputValue, beforeUpdate: syncInputValue }, vModelSelect: {}
       }
       if (id === 'vue-router') return Router
-      if (id === 'chart.js') return { Chart: { register: noOp }, registerables: [] }
+      if (id === 'chart.js') return { Chart: class { static register = noOp; destroy = noOp }, registerables: [] }
       if (id === '@/lib/analytics') return { track: noOp }
       if (id === '@/components/ui/useBodyScrollLock') return { useBodyScrollLock: noOp }
       if (id.endsWith('/BaseSheet.vue')) return { default: MockSheet }
@@ -694,6 +727,7 @@ const mountNavigation = async (t: import('node:test').TestContext, path: string,
   const app = renderer.createApp({ render: () => [sidebar && Vue.h(sidebar), Vue.h(Router.RouterView)] })
   t.after(() => {
     try { app.unmount() } finally {
+      disposePinia(pinia)
       focusedNode = null
       if (sidebar) {
         if (documentDescriptor) Object.defineProperty(globalThis, 'document', documentDescriptor)
@@ -710,10 +744,208 @@ const mountNavigation = async (t: import('node:test').TestContext, path: string,
     })
     await Vue.nextTick()
   }
-  return { root, router, stepHistory, stores, incomeSaves }
+  return { root, router, stepHistory, stores, incomeSaves, limitSaves, setLimitPersistence: (persist: typeof persistLimit) => { persistLimit = persist } }
 }
 
-test('P1 S2: budgets keep only the estimated income editor and save its value in the current workspace', async t => {
+const deferred = () => {
+  let resolve!: () => void, reject!: (error: Error) => void
+  const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no })
+  return { promise, resolve, reject }
+}
+
+test('P1 S3: the base monthly budget hydrates, validates, saves and disables its existing limit', async t => {
+  const { root, router, stores, limitSaves, setLimitPersistence } = await mountNavigation(t, '/goals')
+  const label = root.find('label', 'Tope total del presupuesto mensual base')
+  const input = root.descendants.find(node => node.tag === 'input' && node.props.id === label.props.for)!
+  const form = input.parent!.closest('#base-expense-limit-form')!
+  const button = form.find('button', 'Guardar tope')
+  const edit = (value: number | string) => input.props['onUpdate:modelValue'](value)
+  const submit = () => form.props.onSubmit({ preventDefault() {} })
+  assert.equal(input.props.value, 2500)
+  assert.match(form.content, /COP/)
+  assert.deepEqual(limitSaves, [], 'loading the saved amount does not write it')
+
+  stores.workspacesStore.loading = true
+  await Vue.nextTick()
+  assert.equal(input.props.disabled, true)
+  assert.equal(button.props.disabled, true)
+  await submit()
+  stores.workspacesStore.loading = false
+  for (const value of [-1, Infinity]) {
+    edit(value)
+    await submit()
+    assert.match(form.descendants.find(n => n.props.role === 'alert')?.content ?? '', /monto válido/)
+  }
+  assert.deepEqual(limitSaves, [])
+
+  edit(300.5)
+  const pending = deferred()
+  setLimitPersistence(() => pending.promise)
+  const save = submit()
+  await Vue.nextTick()
+  assert.equal(button.props.disabled, true)
+  assert.match(button.content, /Guardando/)
+  pending.resolve()
+  await save
+  await Vue.nextTick()
+  assert.deepEqual(limitSaves, [['workspace-a', 300.5]])
+  assert.equal(stores.workspacesStore.workspaces[0].expenseLimit, 300.5)
+  assert.match(form.content, /Tope mensual actualizado/)
+
+  for (const value of ['', 0]) {
+    edit(value)
+    await submit()
+    await Vue.nextTick()
+    assert.equal(input.props.value, '')
+    assert.match(form.content, /Tope mensual desactivado/)
+  }
+  assert.deepEqual(limitSaves.slice(1), [['workspace-a', 0], ['workspace-a', 0]])
+
+  const failed = deferred()
+  setLimitPersistence(() => failed.promise)
+  edit(999)
+  const rejectedSave = submit()
+  failed.reject(new Error('Prueba: no se pudo guardar.'))
+  await rejectedSave
+  await Vue.nextTick()
+  assert.equal(input.props.value, 999)
+  assert.equal(stores.workspacesStore.workspaces[0].expenseLimit, 0)
+  assert.equal(input.props.disabled, false, 'the lock is released after a failed write')
+  assert.equal(form.descendants.find(n => n.props.role === 'alert')?.content, 'Prueba: no se pudo guardar.')
+  stores.authStore.activeWorkspaceId = 'unresolved-workspace'
+  await Vue.nextTick()
+  assert.equal(input.props.disabled, true)
+  assert.equal(input.props.value, '')
+  await submit()
+  assert.equal(limitSaves.length, 4)
+  await router.push('/goals?tab=savings')
+  assert.ok(!root.descendants.some(node => node.props.id === input.props.id))
+})
+
+test('P1 S3: an in-flight save cannot overwrite the active workspace draft or its feedback', async t => {
+  const { root, stores, limitSaves, setLimitPersistence } = await mountNavigation(t, '/goals')
+  const form = root.descendants.find(node => node.props.id === 'base-expense-limit-form')!
+  assert.ok(form, 'the base budget has the workspace limit editor')
+  const input = form.descendants.find(node => node.tag === 'input')!
+  const submit = () => form.props.onSubmit({ preventDefault() {} })
+  for (const succeeds of [true, false]) {
+    stores.authStore.activeWorkspaceId = 'workspace-a'
+    await Vue.nextTick()
+    input.props['onUpdate:modelValue'](305)
+    const pending = deferred()
+    setLimitPersistence(() => pending.promise)
+    const save = submit()
+    stores.authStore.activeWorkspaceId = 'workspace-b'
+    await Vue.nextTick()
+    assert.equal(input.props.value, 125)
+    assert.equal(input.props.disabled, false)
+    input.props['onUpdate:modelValue'](140)
+    if (succeeds) pending.resolve()
+    else pending.reject(new Error('Respuesta de otro workspace'))
+    await save
+    await Vue.nextTick()
+    assert.equal(input.props.value, 140)
+    assert.doesNotMatch(form.content, /actualizado|Respuesta de otro workspace/)
+  }
+  assert.deepEqual(limitSaves, [['workspace-a', 305], ['workspace-a', 305]])
+  assert.equal(stores.workspacesStore.workspaces[1].expenseLimit, 125)
+
+  stores.authStore.activeWorkspaceId = 'workspace-a'
+  await Vue.nextTick()
+  input.props['onUpdate:modelValue'](350)
+  const pending = deferred()
+  setLimitPersistence(() => pending.promise)
+  const save = submit()
+  stores.authStore.activeWorkspaceId = 'workspace-b'
+  stores.authStore.activeWorkspaceId = 'workspace-a'
+  await Vue.nextTick()
+  assert.equal(input.props.value, 305, 'returning to A hydrates its last saved amount, not the discarded draft')
+  assert.equal(input.props.disabled, true)
+  await submit()
+  assert.equal(limitSaves.length, 3, 'a quick return cannot start a second write to the same workspace')
+  pending.resolve()
+  await save
+  await Vue.nextTick()
+  assert.equal(input.props.value, 350, 'A receives its authoritative saved value without old feedback')
+  assert.doesNotMatch(form.content, /actualizado/)
+})
+
+test('P1 S3 blocks a stale base-limit submit after a remount', async t => {
+  const { root, router, stores, limitSaves, setLimitPersistence } = await mountNavigation(t, '/goals')
+  const editor = () => root.descendants.find(node => node.props.id === 'base-expense-limit-form')
+  const submit = (form: ViewNode) => form.props.onSubmit({ preventDefault() {} })
+  const initialForm = editor()!
+  initialForm.descendants.find(node => node.tag === 'input')!.props['onUpdate:modelValue'](700)
+  const gate = deferred()
+  setLimitPersistence(() => gate.promise)
+  const firstSave = submit(initialForm)
+  try {
+    await router.push('/')
+    await Vue.nextTick()
+    assert.equal(editor(), undefined)
+    await router.push('/goals')
+    await Vue.nextTick()
+    const remounted = editor()!
+    assert.notEqual(remounted, initialForm)
+    const input = remounted.descendants.find(node => node.tag === 'input')!
+    const button = remounted.descendants.find(node => node.props.type === 'submit' && node.tag === 'button')!
+    assert.equal(input.props.value, 2500, 'the first write is still pending')
+    const disabledWhilePending = [input.props.disabled, button.props.disabled]
+    const staleAttempt = submit(remounted)
+    gate.resolve()
+    await Promise.all([firstSave, staleAttempt])
+    await Vue.nextTick()
+    assert.deepEqual(limitSaves, [['workspace-a', 700]], 'returning to a pending editor must not write the stale cap again')
+    assert.deepEqual(disabledWhilePending, [true, true])
+    assert.equal(input.props.value, 700)
+    assert.equal(input.props.disabled, false)
+    assert.equal(button.props.disabled, false)
+    assert.doesNotMatch(remounted.content, /Tope mensual actualizado/)
+  } finally {
+    gate.resolve()
+    await firstSave
+  }
+
+  // The store also rejects concurrent callers that bypass the form, but only for the same workspace.
+  const next = deferred()
+  setLimitPersistence(() => next.promise)
+  const updateLimit = stores.workspacesStore.updateWorkspaceLimit
+  const writes = [updateLimit('workspace-a', 800), updateLimit('workspace-b', 200)]
+  const duplicate = assert.rejects(updateLimit('workspace-a', 2500), /Ya se está guardando el tope/)
+  next.resolve()
+  await Promise.all([...writes, duplicate])
+  assert.deepEqual(limitSaves, [['workspace-a', 700], ['workspace-a', 800], ['workspace-b', 200]])
+})
+
+test('P1 S3: Dashboard compares only base expenses while the monthly headline and forecast still include other budgets', async t => {
+  const { root, stores } = await mountNavigation(t, '/')
+  const now = new Date()
+  const date = new Date(now.getFullYear(), now.getMonth(), 1)
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+  const projected = (spent: number) => Math.round((spent / now.getDate()) * daysInMonth)
+  const expense = (id: string, amount: number, budgetId?: string, categoryId = 'food'): Transaction => ({
+    id, workspaceId: stores.authStore.activeWorkspaceId, type: 'expense', amount: -amount, date, budgetId,
+    categoryId, accountId: 'cash', currency: 'COP', description: id, createdAt: date
+  })
+  stores.transactionsStore.transactions.push(
+    expense('implicit', 20), expense('base', 30, 'default-monthly', 'other'),
+    expense('monthly', 1000, 'extra-monthly'), expense('event', 1000, 'event'), expense('archived', 1000, 'archived-event')
+  )
+  await Vue.nextTick()
+
+  const format = (amount: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(amount)
+  assert.equal(root.find('span', 'Gastos imputados del Mes').parent!.descendants.find(node => node.tag === 'h4')?.props.title, format(3050))
+  assert.equal(root.find('span', 'Proyección de cierre').parent!.descendants.find(node => node.tag === 'h4')?.props.title, format(projected(3050)))
+  const progress = root.find('span', `Tope del presupuesto mensual base: ${format(2500)}`)
+  assert.equal(progress.parent!.children.at(-1)?.content, '2%')
+  const amounts = (label: ViewNode) => label.parent!.children.at(-1)?.children.filter(node => node.tag === 'span').map(node => node.content)
+  assert.deepEqual(amounts(root.find('span', 'Tope del presupuesto mensual base')), [format(projected(50)), format(2500)])
+  const categoryProjection = root.descendants.find(node => node.tag === 'span' && node.content.endsWith('Categorías con presupuesto'))
+  assert.ok(categoryProjection)
+  assert.deepEqual(amounts(categoryProjection), [format(projected(20)), format(100)])
+})
+
+test('P1 S2: budgets retain the estimated income editor and save its value in the current workspace', async t => {
   const { root, router, stores, incomeSaves } = await mountNavigation(t, '/goals')
   const budgetInputs = () => root.descendants.filter(node => node.tag === 'input')
   assert.ok(!budgetInputs().some(node => node.props.type === 'range'), 'the planner sliders must be gone')

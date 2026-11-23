@@ -353,6 +353,41 @@
         <span>Presupuesto Mensual por Categoría · Presupuesto base mensual protegido</span>
       </h3>
 
+      <form id="base-expense-limit-form" class="glass-panel rounded-2xl p-4 sm:p-6 border border-white/5 space-y-2" @submit.prevent="saveExpenseLimit">
+        <label for="base-expense-limit" class="block font-display font-semibold text-sm text-text-primary">Tope total del presupuesto mensual base</label>
+        <p id="base-expense-limit-hint" class="text-xs text-text-secondary">
+          Incluye los gastos sin presupuesto asignado y excluye los de otros presupuestos. Déjalo vacío o en 0 para desactivarlo.
+        </p>
+        <div class="flex flex-col sm:flex-row gap-3">
+          <div class="flex items-center gap-3 w-full sm:max-w-xs">
+            <input
+              id="base-expense-limit"
+              v-model.number="expenseLimitInput"
+              type="number"
+              inputmode="decimal"
+              min="0"
+              step="any"
+              placeholder="Sin tope"
+              :disabled="!canEditExpenseLimit"
+              aria-describedby="base-expense-limit-currency base-expense-limit-hint"
+              class="field min-w-0 font-semibold disabled:opacity-60"
+            />
+            <span id="base-expense-limit-currency" class="shrink-0 text-xs font-semibold text-text-muted">{{ userCurrency }}</span>
+          </div>
+          <button
+            type="submit"
+            :disabled="!canEditExpenseLimit"
+            class="sm:w-36 min-h-11 px-5 py-2.5 rounded-xl border border-accent-emerald/40 text-accent-emerald hover:bg-accent-emerald/10 font-display font-semibold text-sm cursor-pointer disabled:opacity-50"
+          >
+            {{ savingExpenseLimit ? 'Guardando…' : 'Guardar tope' }}
+          </button>
+        </div>
+        <p v-if="workspacesStore.loading" role="status" class="text-xs text-text-muted">Cargando el espacio de trabajo…</p>
+        <p v-else-if="!expenseLimitWorkspace" role="status" class="text-xs text-text-muted">No se pudo cargar el espacio de trabajo activo.</p>
+        <p v-else-if="expenseLimitError" role="alert" class="text-xs text-accent-rose">{{ expenseLimitError }}</p>
+        <p v-else-if="expenseLimitMessage" role="status" class="text-xs text-accent-emerald">{{ expenseLimitMessage }}</p>
+      </form>
+
       <div class="glass-panel rounded-2xl p-4 sm:p-6 border border-white/5 space-y-4">
         <div class="rounded-xl bg-slate-950/45 border border-white/5 p-3 sm:p-4 space-y-3">
           <div v-if="goalsStore.categoryBudgetCurrency.status === 'confirmed'" class="flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -816,13 +851,14 @@
 
 <script setup lang="ts">
 import { track } from '@/lib/analytics'
-import { ref, shallowRef, reactive, onMounted, computed, watch, nextTick, useTemplateRef } from 'vue'
+import { ref, shallowRef, reactive, onMounted, onScopeDispose, computed, watch, nextTick, useTemplateRef } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { useGoalsStore } from '@/stores/goalsStore'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useAuthStore } from '@/stores/authStore'
+import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { SUPPORTED_CURRENCIES, currencyOptionsWith, defaultCurrencyCode } from '@/lib/currencies'
 import type { Goal, OperatingBudgetDraft, OperatingBudgetPatch } from '@/types'
 import BaseSheet from '@/components/ui/BaseSheet.vue'
@@ -858,6 +894,7 @@ const accountsStore = useAccountsStore()
 const transactionsStore = useTransactionsStore()
 const settingsStore = useSettingsStore()
 const authStore = useAuthStore()
+const workspacesStore = useWorkspacesStore()
 const route = useRoute()
 
 const sections = [
@@ -970,6 +1007,68 @@ watch([budgetIncomeContextKey, canEditBudgetIncome, () => goalsStore.budgetIncom
   incomeInput.value = canEditBudgetIncome.value ? goalsStore.budgetIncome : ''
   incomeSaveError.value = ''
 }, { immediate: true })
+
+// The workspace store owns the saved amount. A local draft exists only for this visit
+// to the budget section and never follows a switch to another workspace.
+const expenseLimitWorkspace = computed(() => authStore.user
+  ? workspacesStore.workspaces.find(w => w.id === activeWorkspaceId.value)
+  : undefined)
+const expenseLimitDraft = shallowRef<number | string | null>(null)
+const expenseLimitMessage = shallowRef('')
+const expenseLimitError = shallowRef('')
+const savingExpenseLimit = computed(() => workspacesStore.pendingExpenseLimitWrites.has(expenseLimitWorkspace.value?.id ?? ''))
+const canEditExpenseLimit = computed(() => Boolean(expenseLimitWorkspace.value) && !workspacesStore.loading && !savingExpenseLimit.value)
+const expenseLimitInput = computed({
+  get() {
+    const workspace = expenseLimitWorkspace.value
+    if (!workspace) return ''
+    const saved = workspace.expenseLimit ?? 0
+    return expenseLimitDraft.value ?? (saved > 0 ? saved : '')
+  },
+  set(value: number | string) {
+    if (!canEditExpenseLimit.value || isSavingsSection.value) return
+    expenseLimitDraft.value = value
+    expenseLimitMessage.value = ''
+    expenseLimitError.value = ''
+  }
+})
+let expenseLimitEditorGeneration = 0
+watch([() => authStore.user?.uid, activeWorkspaceId, isSavingsSection], () => {
+  expenseLimitEditorGeneration++
+  expenseLimitDraft.value = null
+  expenseLimitMessage.value = ''
+  expenseLimitError.value = ''
+}, { flush: 'sync' })
+watch(expenseLimitMessage, (message, _previous, onCleanup) => {
+  if (!message) return
+  const timer = setTimeout(() => { expenseLimitMessage.value = '' }, 2500)
+  onCleanup(() => clearTimeout(timer))
+})
+onScopeDispose(() => { expenseLimitEditorGeneration++ })
+
+const saveExpenseLimit = async () => {
+  const workspaceId = expenseLimitWorkspace.value?.id
+  if (!workspaceId || !canEditExpenseLimit.value || isSavingsSection.value) return
+  expenseLimitMessage.value = ''
+  expenseLimitError.value = ''
+  const amount = Number(String(expenseLimitInput.value).trim()) // blank disables the cap, like 0
+  if (!Number.isFinite(amount) || amount < 0) {
+    expenseLimitError.value = 'Ingresa un monto válido mayor o igual a 0.'
+    return
+  }
+
+  const editorGeneration = expenseLimitEditorGeneration
+  try {
+    await workspacesStore.updateWorkspaceLimit(workspaceId, amount)
+    if (editorGeneration !== expenseLimitEditorGeneration) return
+    expenseLimitDraft.value = null
+    expenseLimitMessage.value = amount > 0 ? 'Tope mensual actualizado.' : 'Tope mensual desactivado.'
+  } catch (err) {
+    if (editorGeneration === expenseLimitEditorGeneration) {
+      expenseLimitError.value = err instanceof Error && err.message ? err.message : 'No se pudo actualizar el tope.'
+    }
+  }
+}
 
 // Category budgets: copia local editable de goalsStore.categoryBudgets
 const categoryBudgetInputs = reactive<Record<string, number | null>>({})

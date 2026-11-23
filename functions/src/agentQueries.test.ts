@@ -16,6 +16,7 @@ import {
   type SavingsGoalAccountSnapshot
 } from "./agentQueries";
 import { AgentToolError, NameMaps } from "./agentTools";
+import { buildAgentTools } from "./agentContext";
 
 const TZ = "America/Bogota";
 // Sunday 2026-10-11 15:00 in Bogotá.
@@ -265,14 +266,50 @@ test("buildBudgetStatus compares category budgets and the expense limit with the
   assert.equal(buildBudgetStatus({ categoryBudgets: {}, expenseLimit: 0, summary: month, names: NAMES }).expenseLimit, null);
 });
 
-test("S9: buildBudgetStatus converts categoryBudgets using categoryBudgetCurrency, disables comparison when unconfirmed/missing rate, and evaluates expenseLimit on all monthly expenses", () => {
+test("P1 S3: getWorkspaceSettings reports the base monthly cap separately from all-budget totals", async () => {
+  const assigns = ["extra-monthly", "event", "archived-event"].map(budgetId =>
+    tx(budgetId, "expense", -100_000, "2026-10-08T17:00:00Z", { categoryId: "food", budgetId })
+  );
+  const rows = ROWS.map(row => row.id === "market" ? { ...row, budgetId: "default-monthly" } : row);
+  const workspace = { expenseLimit: 500_000, categoryBudgets: { food: 100 }, categoryBudgetCurrency: "USD", exchangeRates: RATES };
+  const snapshots = (entries: [string, object][]) => entries.map(([id, data]) => ({ id, data: () => data }));
+  const collections = {
+    transactions: snapshots([...rows, ...assigns].map(row => [row.id, row])),
+    categories: snapshots([...NAMES.categories].map(([id, name]) => [id, { name }])),
+    accounts: snapshots([["card", { type: "credit", name: "Visa", statementClosingDay: 25, paymentDueDay: 5 }]])
+  };
+  // Stub the queries with local snapshots. Dates and duplicate rows are still handled by the real tool.
+  const db = { collection(name: keyof typeof collections) {
+    const query = {
+      where: () => query,
+      orderBy: () => query,
+      get: async () => ({ docs: collections[name] ?? [] }),
+      doc: () => ({ get: async () => ({ data: () => workspace }) })
+    };
+    return query;
+  } } as unknown as Parameters<typeof buildAgentTools>[0];
+  const tools = buildAgentTools(db, {
+    workspaceId: "workspace-a", userId: "user-a", primaryCurrency: "COP", timeZone: TZ, now: () => NOW
+  });
+  const settings = await tools.find(tool => tool.name === "getWorkspaceSettings")!.run({});
+  assert.ok(settings && typeof settings === "object" && "currentMonth" in settings);
+  assert.deepEqual(settings.currentMonth, {
+    period: { start: "2026-10-01", end: "2026-10-31", label: "octubre de 2026" },
+    totals: { income: 5_000_000, expenses: 790_020, net: 4_209_980, savingsRate: 84.2, upcomingInstallments: 0 },
+    expenseLimit: { limit: 500_000, spent: 490_020, remaining: 9_980, percentUsed: 98, exceeded: false },
+    categoryBudgets: [
+      { categoryId: "food", categoryName: "Comida", limit: 400_000, spent: 390_000, remaining: 10_000, percentUsed: 98, exceeded: false }
+    ],
+    categoryBudgetTotals: { budget: 400_000, spent: 390_000, percentUsed: 98 }
+  });
+});
+
+test("buildBudgetStatus converts category caps with manual FX but leaves the base expense cap in the reporting currency", () => {
   const month = run({ preset: "this_month" }, { groupBy: "category" });
-  // Confirmed USD caps converted to COP at 4000; expenseLimit evaluated on allExpensesTotal (900_000), not default-only summary.totals.expenses.
   const converted = buildBudgetStatus({
     categoryBudgets: { food: 100 },
     expenseLimit: 800_000,
     summary: month,
-    allExpensesTotal: 900_000,
     capCurrency: "USD",
     primaryCurrency: "COP",
     exchangeRates: { USD: 4000 },
@@ -281,8 +318,7 @@ test("S9: buildBudgetStatus converts categoryBudgets using categoryBudgetCurrenc
   assert.equal(converted.categories[0].limit, 400_000);
   assert.equal(converted.categories[0].percentUsed, 98);
   assert.equal(converted.totals.budget, 400_000);
-  assert.equal(converted.expenseLimit?.spent, 900_000);
-  assert.equal(converted.expenseLimit?.exceeded, true);
+  assert.deepEqual(converted.expenseLimit, { limit: 800_000, spent: 490_020, remaining: 309_980, percentUsed: 61, exceeded: false });
 
   // Unconfirmed capCurrency (null) or missing rate disables comparison instead of comparing 1:1.
   const unconfirmed = buildBudgetStatus({

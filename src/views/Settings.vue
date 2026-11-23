@@ -103,34 +103,6 @@
               <p v-if="inviteMsg" :class="inviteError ? 'text-accent-rose' : 'text-accent-emerald'" class="text-xs font-medium">{{ inviteMsg }}</p>
             </div>
 
-            <!-- Expense limit -->
-            <div class="p-4 sm:p-6 space-y-3">
-              <div>
-                <h4 class="font-display font-medium text-sm text-text-primary">Límite de gastos mensual</h4>
-                <p class="text-text-muted text-xs mt-1">Tope de egresos para este workspace, en tu moneda principal ({{ currency }}). Déjalo vacío para quitar el límite.</p>
-              </div>
-              <form @submit.prevent="handleUpdateLimit" class="flex flex-col sm:flex-row gap-3">
-                <input
-                  type="number"
-                  inputmode="decimal"
-                  min="0"
-                  step="any"
-                  v-model="expenseLimitInput"
-                  placeholder="Sin límite (ej. 1500000)"
-                  aria-label="Límite de gastos"
-                  class="field flex-1"
-                />
-                <button
-                  type="submit"
-                  class="sm:w-36 min-h-11 px-5 py-2.5 rounded-xl border border-accent-emerald/40 text-accent-emerald hover:bg-accent-emerald/10 font-display font-semibold text-sm cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                  <CheckIcon class="w-4 h-4" />
-                  <span>Guardar</span>
-                </button>
-              </form>
-              <p v-if="limitMsg" :class="limitError ? 'text-accent-rose' : 'text-accent-emerald'" class="text-xs font-medium" role="status" aria-live="polite">{{ limitMsg }}</p>
-            </div>
-
             <!-- Budget alert emails (workspace-wide). Whole row toggles the switch. -->
             <div class="p-4 sm:p-6">
               <label class="flex items-start justify-between gap-4 min-h-11 cursor-pointer">
@@ -614,7 +586,7 @@ import { fetchWorkspaceExport } from '@/lib/dataExportFetch'
 import { ACCOUNT_DELETION_CONFIRMATION, isDeletionConfirmed } from '@/lib/accountDeletion'
 import { track } from '@/lib/analytics'
 import {
-  Trash2 as TrashIcon, Plus as PlusIcon, Mail as MailIcon, Check as CheckIcon,
+  Trash2 as TrashIcon, Plus as PlusIcon, Mail as MailIcon,
   KeyRound as KeyRoundIcon, Sparkles, Users, Globe, Tags, Download as DownloadIcon, FileText
 } from 'lucide-vue-next'
 
@@ -1024,42 +996,6 @@ const handlePushToggle = async (event: Event) => {
   } finally {
     input.checked = pushStatus.value === 'enabled'
     pushBusy.value = false
-  }
-}
-
-// Límite mensual de gastos del workspace (hidratado desde Firestore y limpiable)
-const expenseLimitInput = ref<number | string>('')
-const limitMsg = ref('')
-const limitError = ref(false)
-
-const activeWorkspace = computed(() =>
-  workspacesStore.workspaces.find(w => w.id === authStore.activeWorkspaceId) ?? null
-)
-watch([() => authStore.activeWorkspaceId, () => activeWorkspace.value?.expenseLimit], () => {
-  const limit = activeWorkspace.value?.expenseLimit
-  expenseLimitInput.value = limit && limit > 0 ? limit : ''
-}, { immediate: true })
-
-const handleUpdateLimit = async () => {
-  if (!authStore.activeWorkspaceId) return
-  limitMsg.value = ''
-  limitError.value = false
-  const raw = String(expenseLimitInput.value ?? '').trim()
-  const numeric = raw === '' ? 0 : Number(raw)
-  if (!Number.isFinite(numeric) || numeric < 0) {
-    limitError.value = true
-    limitMsg.value = 'Ingresa un monto válido mayor o igual a 0.'
-    return
-  }
-  try {
-    await workspacesStore.updateWorkspaceLimit(authStore.activeWorkspaceId, numeric)
-    expenseLimitInput.value = numeric > 0 ? numeric : ''
-    limitMsg.value = numeric > 0 ? 'Límite mensual actualizado.' : 'Límite mensual eliminado.'
-    setTimeout(() => { limitMsg.value = '' }, 2500)
-  } catch (err: any) {
-    console.error('Error al actualizar límite mensual:', err)
-    limitError.value = true
-    limitMsg.value = err?.message || 'No se pudo actualizar el límite.'
   }
 }
 

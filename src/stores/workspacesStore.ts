@@ -8,6 +8,7 @@ interface WorkspacesState {
   workspaces: Workspace[];
   activeWorkspaceProfiles: UserProfile[];
   loading: boolean;
+  pendingExpenseLimitWrites: Set<string>;
 }
 
 // Función auxiliar (puedes adaptarla a tu entorno)
@@ -23,7 +24,8 @@ export const useWorkspacesStore = defineStore('workspaces', {
   state: (): WorkspacesState => ({
     workspaces: [],
     activeWorkspaceProfiles: [],
-    loading: false
+    loading: false,
+    pendingExpenseLimitWrites: new Set()
   }),
   actions: {
     async fetchMyWorkspaces() {
@@ -154,9 +156,18 @@ export const useWorkspacesStore = defineStore('workspaces', {
       if (!Number.isFinite(normalized) || normalized < 0) {
         throw new Error('El límite de gastos debe ser un número mayor o igual a 0.')
       }
-      await updateDoc(doc(db, 'workspaces', workspaceId), { expenseLimit: normalized })
-      const ws = this.workspaces.find(w => w.id === workspaceId)
-      if (ws) ws.expenseLimit = normalized
+      // Keep the claim across route changes; other workspaces can still save.
+      if (this.pendingExpenseLimitWrites.has(workspaceId)) {
+        throw new Error('Ya se está guardando el tope de este espacio de trabajo.')
+      }
+      this.pendingExpenseLimitWrites.add(workspaceId)
+      try {
+        await updateDoc(doc(db, 'workspaces', workspaceId), { expenseLimit: normalized })
+        const ws = this.workspaces.find(w => w.id === workspaceId)
+        if (ws) ws.expenseLimit = normalized
+      } finally {
+        this.pendingExpenseLimitWrites.delete(workspaceId)
+      }
     }
   }
 })
