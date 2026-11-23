@@ -2,9 +2,11 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import ts from 'typescript'
+import { computed, effectScope, reactive, ref, watch } from 'vue'
 import { DEFAULT_MONTHLY_BUDGET_ID, budgetChangeForEdit, canAssignBudget, canCarryBudget, resolveBudgetId } from '../lib/budgets.ts'
 import { toDateValue, toLocalDateKey } from '../lib/dates.ts'
 import { DELETED_ACCOUNT_HISTORY_MESSAGE, referencesDeletedAccount } from '../lib/deletedAccountHistory.ts'
+import { canDeleteMirrorTransaction } from '../lib/mirror.ts'
 
 const componentSource = readFileSync(new URL('./Transactions.vue', import.meta.url), 'utf8')
 const templateEnd = componentSource.indexOf('<script setup lang="ts">')
@@ -35,6 +37,31 @@ const evaluateComponentFunction = <Result>(name: string, dependencies: Record<st
   const evaluate = new Function(...dependencyNames, `return ${javascript}`) as (...args: unknown[]) => Result
   return evaluate(...dependencyValues)
 }
+
+test('runs Transactions setup when there are already movements to display', () => {
+  const dependencies = {
+    computed, reactive, ref, watch, DEFAULT_MONTHLY_BUDGET_ID, canDeleteMirrorTransaction, toLocalDateKey,
+    onMounted: () => {}, // Do not fetch data; exercise the synchronous setup path in isolation.
+    useRoute: () => ({ query: {} }),
+    useRouter: () => ({}),
+    useAccountsStore: () => ({}),
+    useAuthStore: () => ({}),
+    useGoalsStore: () => ({ operatingBudgets: [] }),
+    useTransactionsStore: () => ({ filteredTransactions: () => [{ id: 'movement', type: 'expense' }] }),
+    useWorkspacesStore: () => ({})
+  }
+  // Keep the actual declaration order and Vue's watcher behavior rather than testing functions in isolation.
+  const setupBody = sourceFile.statements.filter(statement => !ts.isImportDeclaration(statement))
+    .map(statement => statement.getText(sourceFile)).join('\n')
+  const javascript = ts.transpile(setupBody, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None })
+  const runSetup = new Function(...Object.keys(dependencies), javascript)
+  const scope = effectScope()
+  try {
+    assert.doesNotThrow(() => scope.run(() => runSetup(...Object.values(dependencies))))
+  } finally {
+    scope.stop()
+  }
+})
 
 type TestBudget = { id: string; name: string; archived: boolean; linkedAccountIds?: string[] }
 

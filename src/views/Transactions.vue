@@ -1137,12 +1137,6 @@ const selectedTxIds = ref<string[]>([])
 const deletableDisplayedTransactions = computed(() =>
   displayedTransactions.value.filter(canDeleteMirrorTransaction)
 )
-watch(deletableDisplayedTransactions, rows => {
-  const allowed = new Set(rows.map(row => row.id))
-  if (selectedTxIds.value.some(id => !allowed.has(id))) {
-    selectedTxIds.value = selectedTxIds.value.filter(id => allowed.has(id))
-  }
-})
 const isAllSelected = computed(() => {
   return deletableDisplayedTransactions.value.length > 0 &&
          selectedTxIds.value.length === deletableDisplayedTransactions.value.length
@@ -1412,6 +1406,14 @@ const filteredCount = computed(() => transactionsStore.filteredTransactions(filt
 
 const displayedTransactions = computed(() => {
   return transactionsStore.filteredTransactions(filters).slice(0, visibleCount.value)
+})
+
+// watch reads its source during setup, so the displayed list must already exist.
+watch(deletableDisplayedTransactions, rows => {
+  const allowed = new Set(rows.map(row => row.id))
+  if (selectedTxIds.value.some(id => !allowed.has(id))) {
+    selectedTxIds.value = selectedTxIds.value.filter(id => allowed.has(id))
+  }
 })
 
 // Préstamos pendientes por cobrar: |préstamos dados| - pagos recibidos, por moneda.
