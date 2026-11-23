@@ -27,12 +27,15 @@ import {
 interface AccountsState {
   accounts: Account[];
   loading: boolean;
+  // Workspace whose accounts were fully loaded; lets callers tell "deleted" from "not loaded yet".
+  loadedWorkspaceId: string | null;
 }
 
 export const useAccountsStore = defineStore('accounts', {
   state: (): AccountsState => ({
     accounts: [],
     loading: false,
+    loadedWorkspaceId: null,
   }),
   getters: {
     getAccountById: (state) => (id: string): Account | undefined => state.accounts.find(acc => acc.id === id),
@@ -49,11 +52,12 @@ export const useAccountsStore = defineStore('accounts', {
   },
   actions: {
     // Obtener todas las cuentas del usuario
-    async fetchAccounts(): Promise<void> {
+    /** Loads the active workspace's accounts; resolves true only when the list was replaced. */
+    async fetchAccounts(): Promise<boolean> {
       const authStore = useAuthStore()
       const workspaceId = authStore.activeWorkspaceId
       const userId = auth.currentUser?.uid
-      if (!workspaceId) return
+      if (!workspaceId) return false
 
       this.loading = true
       try {
@@ -70,9 +74,13 @@ export const useAccountsStore = defineStore('accounts', {
         })
         if (authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === userId) {
           this.accounts = accountsList
+          this.loadedWorkspaceId = workspaceId
+          return true
         }
+        return false
       } catch (error) {
         console.error('Error fetching accounts:', error)
+        return false
       } finally {
         this.loading = false
       }

@@ -190,7 +190,7 @@
               </td>
               <!-- Account -->
               <td class="py-4 px-3 text-text-secondary max-w-[10rem]">
-                <div class="truncate" :title="getAccountName(tx.accountId)">{{ getAccountName(tx.accountId) }}</div>
+                <div class="truncate" :title="getAccountName(tx.accountId, tx.workspaceId)">{{ getAccountName(tx.accountId, tx.workspaceId) }}</div>
               </td>
               <!-- Category -->
               <td class="py-4 px-3">
@@ -326,7 +326,7 @@
               <p v-if="tx.installments && tx.installments > 1" class="text-[10px] text-accent-amber mt-1">
                 {{ tx.installments }} cuotas · {{ formatCurrency(getMonthlyInstallmentAmount(tx.amount, tx.installments), tx.currency || getAccountCurrency(tx.accountId)) }} / mes
               </p>
-              <p class="text-[10px] text-text-muted mt-1">{{ getAccountName(tx.accountId) }} · {{ formatDate(tx.date) }}</p>
+              <p class="text-[10px] text-text-muted mt-1">{{ getAccountName(tx.accountId, tx.workspaceId) }} · {{ formatDate(tx.date) }}</p>
             </div>
           </div>
           <p :class="['font-display font-semibold text-sm shrink-0 text-right', displayOf(tx).amountClass]">
@@ -1053,6 +1053,7 @@ import { getMonthlyInstallmentAmount } from '@/lib/installments'
 import { toDateValue, toLocalDateKey } from '@/lib/dates'
 import { getTransactionDisplay } from '@/lib/transactionDisplay'
 import { canTransferBetweenAccounts, getAccountDisplayLabel, isPocketAccount, isPocketRelatedAccount } from '@/lib/pockets'
+import { DELETED_ACCOUNT_HISTORY_MESSAGE, referencesDeletedAccount } from '@/lib/deletedAccountHistory'
 import { canDeleteMirrorTransaction, isSettlementCandidate } from '@/lib/mirror'
 import { 
   Plus as PlusIcon, 
@@ -1632,7 +1633,20 @@ const saveTransaction = async () => {
   }
 }
 
-const openEditModal = (tx: any) => {
+// Workspace whose accounts are fully loaded and active; null while loading or switching.
+const loadedAccountsWorkspaceId = () =>
+  accountsStore.loadedWorkspaceId === authStore.activeWorkspaceId ? accountsStore.loadedWorkspaceId : null
+
+const openEditModal = async (tx: any) => {
+  if (referencesDeletedAccount(tx, accountsStore.accounts, loadedAccountsWorkspaceId())) {
+    // Another member may have added the account after the last load: refuse only when a
+    // successful refresh still cannot find it.
+    if (await accountsStore.fetchAccounts() &&
+        referencesDeletedAccount(tx, accountsStore.accounts, loadedAccountsWorkspaceId())) {
+      alert(DELETED_ACCOUNT_HISTORY_MESSAGE)
+      return
+    }
+  }
   editingTxId.value = tx.id
   const currentBudgetId = resolveBudgetId(tx.budgetId)
   editBudgetId.value = currentBudgetId
@@ -1823,9 +1837,11 @@ const confirmSettlementReversal = async () => {
 }
 
 // Helpers
-const getAccountName = (id: string) => {
+const getAccountName = (id: string, workspaceId?: string) => {
   const acc = accountsStore.getAccountById(id)
-  return acc ? getAccountDisplayLabel(acc, accountsStore.accounts) : 'Desconocida'
+  if (acc) return getAccountDisplayLabel(acc, accountsStore.accounts)
+  const loadedWorkspaceId = loadedAccountsWorkspaceId()
+  return loadedWorkspaceId && workspaceId === loadedWorkspaceId ? 'Cuenta eliminada' : 'Desconocida'
 }
 
 const getAccountCurrency = (id: string) => {
