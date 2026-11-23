@@ -87,4 +87,10 @@ como puedo hacer pagos a mi tarjeta ?" Evidence: `src/lib/pockets.ts:90-112`, `d
     - A card can be deleted while payments still reference it, which then blocks deleting those payments.
     - A card statement import cannot pick a pocket counterparty, so a payment recorded manually could be imported twice.
   - Risk: item 2 (rules) + item 1 (balances).
+- **L16 (2026-11-23, deploy):** Executed the plan the user approved in L14.
+  - Merge: `52a12cc` on local `main` (`--no-ff` from `da8f251`). Its tree is identical to `feat/accounting-integrity-p0`, which is `4afc3e9`. Not pushed: `main` stays local until the user asks, because a push triggers the CI hosting deploy.
+  - Dry run with Firebase CLI 15.17.0 under Node 22 (`~/.nvm/versions/node/v22.22.0/bin`, because this shell's PATH had no `firebase`) passed. The rules compiled with 6 static type or unused-variable warnings: lines 47 and 53 from T8 `validGoalLinkedAccount`, and lines 378, 472 and 637 in pre-existing functions. There is also a notice that `firebase-functions` is outdated.
+  - The real `firebase deploy --project vault-41b34 --only firestore:rules,functions,hosting:app` exited 0. It released the rules, updated 9 functions (including `importPocketStatement`, `chatWithAgent`, `bridgeSettlement`) and released `hosting[vault-41b34]`. The landing was not redeployed.
+  - Live check: `vault-41b34.web.app` and `app.finances.lynor.cloud` both serve `assets/index-DToJ_GM2.js`, the same hash as the local build, and that file contains the T9 message.
+  - Not verified in production: real user flows (pocket → card payment, linked goals, keyed import replay), and whether legacy production documents still pass the tightened rules.
 
