@@ -6,6 +6,8 @@ import * as Vue from 'vue'
 import { createPinia, disposePinia } from 'pinia'
 import ts from 'typescript'
 import type { Workspace } from '../types.ts'
+import { planLegacyCategoryBudgetCurrencyConfirmation } from '../lib/budgetWorkspaceAdapter.ts'
+import { SUPPORTED_CURRENCIES, defaultCurrencyCode } from '../lib/currencies.ts'
 
 // The retired per-device preference must be ignored: every browser storage access is recorded.
 const storageCalls: unknown[][] = []
@@ -119,4 +121,88 @@ test('S6: a delayed owner write for A does not change the basis shown after swit
   assert.equal(store.workspaces[1].budgetCardBasis, undefined)
   authStore.activeWorkspaceId = 'workspace-a'
   assert.equal(store.activeBudgetCardBasis, 'payment')
+})
+
+// Workspace creation with recording fakes for the new document, the profile write and the activation.
+const loadCreationStore = (t: TestContext) => {
+  const authStore = Vue.reactive({
+    user: { uid: 'owner' },
+    profile: { workspaces: ['personal'] } as { workspaces: string[] },
+    activeWorkspaceId: 'personal',
+    activated: [] as string[],
+    async activateWorkspace(workspaceId: string) { this.activated.push(workspaceId); this.activeWorkspaceId = workspaceId }
+  })
+  const created: [string, Record<string, unknown>][] = []
+  const updated: [string, Record<string, unknown>][] = []
+  const storeModule = {} as typeof import('./workspacesStore.ts')
+  new Function('exports', 'require', storeScript)(storeModule, (id: string) => {
+    if (id === '@/lib/firebase') return { db: {}, auth: { currentUser: { uid: 'owner' } } }
+    if (id === './authStore') return { useAuthStore: () => authStore }
+    if (id === 'firebase/firestore') return {
+      collection: (_db: object, name: string) => ({ name }),
+      doc: (...args: unknown[]) => args.length === 1 ? { id: 'new-ws', path: 'workspaces/new-ws' } : `${args[1]}/${args[2]}`,
+      setDoc: async (ref: { path: string }, data: Record<string, unknown>) => { created.push([ref.path, data]) },
+      updateDoc: async (path: string, data: Record<string, unknown>) => { updated.push([path, data]) }
+    }
+    return requireModule(id.startsWith('@/') ? `../${id.slice(2)}.ts` : id)
+  })
+  const pinia = createPinia()
+  t.after(() => disposePinia(pinia))
+  const store = storeModule.useWorkspacesStore(pinia)
+  store.workspaces = [workspace('personal', { ownerId: 'owner', members: ['owner'] })]
+  return { store, storeModule, authStore, created, updated }
+}
+
+test('S7: a new workspace stores its budget-limit currency already confirmed in the creator main currency', async t => {
+  for (const currency of ['COP', 'EUR']) {
+    const { store, authStore, created, updated } = loadCreationStore(t)
+    assert.equal(await store.createWorkspace('Hogar', { countryConfigured: true, currency }), 'new-ws')
+    const [[path, data]] = created
+    assert.equal(path, 'workspaces/new-ws')
+    assert.deepEqual({ ...data, createdAt: 'any' }, {
+      id: 'new-ws', name: 'Hogar', ownerId: 'owner', members: ['owner'], currency, categoryBudgetCurrency: currency, createdAt: 'any'
+    }, 'the main currency replaces the old USD default')
+    // Read back by the onboarding/Goals confirmation rules: confirmed, so the wizard has nothing to ask.
+    assert.deepEqual(planLegacyCategoryBudgetCurrencyConfirmation(data, currency), { status: 'unchanged' })
+    assert.throws(() => planLegacyCategoryBudgetCurrencyConfirmation(data, currency === 'COP' ? 'USD' : 'COP'), /already confirmed/)
+    // Existing behavior: listed, added to the profile and made active.
+    assert.deepEqual(store.workspaces.map(w => w.id), ['personal', 'new-ws'])
+    assert.deepEqual(updated, [['users/owner', { workspaces: ['personal', 'new-ws'] }]])
+    assert.deepEqual(authStore.activated, ['new-ws'], 'switches through the shared activation, which reloads its data')
+  }
+})
+
+test('S7: before the creator picks a main currency, a new workspace leaves the limit currency for onboarding', async t => {
+  const { store, created, authStore } = loadCreationStore(t)
+  await store.createWorkspace('Hogar', { countryConfigured: false, currency: 'USD' })
+  const [[, data]] = created
+  assert.equal(Object.hasOwn(data, 'categoryBudgetCurrency'), false)
+  assert.equal(data.currency, 'USD', 'the profile currency (a sign-up default) is kept, never a fixed code')
+  assert.deepEqual(authStore.activated, ['new-ws'])
+})
+
+test('S7: the shared creation rule writes exactly the confirmation patch onboarding writes, for every supported currency', t => {
+  const { storeModule } = loadCreationStore(t)
+  for (const { code } of SUPPORTED_CURRENCIES) {
+    const plan = planLegacyCategoryBudgetCurrencyConfirmation({}, code)
+    assert.equal(plan.status, 'confirmed', code)
+    assert.deepEqual(storeModule.newWorkspaceCurrencyFields(code, 'USD'), { currency: code, ...plan.patch }, code)
+  }
+  assert.deepEqual(storeModule.newWorkspaceCurrencyFields(null, 'USD'), { currency: 'USD' })
+})
+
+test('S7: a stored main currency with other casing, spaces or an unknown code still creates the workspace', async t => {
+  const fallback = defaultCurrencyCode(null)
+  for (const [stored, expected] of [['cop', 'COP'], [' COP', 'COP'], ['eur ', 'EUR'], [' mxn ', 'MXN'], ['Peso', fallback], ['', fallback]]) {
+    const { store, created, authStore } = loadCreationStore(t)
+    assert.equal(await store.createWorkspace('Hogar', { countryConfigured: true, currency: stored }), 'new-ws', JSON.stringify(stored))
+    const [[, data]] = created
+    assert.equal(data.currency, expected, JSON.stringify(stored))
+    assert.equal(data.categoryBudgetCurrency, expected, 'normalized like the rest of the app, then confirmed')
+    assert.deepEqual(planLegacyCategoryBudgetCurrencyConfirmation(data, expected), { status: 'unchanged' })
+    assert.deepEqual(authStore.activated, ['new-ws'])
+  }
+  const { store, created } = loadCreationStore(t)
+  await store.createWorkspace('Hogar', { countryConfigured: false, currency: ' usd' })
+  assert.deepEqual({ currency: created[0][1].currency, confirmed: Object.hasOwn(created[0][1], 'categoryBudgetCurrency') }, { currency: 'USD', confirmed: false })
 })

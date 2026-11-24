@@ -4,6 +4,8 @@ import { Workspace, UserProfile } from '@/types'
 import { collection, query, where, getDocs, doc, setDoc, updateDoc, getDoc } from 'firebase/firestore'
 import { useAuthStore } from './authStore'
 import { parseBudgetBasis, type BudgetBasis } from '@/lib/budgetBasis'
+import { planLegacyCategoryBudgetCurrencyConfirmation } from '@/lib/budgetWorkspaceAdapter'
+import { defaultCurrencyCode } from '@/lib/currencies'
 
 interface WorkspacesState {
   workspaces: Workspace[];
@@ -20,6 +22,27 @@ const getFunctionUrl = (name: string): string => {
     return `http://localhost:5001/${projectId}/us-central1/${name}`
   }
   return `https://us-central1-${projectId}.cloudfunctions.net/${name}`
+}
+
+/** The creator's regional settings; the main currency counts only once a country was saved (before, it is a sign-up default). */
+export interface WorkspaceCreator {
+  readonly countryConfigured: boolean
+  readonly currency: string
+}
+
+/**
+ * Currency fields of every new workspace (Ajustes and sign-up). With the creator's main currency
+ * known, the budget-limit currency is stored already confirmed in it, with the same patch the
+ * onboarding confirmation writes, so the wizard has nothing to ask. Without it (sign-up), the
+ * limit currency stays unconfirmed and onboarding asks for it after the region step.
+ * Stored codes are normalized like every currency selector ('cop' -> 'COP'; unknown -> the app
+ * default), so a profile value never makes the creation fail.
+ */
+export function newWorkspaceCurrencyFields(mainCurrency: string | null, fallbackCurrency: string): Pick<Workspace, 'currency' | 'categoryBudgetCurrency'> {
+  if (mainCurrency === null) return { currency: defaultCurrencyCode(fallbackCurrency) }
+  const code = defaultCurrencyCode(mainCurrency)
+  const plan = planLegacyCategoryBudgetCurrencyConfirmation({}, code)
+  return { currency: code, ...(plan.status === 'confirmed' ? plan.patch : {}) }
 }
 
 export const useWorkspacesStore = defineStore('workspaces', {
@@ -90,7 +113,7 @@ export const useWorkspacesStore = defineStore('workspaces', {
       }
     },
     
-    async createWorkspace(name: string) {
+    async createWorkspace(name: string, creator: WorkspaceCreator) {
       const user = auth.currentUser
       if (!user) return
 
@@ -98,13 +121,14 @@ export const useWorkspacesStore = defineStore('workspaces', {
       try {
         const newRef = doc(collection(db, 'workspaces'))
         const workspaceId = newRef.id
-        
+        const mainCurrency = creator.countryConfigured ? creator.currency : null
+
         const newWorkspace: Workspace = {
           id: workspaceId,
           name,
           ownerId: user.uid,
           members: [user.uid],
-          currency: 'USD',
+          ...newWorkspaceCurrencyFields(mainCurrency, creator.currency),
           createdAt: new Date().toISOString()
         }
         await setDoc(newRef, newWorkspace)
@@ -120,8 +144,8 @@ export const useWorkspacesStore = defineStore('workspaces', {
             workspaces: updatedWorkspaces
           })
           
-          // Automáticamente cambiar a este workspace
-          await authStore.switchWorkspace(workspaceId)
+          // Switch to it and reload every workspace-scoped store, exactly like the sidebar switcher.
+          await authStore.activateWorkspace(workspaceId)
         }
         
         return workspaceId

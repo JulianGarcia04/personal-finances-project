@@ -914,9 +914,11 @@ const handleCreateWorkspace = async () => {
   
   creatingWorkspace.value = true
   try {
-    await workspacesStore.createWorkspace(newWorkspaceName.value.trim())
+    // The store confirms its limit currency in your main currency, switches to it and reloads its data.
+    await workspacesStore.createWorkspace(newWorkspaceName.value.trim(), settingsStore)
     track('workspace_created')
     newWorkspaceName.value = ''
+    budgetAlertsEnabled.value = goalsStore.budgetAlertsEnabled
   } catch (err: any) {
     console.error('Error al crear workspace', err)
     notifications.error('No se pudo crear el workspace. Inténtalo de nuevo.')

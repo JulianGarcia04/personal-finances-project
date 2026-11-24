@@ -5,7 +5,7 @@
       <div class="relative w-16 h-16 mb-4">
         <div class="absolute inset-0 rounded-full border-4 border-accent-emerald/20 border-t-accent-emerald animate-spin"></div>
       </div>
-      <p class="font-display text-sm tracking-widest text-accent-emerald font-semibold uppercase animate-pulse">Cargando Bóveda...</p>
+      <p class="font-display text-sm tracking-widest text-accent-emerald font-semibold uppercase animate-pulse">Cargando Lynor Finanzas…</p>
     </div>
 
     <!-- App Layout -->

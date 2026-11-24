@@ -13,7 +13,7 @@
           {{ isReset ? 'Recupera tu contraseña' : isRegister ? 'Crear una Cuenta' : 'Bienvenido a Lynor Finanzas' }}
         </h2>
         <p class="text-text-secondary text-sm mt-2">
-          {{ isReset ? 'Te enviaremos un enlace para crear una contraseña nueva' : isRegister ? 'Registra tus datos para empezar a gestionar tus finanzas' : 'Inicia sesión para entrar a tu bóveda personal' }}
+          {{ isReset ? 'Te enviaremos un enlace para crear una contraseña nueva' : isRegister ? 'Registra tus datos para empezar a gestionar tus finanzas' : 'Inicia sesión para ver tus finanzas' }}
         </p>
       </div>
 
@@ -134,7 +134,7 @@
           class="w-full min-h-11 py-3.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm tracking-wide shadow-glow-emerald hover:shadow-lg transition-all duration-200 flex items-center justify-center space-x-2 cursor-pointer disabled:opacity-50"
         >
           <span v-if="loading" class="w-4 h-4 border-2 border-background border-t-transparent rounded-full animate-spin"></span>
-          <span>{{ isReset ? 'Enviar enlace' : isRegister ? 'Registrarse' : 'Ingresar a la Bóveda' }}</span>
+          <span>{{ isReset ? 'Enviar enlace' : isRegister ? 'Registrarse' : 'Ingresar' }}</span>
         </button>
       </form>
 

@@ -1,11 +1,26 @@
 <template>
   <div>
-    <!-- Mobile Top Header (brand only; navigation lives in the bottom tab bar) -->
+    <!-- Mobile Top Header: brand and the active workspace (navigation lives in the bottom tab bar) -->
     <header
       v-if="authStore.isAuthenticated"
-      class="lg:hidden fixed top-0 left-0 right-0 h-[calc(4rem+env(safe-area-inset-top))] pt-safe glass-panel border-b border-white/5 z-30 flex items-center px-4 backdrop-blur-md bg-background/80"
+      class="lg:hidden fixed top-0 left-0 right-0 h-[calc(4rem+env(safe-area-inset-top))] pt-safe glass-panel border-b border-white/5 z-30 flex items-center justify-between gap-3 px-4 backdrop-blur-md bg-background/80"
     >
-      <LynorLogo mark-class="w-7 h-7" class="text-lg" />
+      <LynorLogo mark-class="w-7 h-7" class="text-lg shrink-0" />
+      <!-- Opens the switcher in the "Más" drawer, so a movement is never saved in the wrong workspace unnoticed. -->
+      <button
+        v-if="workspacesStore.workspaces.length > 0"
+        ref="headerWorkspaceButton"
+        type="button"
+        @click="openWorkspaceSwitcher"
+        :aria-expanded="isOpen"
+        aria-controls="app-drawer"
+        :aria-label="`Espacio de trabajo: ${activeWorkspaceName}. Cambiar de espacio`"
+        class="min-w-0 max-w-[60%] min-h-11 flex items-center gap-1.5 px-3 rounded-xl bg-slate-800/50 border border-border text-sm font-medium text-text-primary hover:bg-slate-700/50 active:bg-slate-700/50 transition-colors focus-visible:outline-2 focus-visible:outline-accent-emerald"
+      >
+        <BuildingIcon class="shrink-0 w-4 h-4 text-accent-emerald" aria-hidden="true" />
+        <span class="truncate">{{ activeWorkspaceName }}</span>
+        <ChevronDownIcon class="shrink-0 w-4 h-4 text-text-muted" aria-hidden="true" />
+      </button>
     </header>
 
     <!-- Overlay when mobile menu open -->
@@ -47,6 +62,7 @@
         <!-- Workspace Switcher -->
         <div ref="workspaceMenuRef" class="mb-6 px-2 relative" v-if="workspacesStore.workspaces.length > 0">
           <button
+            ref="workspaceSwitcherButton"
             type="button"
             @click="isWorkspaceMenuOpen = !isWorkspaceMenuOpen"
             :aria-expanded="isWorkspaceMenuOpen"
@@ -204,9 +220,7 @@ import LynorLogo from '@/components/LynorLogo.vue'
 import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
-import { useAccountsStore } from '@/stores/accountsStore'
-import { useTransactionsStore } from '@/stores/transactionsStore'
-import { useGoalsStore } from '@/stores/goalsStore'
+import { useNotificationsStore } from '@/stores/notificationsStore'
 import { 
   LayoutDashboard as DashboardIcon, 
   Landmark as AccountsIcon, 
@@ -226,9 +240,7 @@ import {
 const authStore = useAuthStore()
 const settingsStore = useSettingsStore()
 const workspacesStore = useWorkspacesStore()
-const accountsStore = useAccountsStore()
-const transactionsStore = useTransactionsStore()
-const goalsStore = useGoalsStore()
+const notifications = useNotificationsStore()
 const router = useRouter()
 const route = useRoute()
 
@@ -237,6 +249,10 @@ const isWorkspaceMenuOpen = ref(false)
 const workspaceMenuRef = ref<HTMLElement | null>(null)
 const drawerCloseButton = useTemplateRef<HTMLButtonElement>('drawerCloseButton')
 const moreButton = useTemplateRef<HTMLButtonElement>('moreButton')
+const headerWorkspaceButton = useTemplateRef<HTMLButtonElement>('headerWorkspaceButton')
+const workspaceSwitcherButton = useTemplateRef<HTMLButtonElement>('workspaceSwitcherButton')
+// True while the drawer was opened from the header workspace control: focus goes to the switcher and back.
+const openedFromWorkspace = ref(false)
 
 // Drawer is off-canvas only below lg (1024px); keep in sync to release locks on resize.
 const desktopQuery = typeof window !== 'undefined' ? window.matchMedia('(min-width: 1024px)') : null
@@ -258,13 +274,26 @@ watch(
 )
 
 watch(isOpen, (open) => {
-  if (!open) isWorkspaceMenuOpen.value = false
+  const fromWorkspace = openedFromWorkspace.value
+  if (!open) {
+    isWorkspaceMenuOpen.value = false
+    openedFromWorkspace.value = false
+  }
   if (isDesktop.value) return
   const focused = document.activeElement
   if (open || focused === document.body || focused?.closest('#app-drawer')) {
-    (open ? drawerCloseButton.value : moreButton.value)?.focus({ preventScroll: true })
+    const target = open
+      ? (fromWorkspace ? workspaceSwitcherButton : drawerCloseButton)
+      : (fromWorkspace ? headerWorkspaceButton : moreButton)
+    target.value?.focus({ preventScroll: true })
   }
 }, { flush: 'post' })
+
+const openWorkspaceSwitcher = () => {
+  openedFromWorkspace.value = true
+  isOpen.value = true
+  isWorkspaceMenuOpen.value = true
+}
 
 const navigateFromDrawer = (event: MouseEvent, navigate: (event: MouseEvent) => Promise<unknown>) => {
   isOpen.value = false
@@ -315,19 +344,12 @@ const switchWorkspace = async (workspaceId: string) => {
     return
   }
   
-  await authStore.switchWorkspace(workspaceId)
   isWorkspaceMenuOpen.value = false
   isOpen.value = false // Cierra sidebar en móvil
-  
-  // Recargar datos reactivos de stores operativas para el nuevo workspace
-  await Promise.all([
-    accountsStore.fetchAccounts(),
-    transactionsStore.fetchTransactions(),
-    goalsStore.fetchGoals(),
-    goalsStore.loadBudgetSettings(),
-    transactionsStore.fetchCategories()
-  ])
-  
+
+  // Shared with workspace creation: switches and reloads every workspace-scoped store.
+  await authStore.activateWorkspace(workspaceId)
+
   // Opcional: Redirigir al dashboard para limpiar vistas profundas
   if (router.currentRoute.value.name !== 'Dashboard') {
     router.push({ name: 'Dashboard' })
@@ -387,6 +409,7 @@ const handleLogout = async () => {
     router.push({ name: 'Login' })
   } catch (err) {
     console.error('Error al salir:', err)
+    notifications.error('No se pudo cerrar la sesión. Inténtalo de nuevo.')
   }
 }
 </script>

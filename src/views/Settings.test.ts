@@ -181,6 +181,9 @@ test('S7: a failed workspace creation shows an error toast without technical det
       newWorkspaceName,
       creatingWorkspace,
       track: () => {},
+      settingsStore: { countryConfigured: true, currency: 'COP' },
+      goalsStore: { budgetAlertsEnabled: true },
+      budgetAlertsEnabled: ref(true),
       workspacesStore: {
         createWorkspace: async (name: string) => {
           created.push(name)
@@ -200,6 +203,35 @@ test('S7: a failed workspace creation shows an error toast without technical det
       assert.equal(newWorkspaceName.value, '')
     }
   }
+})
+
+test('S7: a workspace created from Settings gets the main currency and shows its own freshly loaded data', async () => {
+  const ui = dialogs()
+  const settingsStore = { countryConfigured: true, currency: 'MXN' }
+  const goalsStore = { budgetAlertsEnabled: false }
+  const budgetAlertsEnabled = ref(false)
+  const calls: unknown[][] = []
+  const handleCreateWorkspace = evaluateSetupConst<() => Promise<void>>('handleCreateWorkspace', {
+    ...ui.deps,
+    newWorkspaceName: ref('Hogar'),
+    creatingWorkspace: ref(false),
+    track: () => {},
+    settingsStore,
+    goalsStore,
+    budgetAlertsEnabled,
+    workspacesStore: {
+      // The store creates, confirms the limit currency and activates (switch + shared reload).
+      createWorkspace: async (...args: unknown[]) => { calls.push(args); goalsStore.budgetAlertsEnabled = true }
+    }
+  })
+  await handleCreateWorkspace()
+  assert.deepEqual(calls, [['Hogar', settingsStore]], 'the creator settings decide the confirmed limit currency')
+  assert.equal(budgetAlertsEnabled.value, true, 'the alerts switch shows the new workspace, not the previous one')
+  assert.deepEqual(ui.errors, [])
+
+  const handler = settings.slice(settings.indexOf('const handleCreateWorkspace = async'), settings.indexOf('const handleInviteUser'))
+  assert.doesNotMatch(handler, /switchWorkspace|activateWorkspace|fetchAccounts|fetchTransactions|loadBudgetSettings/,
+    'no second switch or reload next to the shared one')
 })
 
 test('S7: a failed budget-alerts toggle reverts the switch and shows an error toast', async () => {

@@ -24,3 +24,8 @@ test('the app calls itself Lynor Finanzas, never Vault', () => {
   assert.match(read('../../index.html'), /<title>Lynor Finanzas \|/)
   assert.match(read('../views/Login.vue'), /'Bienvenido a Lynor Finanzas'/)
 })
+
+// "Bóveda" was the old Spanish name; any spelling or case would mix brands again.
+test('the app never calls itself Bóveda', () => {
+  for (const file of shipped) assert.doesNotMatch(read(file).normalize('NFC'), /b[oó]veda/iu, file)
+})

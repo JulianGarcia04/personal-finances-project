@@ -4,7 +4,7 @@
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
       <div class="min-w-0">
         <h2 class="font-display font-bold text-2xl sm:text-3xl text-text-primary tracking-tight break-words">
-          Bóveda de {{ authStore.user?.displayName }}
+          Hola, {{ authStore.user?.displayName }}
         </h2>
         <p class="text-text-secondary text-sm mt-1">Aquí tienes el resumen de tu salud financiera actual.</p>
       </div>
