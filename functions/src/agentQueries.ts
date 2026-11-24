@@ -2,6 +2,8 @@ import { AgentToolError, buildDateContext, NameMaps } from "./agentTools";
 import { roundMoney } from "./money";
 import {
   CardBilling,
+  expenseAmountForMonth,
+  ImputationBasis,
   paymentMonthIndex,
   YearMonth,
   zonedDateKey,
@@ -10,6 +12,7 @@ import {
 } from "./http";
 import {
   AlertScope,
+  BillingLookup,
   capInReportingCurrency,
   LinkedBudgetLookup,
   monthlyExpenseTotal,
@@ -471,7 +474,17 @@ export interface SummaryOptions {
    * extra rows outside the period that event budgets need (their all-time income, expenses and
    * transfers). Extra rows never feed the existing totals.
    */
-  budgetBreakdown?: { budgets: SummaryBudget[]; extraRows?: SummaryTransaction[]; creditAccountIds?: ReadonlySet<string> };
+  budgetBreakdown?: {
+    budgets: SummaryBudget[];
+    extraRows?: SummaryTransaction[];
+    creditAccountIds?: ReadonlySet<string>;
+    /**
+     * Only when the workspace has billing cards: the card basis its owner chose for budgets and
+     * the billing it gives (budgetAlerts alertCardBilling). byBudget then counts card expenses by
+     * it instead of `cardBilling` (cash flow) and says so in its notes.
+     */
+    cards?: { basis: ImputationBasis; billingFor: BillingLookup };
+  };
 }
 
 const categoryName = (id: string | null | undefined, names: NameMaps) =>
@@ -633,7 +646,7 @@ export function summarize(rows: SummaryTransaction[], options: SummaryOptions): 
     notes.push(`Las compras a cuotas cuentan solo la cuota de cada mes; incluye ${current.totals.upcomingInstallments} ${options.primaryCurrency} en cuotas o pagos de tarjeta que vencen después de hoy dentro del periodo.`);
   }
   missing.forEach(code => {
-    notes.push(`Tasa de cambio faltante para ${code}: se usó 1:1. Configúrala en Objetivos & Presupuesto para totales exactos.`);
+    notes.push(missingRateNote(code));
   });
   const byBudget = options.budgetBreakdown && !options.accountId && !options.categoryId
     ? budgetBreakdown(rows, options, options.budgetBreakdown)
@@ -642,8 +655,23 @@ export function summarize(rows: SummaryTransaction[], options: SummaryOptions): 
   return summary;
 }
 
+/** Note for a currency converted 1:1 because its manual rate is missing. */
+export function missingRateNote(currency: string): string {
+  return `Tasa de cambio faltante para ${currency}: se usó 1:1. Configúrala en Objetivos & Presupuesto para totales exactos.`;
+}
+
+/**
+ * Note for budget figures (`fields`) that count card expenses by the workspace basis, which can
+ * differ from the period totals (cash flow: each statement in the month it is due).
+ */
+export function budgetCardBasisNote(fields: string, basis: ImputationBasis): string {
+  return basis === "payment"
+    ? `Las cifras de ${fields} cuentan las compras con tarjeta de crédito cuando se paga su extracto (base Pagos del workspace): lo abonado antes del vencimiento cuenta en el mes del abono y lo pendiente en el mes de pago.`
+    : `Las cifras de ${fields} cuentan cada compra con tarjeta de crédito en el mes del ciclo de su extracto (base Consumo del workspace); los totales del periodo la cuentan en el mes en que se paga.`;
+}
+
 /** Calendar months a period covers exactly (first to last day), or null for partial months. */
-function wholeMonths(period: ResolvedPeriod): YearMonth[] | null {
+export function wholeMonths(period: ResolvedPeriod): YearMonth[] | null {
   const start = keyParts(period.start);
   const end = keyParts(period.end);
   if (start.day !== 1 || end.day !== daysInMonth(end.year, end.month)) return null;
@@ -689,7 +717,7 @@ function budgetBreakdown(
     timeZone,
     reportingCurrency: primaryCurrency,
     exchangeRates: options.exchangeRates,
-    billingFor: accountId => (accountId ? options.cardBilling?.get(accountId) ?? null : null)
+    billingFor: input.cards?.billingFor ?? (accountId => (accountId ? options.cardBilling?.get(accountId) ?? null : null))
   };
 
   const kindOf = (budgetId: string) => {
@@ -742,6 +770,7 @@ function budgetBreakdown(
   const notes = [
     "byBudget: ingresos del periodo sin los asignados a un presupuesto (son fondos de ese presupuesto) y gastos sin los de presupuestos que se financian con sus propios fondos; los presupuestos de evento suman todo su histórico y los mensuales solo el periodo."
   ];
+  if (input.cards) notes.push(budgetCardBasisNote("byBudget", input.cards.basis));
   if (incomplete) {
     const missing = new Set<string>();
     for (const tx of movements) {
@@ -778,11 +807,48 @@ export interface BudgetStatus {
   expenseLimit: { limit: number; spent: number; remaining: number; percentUsed: number; exceeded: boolean } | null;
 }
 
+/** Spending a budget comparison reads: by category key (like summarize's category groups) and in total. */
+export interface BudgetSpend {
+  groups: Pick<SummaryGroup, "key" | "expenses">[];
+  totals: Pick<SummaryTotals, "expenses">;
+}
+
 /**
- * Budget vs actual for the base monthly summary grouped by category. Per-row and
- * category total percents are uncapped `spent / limit`. Category caps are converted
- * from `capCurrency` to `primaryCurrency` via manual FX (disabled when unconfirmed
- * or rate missing). The base `expenseLimit` is already in the reporting currency.
+ * Spending of one local month for budget comparisons, by category: each expense's share of the
+ * month (http.ts expenseAmountForMonth) with `billingFor`, the budget card billing, so card
+ * expenses follow the workspace basis (Consumo: statement cycle month; Pagos: when the statement
+ * is paid, by its ledger). Converted like summarize (missing rate 1:1, listed in `missingRates`).
+ * Without billing cards it equals summarize's category groups and expense total for that month.
+ */
+export function budgetMonthSpend(
+  rows: SummaryTransaction[],
+  options: { month: YearMonth; timeZone: string; primaryCurrency: string; exchangeRates: Record<string, number>; billingFor?: BillingLookup }
+): BudgetSpend & { missingRates: Set<string> } {
+  const { month, timeZone, primaryCurrency, exchangeRates, billingFor } = options;
+  const byCategory = new Map<string, number>();
+  const missingRates = new Set<string>();
+  let total = 0;
+  for (const tx of rows) {
+    const amount = expenseAmountForMonth(tx, month.year, month.month, timeZone, billingFor?.(tx.accountId) ?? null);
+    if (amount === 0) continue;
+    const { value, missingRate } = convertToPrimary(amount, tx.currency, primaryCurrency, exchangeRates);
+    if (missingRate && tx.currency) missingRates.add(tx.currency);
+    total += value;
+    const key = tx.categoryId || "sin-categoria";
+    byCategory.set(key, (byCategory.get(key) ?? 0) + value);
+  }
+  return {
+    groups: [...byCategory].map(([key, expenses]) => ({ key, expenses: round2(expenses) })),
+    totals: { expenses: round2(total) },
+    missingRates
+  };
+}
+
+/**
+ * Budget vs actual for the base monthly budget's spending by category (budgetMonthSpend, or a
+ * category summary). Per-row and category total percents are uncapped `spent / limit`.
+ * Category caps are converted from `capCurrency` to `primaryCurrency` via manual FX (disabled
+ * when unconfirmed or rate missing). The base `expenseLimit` is already in the reporting currency.
  */
 export function buildBudgetStatus({
   categoryBudgets,
@@ -795,7 +861,7 @@ export function buildBudgetStatus({
 }: {
   categoryBudgets: Record<string, number>;
   expenseLimit: number | null | undefined;
-  summary: FinancialSummary;
+  summary: BudgetSpend;
   capCurrency?: string | null;
   primaryCurrency?: string;
   exchangeRates?: Record<string, number>;

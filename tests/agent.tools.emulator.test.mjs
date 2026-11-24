@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { FIXED_NOW, TIME_ZONE, seedAgentFixture } from './fixtures/agent.fixture.mjs'
 
 const repositoryRoot = resolve(import.meta.dirname, '..')
@@ -16,9 +17,9 @@ assert.match(process.env.GCLOUD_PROJECT ?? '', /^demo-/, 'tests must run against
 assert.match(process.env.FIRESTORE_EMULATOR_HOST ?? '', /^(127\.0\.0\.1|localhost):\d+$/, 'Firestore emulator must use loopback')
 
 const { initializeApp, deleteApp } = requireFunctions('firebase-admin/app')
-const { getFirestore } = requireFunctions('firebase-admin/firestore')
+const { getFirestore, Timestamp } = requireFunctions('firebase-admin/firestore')
 const { buildAgentTools, resolvePrimaryCurrency } = requireFunctions('./lib/agentContext.js')
-const { zonedDateKey } = requireFunctions('./lib/http.js')
+const { zonedDateKey, zonedWallClockToInstant } = requireFunctions('./lib/http.js')
 
 const runId = `${Date.now()}`
 const userId = `agent-user-${runId}`
@@ -195,6 +196,187 @@ test('getWorkspaceSettings reports budgets vs actual for the current month', asy
   assert.deepEqual(settings.currentMonth.expenseLimit, { limit: 1_000_000, spent: 560_000, remaining: 440_000, percentUsed: 56, exceeded: false })
   assert.deepEqual(settings.budgetSplit.needs, { percent: 50, amount: 3_000_000 })
   assert.deepEqual(settings.goalAllocations, [{ goalId: ids.goal, goalName: 'Viaje a Japón', amount: 500_000 }])
+})
+
+test('P1 S6: under Pagos the budget figures follow the card ledger over the whole card history; cash flow keeps the payment month', async () => {
+  // Own workspace and user (writes need the user's active workspace), so the shared fixture is untouched.
+  const workspaceId = `${ids.workspaceId}-pagos`
+  const owner = `${userId}-pagos`
+  const id = name => `${workspaceId}-${name}`
+  const local = (month, day) => Timestamp.fromDate(zonedWallClockToInstant(2026, month, day, 12, TIME_ZONE))
+  const batch = db.batch()
+  const set = (collection, docId, data) => batch.set(db.collection(collection).doc(docId), data)
+  set('users', owner, { email: `${owner}@example.test`, country: 'CO', currency: 'COP', activeWorkspaceId: workspaceId, workspaces: [workspaceId] })
+  set('workspaces', workspaceId, {
+    name: 'Pagos', ownerId: owner, members: [owner], currency: 'COP', budgetCardBasis: 'payment',
+    categoryBudgets: { [id('food')]: 500_000, [id('tech')]: 500_000 }, categoryBudgetCurrency: 'COP', expenseLimit: 1_000_000
+  })
+  for (const [key, name] of [['food', 'Comida'], ['tech', 'Tecnología']]) {
+    set('categories', id(key), { workspaceId, userId: owner, name, type: 'expense', icon: 'tag', color: '#10b981' })
+  }
+  set('accounts', id('bank'), { workspaceId, userId: owner, name: 'Banco', type: 'checking', balance: 1_000_000, limit: 0, currency: 'COP' })
+  // Closes on the 25th, due on the 5th of the next month. Balance = -40,000 - 100,000 + 70,000.
+  set('accounts', id('visa'), {
+    workspaceId, userId: owner, name: 'Visa', type: 'credit', balance: -70_000, limit: 3_000_000, currency: 'COP',
+    statementClosingDay: 25, paymentDueDay: 5
+  })
+  const movement = (docId, data) => set('transactions', id(docId), {
+    workspaceId, userId: owner, description: docId, categoryId: '', toAccountId: null, installments: 1, currency: 'COP', ...data
+  })
+  // June purchase (statement due Jul 5), older than the summary's 2-month lookback, paid late in October.
+  movement('old', { type: 'expense', amount: -40_000, accountId: id('visa'), categoryId: id('tech'), date: local(5, 10) })
+  // October cycle, statement due Nov 5.
+  movement('oct', { type: 'expense', amount: -100_000, accountId: id('visa'), categoryId: id('food'), date: local(9, 3) })
+  // Oct 8: pays the June statement (40,000) and 30,000 of the Nov 5 statement, oldest first.
+  movement('pay', { type: 'transfer', amount: 70_000, accountId: id('bank'), toAccountId: id('visa'), date: local(9, 8) })
+  await batch.commit()
+
+  const pagosTools = buildAgentTools(db, { workspaceId, userId: owner, timeZone: TIME_ZONE, primaryCurrency: 'COP', now: () => FIXED_NOW })
+  const pagos = (name, input = {}) => pagosTools.find(tool => tool.name === name).run(input)
+  const spentByCategory = settings => Object.fromEntries(settings.currentMonth.categoryBudgets.map(row => [row.categoryName, row.spent]))
+
+  const settings = await pagos('getWorkspaceSettings')
+  assert.deepEqual(spentByCategory(settings), { Tecnología: 40_000, Comida: 30_000 })
+  assert.equal(settings.currentMonth.expenseLimit.spent, 70_000)
+  // Cash flow: the June statement was due in July and the October one is due in November.
+  assert.equal(settings.currentMonth.totals.expenses, 0)
+  assert.ok(settings.notes.some(note => note.includes('base Pagos')))
+  const summary = await pagos('getFinancialSummary', { preset: 'this_month' })
+  assert.equal(summary.totals.expenses, 0)
+  assert.equal(summary.byBudget.monthlyExpense, 70_000)
+
+  // A card expense written in the same chat: the ledger reads the new balance, not the cached one.
+  const created = await pagos('createTransaction', {
+    accountId: id('visa'), amount: 20_000, type: 'expense', description: 'Almuerzo', categoryId: id('food'), date: '2026-10-09'
+  })
+  assert.equal(created.success, true)
+  const after = await pagos('getWorkspaceSettings')
+  // The Nov 5 statement is now 120,000, of which 30,000 (a quarter) was paid in October.
+  assert.deepEqual(spentByCategory(after), { Tecnología: 40_000, Comida: 30_000 })
+  assert.equal(after.currentMonth.expenseLimit.spent, 70_000)
+  assert.equal(after.currentMonth.totals.expenses, 0)
+})
+
+// Pagos with more billing cards than one `in` query takes (30), in their own workspace. Dates are
+// relative to the harness month (FIXED_NOW) and `now` is its 24th, so no figure depends on the day
+// or month the suite runs. Each card: a 10,000 Comida purchase on the 3rd (statement closing on the
+// 25th, due on the 5th of next month) and 5,000 paid on the 20th. Card 00 also sends 1,000 to card
+// 34 on the 21st (a charge on 00's statement, a payment on 34's), across the two query batches.
+let manyCards
+const seedManyCards = async () => {
+  if (manyCards) return manyCards
+  const [year, month] = zonedDateKey(FIXED_NOW, TIME_ZONE).split('-').map(Number)
+  const at = (monthOffset, day) => zonedWallClockToInstant(year, month - 1 + monthOffset, day, 12, TIME_ZONE)
+  const workspaceId = `${ids.workspaceId}-cards`
+  const owner = `${userId}-cards`
+  const id = name => `${workspaceId}-${name}`
+  const food = id('food')
+  const cards = Array.from({ length: 35 }, (_, k) => id(`card${String(k).padStart(2, '0')}`))
+  const batch = db.batch()
+  const set = (collection, docId, data) => batch.set(db.collection(collection).doc(docId), data)
+  set('users', owner, { email: `${owner}@example.test`, country: 'CO', currency: 'COP', activeWorkspaceId: workspaceId, workspaces: [workspaceId] })
+  set('workspaces', workspaceId, {
+    name: 'Tarjetas', ownerId: owner, members: [owner], currency: 'COP', budgetCardBasis: 'payment',
+    categoryBudgets: { [food]: 1_000_000 }, categoryBudgetCurrency: 'COP', expenseLimit: 2_000_000
+  })
+  set('categories', food, { workspaceId, userId: owner, name: 'Comida', type: 'expense' })
+  const account = (docId, data) => set('accounts', docId, { workspaceId, userId: owner, name: docId, currency: 'COP', ...data })
+  const movement = (docId, data) => set('transactions', docId, {
+    workspaceId, userId: owner, currency: 'COP', installments: 1, toAccountId: null, ...data, date: Timestamp.fromDate(data.date)
+  })
+  account(id('bank'), { type: 'checking', balance: 10_000_000 })
+  cards.forEach((card, k) => {
+    movement(`${card}-buy`, { type: 'expense', amount: -10_000, accountId: card, categoryId: food, date: at(0, 3) })
+    movement(`${card}-pay`, { type: 'transfer', amount: 5_000, accountId: id('bank'), toAccountId: card, date: at(0, 20) })
+    const transfer = k === 0 ? -1_000 : k === 34 ? 1_000 : 0
+    account(card, { type: 'credit', balance: -5_000 + transfer, statementClosingDay: 25, paymentDueDay: 5, limit: 1_000_000 })
+  })
+  movement(id('card-to-card'), { type: 'transfer', amount: 1_000, accountId: cards[0], toAccountId: cards[34], date: at(0, 21) })
+  await batch.commit()
+  const now = at(0, 24)
+  manyCards = {
+    workspaceId,
+    food,
+    cards,
+    period: { year, month: month - 1 },
+    previousMonthDay: zonedDateKey(at(-1, 10), TIME_ZONE),
+    tools: () => buildAgentTools(db, {
+      workspaceId, userId: owner, timeZone: TIME_ZONE, primaryCurrency: 'COP', now: () => now, confirmationGranted: true
+    })
+  }
+  return manyCards
+}
+
+const runTool = (tools, name, input = {}) => tools.find(tool => tool.name === name).run(input)
+const budgetFigures = (settings, food) => ({
+  food: settings.currentMonth.categoryBudgets.find(row => row.categoryId === food)?.spent,
+  base: settings.currentMonth.expenseLimit?.spent,
+  cashFlow: settings.currentMonth.totals.expenses
+})
+
+/** The app's figure for the same data: Comida this month on the Pagos basis (src/lib helpers). */
+const frontendFoodSpent = async ({ workspaceId, food, period }) => {
+  const [installments, reporting] = await Promise.all(['installments', 'budgetReporting']
+    .map(name => import(pathToFileURL(resolve(repositoryRoot, `src/lib/${name}.ts`)).href)))
+  const accounts = (await db.collection('accounts').where('workspaceId', '==', workspaceId).get()).docs
+    .map(docSnap => ({ ...docSnap.data(), id: docSnap.id }))
+  const transactions = (await db.collection('transactions').where('workspaceId', '==', workspaceId).get()).docs
+    .map(docSnap => ({ ...docSnap.data(), id: docSnap.id, date: docSnap.data().date.toDate() }))
+  // The app buckets months in the browser's local time zone.
+  const previousTimeZone = process.env.TZ
+  process.env.TZ = TIME_ZONE
+  try {
+    const cardBilling = installments.createCardBillingLookup(accounts, 'payment', { transactions })
+    const report = reporting.reportBudgetScope({
+      scope: { id: 'default-monthly', kind: 'monthly', capCurrency: 'COP' }, categoryCaps: { [food]: 1_000_000 },
+      transactions, period, reportingCurrency: 'COP', exchangeRates: {}, cardBilling
+    })
+    return Math.round(report.categories[food].monthlyAllocation.amount * 100) / 100
+  } finally {
+    if (previousTimeZone === undefined) delete process.env.TZ
+    else process.env.TZ = previousTimeZone
+  }
+}
+
+test('P1 S6: under Pagos with 35 billing cards the Asesor reads every card history batch and counts a card-to-card transfer once, like the app', async () => {
+  const fixture = await seedManyCards()
+  const tools = fixture.tools()
+  // 33 cards x 5,000 paid this month + card 34: 6,000 + card 00: 10,000 x 5,000 / 11,000 of its statement.
+  const expected = 175_545.45
+  const settings = await runTool(tools, 'getWorkspaceSettings')
+  assert.deepEqual(budgetFigures(settings, fixture.food), { food: expected, base: expected, cashFlow: 0 })
+  assert.equal(await frontendFoodSpent(fixture), expected)
+  const summary = await runTool(tools, 'getFinancialSummary', { preset: 'this_month' })
+  assert.equal(summary.byBudget.monthlyExpense, expected)
+})
+
+test('P1 S6: a card purchase of last month written and deleted in the same chat moves the Pagos figures with the new balances', async () => {
+  const fixture = await seedManyCards()
+  const chat = fixture.tools()
+  const card05 = fixture.cards[5]
+  const balanceOf = async () => (await runTool(chat, 'listAccounts')).accounts.find(row => row.id === card05)?.balance
+  const before = { food: 175_545.45, base: 175_545.45, cashFlow: 0 }
+  // Loads (and caches) the accounts in this chat before the write.
+  assert.deepEqual(budgetFigures(await runTool(chat, 'getWorkspaceSettings'), fixture.food), before)
+  assert.equal(await balanceOf(), -5_000)
+
+  const created = await runTool(chat, 'createTransaction', {
+    accountId: card05, amount: 20_000, type: 'expense', description: 'Almuerzo', categoryId: fixture.food, date: fixture.previousMonthDay
+  })
+  assert.equal(created.success, true)
+  // Its statement is due on the 5th of this month and the 5,000 paid on the 20th settle it first, so
+  // all 20,000 count this month and card 05's own purchase nothing (+15,000). A stale cached
+  // balance (-5,000) would read as prior credit and leave 175,545.45.
+  const afterCreate = { food: 190_545.45, base: 190_545.45, cashFlow: 20_000 }
+  assert.deepEqual(budgetFigures(await runTool(chat, 'getWorkspaceSettings'), fixture.food), afterCreate)
+  assert.deepEqual(budgetFigures(await runTool(fixture.tools(), 'getWorkspaceSettings'), fixture.food), afterCreate)
+  assert.equal(await frontendFoodSpent(fixture), afterCreate.food)
+  assert.equal(await balanceOf(), -25_000)
+
+  const deleted = await runTool(chat, 'deleteTransaction', { transactionId: created.id, confirmed: true })
+  assert.deepEqual(deleted, { success: true, message: 'Transacción eliminada y saldos restaurados.' })
+  assert.deepEqual(budgetFigures(await runTool(chat, 'getWorkspaceSettings'), fixture.food), before)
+  assert.deepEqual(budgetFigures(await runTool(fixture.tools(), 'getWorkspaceSettings'), fixture.food), before)
 })
 
 test('destructive tools without confirmed return needsConfirmation and write nothing', async () => {

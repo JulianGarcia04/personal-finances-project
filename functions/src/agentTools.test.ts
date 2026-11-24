@@ -95,6 +95,12 @@ test("buildAgentContextBlock explains that card purchases count in their stateme
   assert.match(block, /tarjeta de crédito que tiene día de corte y de pago cuentan en el mes en que se paga el extracto/);
 });
 
+test("P1 S6: buildAgentContextBlock says budget figures count card purchases by the workspace Consumo/Pagos basis", () => {
+  const block = buildAgentContextBlock({ now: new Date("2026-10-11T15:00:00-05:00"), timeZone: BOGOTA, currency: "COP" });
+  assert.match(block, /cifras de presupuesto .* según la base Consumo\/Pagos/);
+  assert.doesNotMatch(block, /En resúmenes y presupuestos, las compras con una tarjeta/);
+});
+
 test("toLeanTransaction keeps a legacy date-only string on its local calendar day", () => {
   const names = { accounts: new Map([["a1", "Nu"]]), categories: new Map<string, string>() };
   const row = toLeanTransaction("t1", { accountId: "a1", amount: -5, type: "expense", date: "2026-10-01" }, names, BOGOTA);
