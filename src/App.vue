@@ -33,6 +33,9 @@
 
       <OnboardingWizard v-if="authStore.isAuthenticated" />
     </div>
+
+    <!-- Toasts and confirmations for every state, including Login. -->
+    <NotificationHost />
   </div>
 </template>
 
@@ -40,6 +43,7 @@
 import { onMounted } from 'vue'
 import Sidebar from '@/components/Sidebar.vue'
 import OnboardingWizard from '@/components/OnboardingWizard.vue'
+import NotificationHost from '@/components/ui/NotificationHost.vue'
 import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { onForegroundMessage } from '@/lib/push'
