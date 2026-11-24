@@ -17,6 +17,7 @@ import {
 } from "./agentQueries";
 import { AgentToolError, NameMaps } from "./agentTools";
 import { buildAgentTools } from "./agentContext";
+import { expenseAmountForMonth } from "./http";
 
 const TZ = "America/Bogota";
 // Sunday 2026-10-11 15:00 in Bogotá.
@@ -624,4 +625,30 @@ test("cardBillingByAccount tags billing with the consumption basis only when ask
     cardBillingByAccount(accounts, "consumption").get("visa"),
     { statementClosingDay: 30, paymentDueDay: 15, basis: "consumption" }
   );
+});
+
+test("cardBillingByAccount attaches each card's statement ledger on the payment basis when given its history", () => {
+  const accounts = [
+    { id: "visa", type: "credit", statementClosingDay: 30, paymentDueDay: 15, balance: 0 },
+    { id: "bank", type: "checking", balance: 5_000 }
+  ];
+  const ledgerInput = {
+    timeZone: "UTC",
+    transactions: [
+      { type: "expense", amount: -1_000, date: new Date("2026-10-10T12:00:00Z"), accountId: "visa" },
+      { type: "transfer", amount: 1_000, date: new Date("2026-10-20T12:00:00Z"), accountId: "bank", toAccountId: "visa" }
+    ]
+  };
+  const purchase = ledgerInput.transactions[0];
+  const paid = cardBillingByAccount(accounts, "payment", ledgerInput).get("visa");
+  // Statement due in November was paid in full in October, so the purchase counts in October.
+  assert.equal(expenseAmountForMonth(purchase, 2026, 9, "UTC", paid), 1_000);
+  assert.equal(expenseAmountForMonth(purchase, 2026, 10, "UTC", paid), 0);
+  // Without history (or on the consumption basis) nothing changes.
+  assert.equal(cardBillingByAccount(accounts, "payment").get("visa")?.ledger, undefined);
+  assert.deepEqual(
+    cardBillingByAccount(accounts, "consumption", ledgerInput).get("visa"),
+    { statementClosingDay: 30, paymentDueDay: 15, basis: "consumption" }
+  );
+  assert.equal(cardBillingByAccount(accounts, "payment", ledgerInput).has("bank"), false);
 });

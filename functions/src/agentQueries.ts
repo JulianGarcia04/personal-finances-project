@@ -1,6 +1,13 @@
 import { AgentToolError, buildDateContext, NameMaps } from "./agentTools";
 import { roundMoney } from "./money";
-import { CardBilling, cardBillingOf, ImputationBasis, paymentMonthIndex, YearMonth, zonedDateKey, zonedWallClockToInstant, zonedYearMonth } from "./http";
+import {
+  CardBilling,
+  paymentMonthIndex,
+  YearMonth,
+  zonedDateKey,
+  zonedWallClockToInstant,
+  zonedYearMonth
+} from "./http";
 import {
   AlertScope,
   capInReportingCurrency,
@@ -12,6 +19,9 @@ import {
   selfFundedBudgetIds,
   SpendOptions
 } from "./budgetAlerts";
+
+// Moved to cardStatements.ts (no import cycle with budgetAlerts.ts); re-exported for existing callers.
+export { cardBillingByAccount } from "./cardStatements";
 
 // Pure period aggregation for the chat agent (getFinancialSummary /
 // getWorkspaceSettings). No firebase-admin here: callers pass plain rows.
@@ -329,22 +339,6 @@ function contributions(tx: SummaryTransaction, timeZone: string, billing?: CardB
       billed: paymentMonth !== null
     };
   });
-}
-
-/**
- * Billing days by account id for the workspace's regular credit cards (see cardBillingOf),
- * tagged with the imputation basis when it is not the default "payment".
- */
-export function cardBillingByAccount(
-  accounts: { id: string; [key: string]: unknown }[],
-  basis: ImputationBasis = "payment"
-): Map<string, CardBilling> {
-  const billing = new Map<string, CardBilling>();
-  for (const account of accounts) {
-    const days = cardBillingOf(account);
-    if (days) billing.set(account.id, basis === "payment" ? days : { ...days, basis });
-  }
-  return billing;
 }
 
 /**
