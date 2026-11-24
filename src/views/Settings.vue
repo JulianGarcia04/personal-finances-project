@@ -575,6 +575,7 @@ import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useGoalsStore } from '@/stores/goalsStore'
+import { useNotificationsStore } from '@/stores/notificationsStore'
 import { ApiKeySchema, CategorySchema } from '@/schemas'
 import { getPushStatus, enablePush, disablePush, onForegroundMessage, type PushStatus } from '@/lib/push'
 import { CATEGORY_COLORS, CATEGORY_ICONS, getCategoryIconComponent } from '@/lib/categoryIcons'
@@ -596,6 +597,7 @@ const workspacesStore = useWorkspacesStore()
 const transactionsStore = useTransactionsStore()
 const accountsStore = useAccountsStore()
 const goalsStore = useGoalsStore()
+const notifications = useNotificationsStore()
 
 // Section tabs (synced to ?tab= so sections are linkable and survive reloads)
 type SettingsTab = 'workspace' | 'regional' | 'categories' | 'ai' | 'data'
@@ -722,7 +724,7 @@ const createCategory = async () => {
   })
 
   if (!validation.success) {
-    alert(validation.error.errors[0].message)
+    notifications.error(validation.error.errors[0].message)
     return
   }
 
@@ -740,18 +742,25 @@ const createCategory = async () => {
     newCatType.value = 'expense'
   } catch (err: any) {
     console.error('Error al crear categoría:', err)
+    notifications.error('No se pudo crear la categoría. Inténtalo de nuevo.')
   } finally {
     loadingCategory.value = false
   }
 }
 
 const deleteCategory = async (id: string) => {
-  if (confirm('¿Estás seguro de que deseas eliminar esta categoría?')) {
-    try {
-      await transactionsStore.deleteCategory(id)
-    } catch (err) {
-      console.error('Error al borrar categoría:', err)
-    }
+  const confirmed = await notifications.confirm({
+    title: '¿Eliminar esta categoría?',
+    message: 'Esta acción no se puede deshacer.',
+    confirmLabel: 'Eliminar',
+    tone: 'danger'
+  })
+  if (!confirmed) return
+  try {
+    await transactionsStore.deleteCategory(id)
+  } catch (err) {
+    console.error('Error al borrar categoría:', err)
+    notifications.error('No se pudo eliminar la categoría. Inténtalo de nuevo.')
   }
 }
 
@@ -910,7 +919,7 @@ const handleCreateWorkspace = async () => {
     newWorkspaceName.value = ''
   } catch (err: any) {
     console.error('Error al crear workspace', err)
-    alert(err.message || 'Error al crear workspace')
+    notifications.error('No se pudo crear el workspace. Inténtalo de nuevo.')
   } finally {
     creatingWorkspace.value = false
   }
@@ -944,6 +953,7 @@ const handleBudgetAlertsChange = async () => {
   } catch (err) {
     console.error('Error actualizando alertas de presupuesto:', err)
     budgetAlertsEnabled.value = !enabled
+    notifications.error('No se pudieron actualizar las alertas de presupuesto. Inténtalo de nuevo.')
   }
 }
 
@@ -961,7 +971,7 @@ const pushStatusText = computed(() => {
     case 'disabled': return 'Desactivadas en este dispositivo.'
     case 'denied': return 'Bloqueadas por el navegador. Permite las notificaciones de este sitio en la configuración del navegador.'
     case 'unsupported': return 'Este navegador no soporta notificaciones push.'
-    case 'missing-vapid': return 'Falta configurar la clave VAPID (VITE_FIREBASE_VAPID_KEY).'
+    case 'missing-vapid': return 'Las notificaciones push no están disponibles en esta instalación.'
     default: return 'Verificando…'
   }
 })
@@ -1009,6 +1019,7 @@ const handleGeneralSettingsChange = async () => {
     })
   } catch (err) {
     console.error('Error actualizando configuraciones:', err)
+    notifications.error('No se pudo guardar la configuración. Inténtalo de nuevo.')
   }
 }
 
