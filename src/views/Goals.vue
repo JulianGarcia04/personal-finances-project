@@ -350,7 +350,7 @@
     <div v-if="!isSavingsSection" class="space-y-6">
       <h3 class="font-display font-bold text-lg sm:text-xl text-text-primary flex items-center space-x-2">
         <WalletIcon class="w-5 h-5 shrink-0 text-accent-emerald" />
-        <span>Presupuesto Mensual por Categoría · Presupuesto base mensual protegido</span>
+        <span>Presupuesto mensual base por categoría</span>
       </h3>
 
       <form id="base-expense-limit-form" class="glass-panel rounded-2xl p-4 sm:p-6 border border-white/5 space-y-2" @submit.prevent="saveExpenseLimit">
@@ -392,8 +392,8 @@
         <div class="rounded-xl bg-slate-950/45 border border-white/5 p-3 sm:p-4 space-y-3">
           <div v-if="goalsStore.categoryBudgetCurrency.status === 'confirmed'" class="flex flex-wrap items-center justify-between gap-2 text-xs">
             <span class="text-text-secondary">
-              Moneda confirmada para los límites heredados: <strong class="text-accent-emerald">{{ goalsStore.categoryBudgetCurrency.code }}</strong>.
-              Sus importes no se convierten ni se renombran al cambiar la moneda de visualización.
+              Moneda de los límites por categoría: <strong class="text-accent-emerald">{{ goalsStore.categoryBudgetCurrency.code }}</strong>.
+              Si cambias la moneda de visualización, los importes no se convierten ni cambian de moneda.
             </span>
           </div>
           <div v-else class="space-y-2">
@@ -403,7 +403,7 @@
             </p>
             <div class="flex flex-col sm:flex-row sm:items-end gap-3">
               <label class="space-y-1.5 sm:w-56">
-                <span class="block text-[11px] font-semibold text-text-secondary">Moneda real de los límites heredados</span>
+                <span class="block text-[11px] font-semibold text-text-secondary">Moneda real de los límites por categoría</span>
                 <select
                   v-model="legacyCategoryBudgetCurrencyInput"
                   class="field font-semibold cursor-pointer"
@@ -417,7 +417,7 @@
                 class="w-full sm:w-auto min-h-11 px-4 py-2.5 rounded-xl bg-accent-emerald text-background font-display font-bold text-xs hover:bg-accent-emerald-hover disabled:opacity-50 cursor-pointer"
                 @click="confirmLegacyCategoryBudgetCurrency"
               >
-                Confirmar moneda de límites heredados
+                Confirmar moneda de los límites
               </button>
             </div>
           </div>
@@ -425,7 +425,7 @@
         </div>
 
         <p class="text-xs text-text-muted">
-          Este presupuesto base conserva los límites heredados en <code>categoryBudgets</code>. Los gastos sin presupuesto asignado permanecen aquí.
+          Los gastos sin presupuesto asignado cuentan en este presupuesto mensual base, con sus límites por categoría.
           El gasto se cuenta según la vista «{{ BUDGET_BASIS_LABELS[budgetBasis] }}» elegida arriba.
           Cuando la moneda de los límites está confirmada, el gasto se compara en {{ userCurrency }} usando las tasas manuales actuales; si falta una tasa, no se muestra una comparación incompleta.
           Tip: también puedes pedirle al <span class="text-accent-emerald font-semibold">Asesor IA</span> que analice tus gastos y te proponga presupuestos.
@@ -535,7 +535,7 @@
               <select v-model="budgetCapCurrencyInput" required :disabled="!!editingOperatingBudget" class="field font-semibold cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed">
                 <option v-for="option in currencyOptionsWith(editingOperatingBudget?.budget.capCurrency)" :key="option.code" :value="option.code">{{ option.label }}</option>
               </select>
-              <span v-if="editingOperatingBudget" class="block text-[10px] text-text-muted">La moneda guardada {{ editingOperatingBudget.budget.capCurrency }} es fija; no se relabelan límites existentes.</span>
+              <span v-if="editingOperatingBudget" class="block text-[10px] text-text-muted">La moneda guardada {{ editingOperatingBudget.budget.capCurrency }} no se puede cambiar; los límites existentes siguen en esa moneda.</span>
             </label>
             <label class="space-y-1.5">
               <span class="block text-xs font-semibold text-text-secondary">Límite total (opcional)</span>
@@ -584,7 +584,7 @@
           <div class="space-y-2 rounded-xl bg-slate-950/40 border border-white/5 p-3">
             <div>
               <h4 class="text-xs font-semibold text-text-primary">Límites por categoría · {{ budgetCapCurrencyInput || 'moneda seleccionada' }}</h4>
-              <p class="text-[10px] text-text-muted mt-1">Agrega sólo las categorías que quieres limitar. Quitar una elimina sólo ese límite; el presupuesto base y sus categoryBudgets no cambian.</p>
+              <p class="text-[10px] text-text-muted mt-1">Agrega sólo las categorías que quieres limitar. Quitar una elimina sólo ese límite; los límites del presupuesto mensual base no cambian.</p>
             </div>
             <p v-if="budgetSelectedCategoryIds.length === 0" class="text-[11px] text-text-muted">Todavía no hay límites por categoría.</p>
             <div v-for="categoryId in budgetSelectedCategoryIds" :key="categoryId" class="flex items-center gap-2 border-t border-white/5 pt-2.5">
@@ -668,9 +668,7 @@
                 v-model="newGoalCurrency"
                 class="field font-semibold cursor-pointer"
               >
-                <option value="USD">USD ($)</option>
-                <option value="COP">COP ($)</option>
-                <option value="EUR">EUR (€)</option>
+                <option v-for="option in SUPPORTED_CURRENCIES" :key="option.code" :value="option.code">{{ option.label }}</option>
               </select>
             </div>
           </div>
@@ -768,7 +766,7 @@
             <label for="contribute-amount" class="block text-xs font-semibold text-text-secondary">Monto a Aportar</label>
             <div class="relative">
               <span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-text-muted font-semibold pointer-events-none">
-                {{ selectedGoal ? (selectedGoal.currency === 'COP' ? '$' : selectedGoal.currency) : '$' }}
+                {{ contributeCurrencySymbol }}
               </span>
               <input 
                 id="contribute-amount"
@@ -777,7 +775,7 @@
                 inputmode="decimal"
                 required
                 min="1"
-                :class="['field font-semibold', selectedGoal && selectedGoal.currency !== 'COP' ? 'pl-14' : 'pl-8']"
+                :class="['field font-semibold', contributeCurrencySymbol.length > 1 ? 'pl-14' : 'pl-8']"
                 placeholder="0"
               />
             </div>
@@ -859,6 +857,7 @@ import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
+import { useNotificationsStore } from '@/stores/notificationsStore'
 import { SUPPORTED_CURRENCIES, currencyOptionsWith, defaultCurrencyCode } from '@/lib/currencies'
 import type { Goal, OperatingBudgetDraft, OperatingBudgetPatch } from '@/types'
 import BaseSheet from '@/components/ui/BaseSheet.vue'
@@ -895,6 +894,7 @@ const transactionsStore = useTransactionsStore()
 const settingsStore = useSettingsStore()
 const authStore = useAuthStore()
 const workspacesStore = useWorkspacesStore()
+const notifications = useNotificationsStore()
 const route = useRoute()
 
 const sections = [
@@ -953,7 +953,12 @@ const legacyCurrencyError = ref('')
 const newGoalName = ref('')
 const newGoalTargetAmount = ref<number | null>(null)
 const newGoalCurrentAmount = ref(0)
-const newGoalCurrency = ref('USD')
+// A new goal starts in the user's main currency (it may load after this view) until they pick another.
+const newGoalCurrencyChoice = ref<string | null>(null)
+const newGoalCurrency = computed({
+  get: () => newGoalCurrencyChoice.value ?? defaultCurrencyCode(settingsStore.currency),
+  set: (code: string) => { newGoalCurrencyChoice.value = code }
+})
 const newGoalTargetDate = ref('')
 const newGoalLinkedAccountId = ref('')
 const activeWorkspaceId = computed(() => authStore.activeWorkspaceId)
@@ -1168,20 +1173,23 @@ onMounted(async () => {
 })
 
 // Methods
+// Same regional format as the rest of the app (es-CO); a missing currency falls back to the main one.
 const formatDate = (date: any) => {
   if (!date) return ''
-  const d = new Date(date)
-  return d.toLocaleDateString('es-ES', { year: 'numeric', month: 'short', day: 'numeric' })
+  return new Intl.DateTimeFormat('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(date))
 }
 
-const formatCurrency = (val: number, currency: string) => {
-  return new Intl.NumberFormat('es-ES', {
-    style: 'currency',
-    currency: currency || 'USD',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0
-  }).format(val)
-}
+const moneyFormat = (currency: string) => new Intl.NumberFormat('es-CO', {
+  style: 'currency',
+  currency: currency || userCurrency.value,
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 2
+})
+const formatCurrency = (val: number, currency: string) => moneyFormat(currency).format(val)
+const contributeCurrencySymbol = computed(() => {
+  const currency = selectedGoal.value?.currency || userCurrency.value
+  return moneyFormat(currency).formatToParts(0).find(part => part.type === 'currency')?.value ?? currency
+})
 
 const baselineCategoryReport = (categoryId: string) =>
   Object.hasOwn(baselineBudgetReport.value.categories, categoryId)
@@ -1487,7 +1495,13 @@ const handleSaveOperatingBudget = async () => {
 }
 
 const handleArchiveBudget = async (budgetId: string) => {
-  if (!confirm('¿Eliminar este presupuesto? Se conservarán sus asignaciones, historial y cuotas pendientes.')) return
+  const confirmed = await notifications.confirm({
+    title: '¿Eliminar este presupuesto?',
+    message: 'Se conservarán sus asignaciones, historial y cuotas pendientes.',
+    confirmLabel: 'Eliminar',
+    tone: 'danger'
+  })
+  if (!confirmed) return
   try {
     await goalsStore.archiveOperatingBudget(budgetId)
   } catch (error) {
@@ -1551,22 +1565,27 @@ const handleCreateGoal = async () => {
     newGoalName.value = ''
     newGoalTargetAmount.value = null
     newGoalCurrentAmount.value = 0
-    newGoalCurrency.value = 'USD'
+    newGoalCurrencyChoice.value = null
     newGoalTargetDate.value = ''
     newGoalLinkedAccountId.value = ''
   } catch (err) {
-    alert('Error al crear objetivo de ahorro')
+    notifications.error('No se pudo crear la meta de ahorro. Inténtalo de nuevo.')
   }
 }
 
 // Delete Goal
 const handleDeleteGoal = async (id: string) => {
-  if (confirm('¿Estás seguro de que deseas eliminar este objetivo?')) {
-    try {
-      await goalsStore.deleteGoal(id)
-    } catch (err) {
-      alert('Error al eliminar objetivo de ahorro')
-    }
+  const confirmed = await notifications.confirm({
+    title: '¿Eliminar esta meta?',
+    message: 'Esta acción no se puede deshacer. Tus cuentas y movimientos no cambian.',
+    confirmLabel: 'Eliminar',
+    tone: 'danger'
+  })
+  if (!confirmed) return
+  try {
+    await goalsStore.deleteGoal(id)
+  } catch (err) {
+    notifications.error('No se pudo eliminar la meta de ahorro. Inténtalo de nuevo.')
   }
 }
 
@@ -1592,16 +1611,22 @@ const handleContribute = async () => {
       if (!source || !target || getGoalProgressAmount(goal) === null ||
           !isSavingsGoalAccountLinkable(source, accountsStore.accounts, activeWorkspaceId.value, goal.currency) ||
           !canTransferBetweenAccounts(source, target, accountsStore.accounts)) {
-        alert('La cuenta vinculada o la cuenta de origen no están disponibles para esta transferencia.')
+        notifications.error('La cuenta vinculada o la cuenta de origen no están disponibles para esta transferencia.')
         return
       }
 
       if (source.balance < amount) {
         if (isPocketRelatedAccount(source)) {
-          alert('El saldo disponible de esta cuenta no alcanza para el aporte. No se registró ningún movimiento.')
+          notifications.error('El saldo disponible de esta cuenta no alcanza para el aporte. No se registró ningún movimiento.')
           return
         }
-        if (!confirm('El saldo de la cuenta es menor que el aporte. ¿Deseas continuar de todos modos?')) return
+        const confirmed = await notifications.confirm({
+          title: 'Saldo insuficiente',
+          message: 'El saldo de la cuenta es menor que el aporte. ¿Deseas continuar de todos modos?',
+          confirmLabel: 'Aportar igualmente',
+          tone: 'default'
+        })
+        if (!confirmed) return
       }
 
       await transactionsStore.addTransaction({
@@ -1616,12 +1641,12 @@ const handleContribute = async () => {
     }
 
     showContributeModal.value = false
-    alert(hasGoalAccountLink(goal)
+    notifications.success(hasGoalAccountLink(goal)
       ? '¡Aporte registrado como transferencia entre tus cuentas!'
       : '¡Aporte virtual registrado sin modificar los saldos de tus cuentas!')
   } catch (err) {
     console.error(err)
-    alert('Error al realizar el aporte de ahorro.')
+    notifications.error('No se pudo registrar el aporte. Inténtalo de nuevo.')
   }
 }
 
@@ -1647,7 +1672,7 @@ const saveBudgetIncome = async (event: Event) => {
 // Presupuesto por categoría
 const saveCategoryBudget = async (categoryId: string, rawValue: string) => {
   if (goalsStore.categoryBudgetCurrency.status !== 'confirmed') {
-    legacyCurrencyError.value = 'Confirma primero la moneda real de los límites heredados.'
+    legacyCurrencyError.value = 'Confirma primero la moneda de los límites por categoría.'
     return
   }
   const value = rawValue === '' ? null : Math.max(0, Number(rawValue))
@@ -1669,6 +1694,7 @@ const saveCategoryBudget = async (categoryId: string, rawValue: string) => {
     })
   } catch (err) {
     console.error('Error al guardar presupuesto de categoría:', err)
+    notifications.error(`No se pudo guardar el límite de ${categoryName(categoryId)}. Inténtalo de nuevo.`)
   }
 }
 

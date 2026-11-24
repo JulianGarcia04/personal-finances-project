@@ -18,9 +18,9 @@ const goalsView = readFileSync(goalsPath, 'utf8')
 const assertContains = (pattern: RegExp, message: string) => assert.ok(pattern.test(goalsView), message)
 const assertNotContains = (pattern: RegExp, message: string) => assert.ok(!pattern.test(goalsView), message)
 
-test('S5-S6: the protected monthly baseline remains backed by legacy category limits and catches unassigned expenses', () => {
-  assertContains(/Presupuesto base mensual protegido/, 'the legacy baseline must be visibly protected')
-  assertContains(/categoryBudgets/, 'legacy category limits remain the baseline source')
+test('S5-S6: the base monthly budget keeps its stored category limits and catches unassigned expenses', () => {
+  assertContains(/Presupuesto mensual base por categoría/, 'the baseline must be named as the base monthly budget')
+  assertContains(/categoryCaps: goalsStore\.categoryBudgets/, 'stored category limits remain the baseline source')
   assertContains(/sin presupuesto asignado/, 'unassigned expenses must remain in the baseline')
 })
 
@@ -42,13 +42,64 @@ test('S11: additional budgets remain separate from goals, goal allocations, and 
 test('S12: nominal caps use their confirmed denomination and explain that display currency does not relabel them', () => {
   assertContains(/budget\.capCurrency/, 'stored cap amounts must retain their own denomination')
   assertContains(/moneda de visualización no cambia la moneda guardada/, 'display-currency changes must not relabel stored caps')
+  assertContains(/La moneda guardada \{\{ editingOperatingBudget\.budget\.capCurrency \}\} no se puede cambiar; los límites existentes siguen en esa moneda\./, 'editing a budget must say its stored caps keep their currency')
   assertContains(/categoryBudgetCurrency/, 'legacy caps must use their explicit confirmed denomination')
 })
 
 test('S13: legacy category-cap denomination requires explicit once-per-workspace confirmation without conversion', () => {
-  assertContains(/Confirmar moneda de límites heredados/, 'legacy-unit confirmation needs an explicit action')
+  assertContains(/Confirmar moneda de los límites/, 'legacy-unit confirmation needs an explicit action')
   assertContains(/no se convierten importes/, 'confirmation must state that values are not converted')
   assertContains(/Selecciona la moneda real de estos límites/, 'the user must explicitly select the legacy unit')
+})
+
+test('S7 T5b: budget copy uses plain words instead of internal jargon', () => {
+  const template = goalsView.slice(0, goalsView.indexOf('<script setup'))
+  assert.doesNotMatch(template, /categoryBudgets/, 'the stored field name must not reach users')
+  assertNotContains(/protegido|heredados|relabel/i, 'no "protegido", "límites heredados" or "relabelan" in copy or messages')
+  assertContains(/Moneda de los límites por categoría: <strong/, 'the confirmed currency names what it applies to')
+  assertContains(/Moneda real de los límites por categoría/, 'the currency selector names what it applies to')
+  assertContains(/Los gastos sin presupuesto asignado cuentan en este presupuesto mensual base, con sus límites por categoría\./, 'the baseline explains what it holds')
+  assertContains(/Quitar una elimina sólo ese límite; los límites del presupuesto mensual base no cambian\./, 'removing a cap explains the base budget is untouched')
+  assertContains(/'Confirma primero la moneda de los límites por categoría\.'/, 'the pending-currency error uses the same words')
+})
+
+test('S7 T5b: Goals uses the shared notifications instead of native dialogs', () => {
+  const script = goalsView.slice(goalsView.indexOf('<script setup'))
+  assert.doesNotMatch(script, /(?<![.\w])(alert|confirm)\(/, 'no native alert() or confirm() may remain')
+  assert.match(script, /import \{ useNotificationsStore \} from '@\/stores\/notificationsStore'/)
+  assert.match(script, /const notifications = useNotificationsStore\(\)/)
+})
+
+test('S7 T5b: deleting a budget asks for a danger confirmation and only proceeds when confirmed', async () => {
+  const declaration = goalsView.match(/const handleArchiveBudget = async[\s\S]*?\n\}/)?.[0]
+  assert.ok(declaration, 'Goals.vue must define handleArchiveBudget')
+  const javascript = ts.transpileModule(declaration, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext }
+  }).outputText
+  const archive = async (confirmed: boolean) => {
+    const confirms: Array<Record<string, unknown>> = []
+    const archived: string[] = []
+    const notifications = {
+      async confirm(options: Record<string, unknown>) { confirms.push(options); return confirmed },
+      success() {}, error() {}, info() {}
+    }
+    const goalsStore = { budgetSettingsError: '', async archiveOperatingBudget(id: string) { archived.push(id) } }
+    const handleArchiveBudget = new Function('notifications', 'goalsStore', `${javascript}\nreturn handleArchiveBudget`)(
+      notifications, goalsStore
+    ) as (budgetId: string) => Promise<void>
+    await handleArchiveBudget('hogar')
+    return { confirms, archived }
+  }
+
+  const declined = await archive(false)
+  assert.deepEqual(declined.archived, [], 'cancelling keeps the budget')
+  assert.deepEqual(declined.confirms, [{
+    title: '¿Eliminar este presupuesto?',
+    message: 'Se conservarán sus asignaciones, historial y cuotas pendientes.',
+    confirmLabel: 'Eliminar',
+    tone: 'danger'
+  }])
+  assert.deepEqual((await archive(true)).archived, ['hogar'])
 })
 
 test('Goals.vue setup script parses with the existing TypeScript compiler', () => {
@@ -405,15 +456,24 @@ test('budget basis: Goals shows the consumption/payment switch and counts budget
   assertContains(/vista «\{\{ BUDGET_BASIS_LABELS\[budgetBasis\] \}\}»/, 'the protected baseline must name the view it counts with')
 })
 
-function createGoalContributionHarness({ goal, sourceId = '', accounts = [] }: {
+function createGoalContributionHarness({ goal, sourceId = '', accounts = [], confirmed = true, failWrites = false }: {
   goal: Record<string, unknown>
   sourceId?: string
   accounts?: Array<Record<string, any>>
+  confirmed?: boolean
+  failWrites?: boolean
 }) {
   const transactions: Array<Record<string, unknown>> = []
   const virtualContributions: Array<[string, number]> = []
   const goalAmountUpdates: Array<[string, number]> = []
-  const alerts: string[] = []
+  const toasts: Array<[string, string]> = []
+  const confirms: Array<Record<string, unknown>> = []
+  const notifications = {
+    success(message: string) { toasts.push(['success', message]) },
+    error(message: string) { toasts.push(['error', message]) },
+    info(message: string) { toasts.push(['info', message]) },
+    async confirm(options: Record<string, unknown>) { confirms.push(options); return confirmed }
+  }
   const hasGoalAccountLink = (candidate: Record<string, unknown> | null) =>
     Boolean(candidate && Object.hasOwn(candidate, 'linkedAccountId') && candidate.linkedAccountId !== null)
   const isLinkable = (account: Record<string, unknown>) =>
@@ -430,6 +490,7 @@ function createGoalContributionHarness({ goal, sourceId = '', accounts = [] }: {
     selectedGoalAccount: { value: accounts.find(account => account.id === goal.linkedAccountId) ?? null },
     contributeAccountId: { value: sourceId },
     contributeAmount: { value: 25 },
+    showContributeModal: { value: true },
     showContributeBudget: { value: false },
     contributeLinkedBudget: { value: null },
     contributeBudgetId: { value: 'monthly' },
@@ -449,14 +510,19 @@ function createGoalContributionHarness({ goal, sourceId = '', accounts = [] }: {
     roundMoney: (amount: number) => Math.round((amount + Number.EPSILON) * 100) / 100,
     transactionsStore: {
       categories: [],
-      async addTransaction(input: Record<string, unknown>) { transactions.push(input) }
+      async addTransaction(input: Record<string, unknown>) {
+        if (failWrites) throw new Error('denied')
+        transactions.push(input)
+      }
     },
     goalsStore: {
-      async contributeToGoal(id: string, amount: number) { virtualContributions.push([id, amount]) },
+      async contributeToGoal(id: string, amount: number) {
+        if (failWrites) throw new Error('denied')
+        virtualContributions.push([id, amount])
+      },
       async updateGoalAmount(id: string, amount: number) { goalAmountUpdates.push([id, amount]) }
     },
-    alert: (message: string) => alerts.push(message),
-    confirm: () => true,
+    notifications,
     console: { error() {} },
     Date
   }
@@ -466,17 +532,81 @@ function createGoalContributionHarness({ goal, sourceId = '', accounts = [] }: {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext }
   }).outputText
   const run = new Function('ctx', `const {
-    selectedGoal, selectedGoalAccount, contributeAccountId, contributeAmount,
+    selectedGoal, selectedGoalAccount, contributeAccountId, contributeAmount, showContributeModal,
     activeWorkspaceId, accountsStore, isPocketRelatedAccount,
     isSavingsGoalAccountLinkable, hasGoalAccountLink, getGoalProgressAmount,
     canTransferBetweenAccounts, roundMoney,
-    transactionsStore, goalsStore, alert, confirm, console, Date
+    transactionsStore, goalsStore, notifications, console, Date
   } = ctx;
   ${javascript}
   return handleContribute();`)
 
-  return { state, run, transactions, virtualContributions, goalAmountUpdates, alerts }
+  return { state, run, transactions, virtualContributions, goalAmountUpdates, toasts, confirms }
 }
+
+const contributionAccounts = (sourceBalance: number, sourceExtra: Record<string, unknown> = {}) => {
+  const source = {
+    id: 'source', workspaceId: 'workspace-a', type: 'checking', currency: 'COP', balance: sourceBalance,
+    limit: 0, name: 'Source', createdAt: new Date(), ...sourceExtra
+  }
+  const target = {
+    id: 'goal-account', workspaceId: 'workspace-a', type: 'savings', currency: 'COP', balance: 40,
+    limit: 0, name: 'Goal account', createdAt: new Date()
+  }
+  return {
+    goal: { id: 'linked-goal', linkedAccountId: target.id, currentAmount: 0, targetAmount: 100, currency: 'COP' },
+    sourceId: source.id,
+    accounts: [source, target]
+  }
+}
+
+test('S7 T5b: a contribution larger than the source balance asks for a default-tone confirmation', async () => {
+  const declined = createGoalContributionHarness({ ...contributionAccounts(10), confirmed: false })
+  await declined.run(declined.state)
+  assert.deepEqual(declined.confirms, [{
+    title: 'Saldo insuficiente',
+    message: 'El saldo de la cuenta es menor que el aporte. ¿Deseas continuar de todos modos?',
+    confirmLabel: 'Aportar igualmente',
+    tone: 'default'
+  }])
+  assert.deepEqual(declined.transactions, [], 'cancelling records nothing')
+  assert.deepEqual(declined.toasts, [])
+  assert.equal(declined.state.showContributeModal.value, true, 'the sheet stays open to adjust the amount')
+
+  const accepted = createGoalContributionHarness({ ...contributionAccounts(10), confirmed: true })
+  await accepted.run(accepted.state)
+  assert.equal(accepted.transactions.length, 1, 'confirming records the transfer')
+  assert.equal(accepted.state.showContributeModal.value, false)
+
+  const covered = createGoalContributionHarness(contributionAccounts(100))
+  await covered.run(covered.state)
+  assert.deepEqual(covered.confirms, [], 'no confirmation when the balance covers the amount')
+  assert.equal(covered.transactions.length, 1)
+})
+
+test('S7 T5b: contribution results and errors are toasts instead of alerts', async () => {
+  const outcome = async (options: Parameters<typeof createGoalContributionHarness>[0]) => {
+    const harness = createGoalContributionHarness(options)
+    await harness.run(harness.state)
+    return harness.toasts
+  }
+  const virtualGoal = { id: 'virtual-goal', currentAmount: 10, targetAmount: 100, currency: 'COP' }
+
+  assert.deepEqual(await outcome({ goal: virtualGoal }), [['success', '¡Aporte virtual registrado sin modificar los saldos de tus cuentas!']])
+  assert.deepEqual(await outcome(contributionAccounts(100)), [['success', '¡Aporte registrado como transferencia entre tus cuentas!']])
+  assert.deepEqual(await outcome({ ...contributionAccounts(100), sourceId: 'missing' }),
+    [['error', 'La cuenta vinculada o la cuenta de origen no están disponibles para esta transferencia.']])
+  const pocket = contributionAccounts(10, { type: 'savings', parentAccountId: 'bank' })
+  pocket.accounts.push({
+    id: 'bank', workspaceId: 'workspace-a', type: 'checking', currency: 'COP', balance: 0,
+    limit: 0, name: 'Bank', createdAt: new Date(), childAccountIds: ['source']
+  } as (typeof pocket.accounts)[number])
+  assert.deepEqual(await outcome(pocket),
+    [['error', 'El saldo disponible de esta cuenta no alcanza para el aporte. No se registró ningún movimiento.']])
+  for (const options of [{ goal: virtualGoal }, contributionAccounts(100)]) {
+    assert.deepEqual(await outcome({ ...options, failWrites: true }), [['error', 'No se pudo registrar el aporte. Inténtalo de nuevo.']])
+  }
+})
 
 test('virtual goal contributions update only the virtual goal amount and do not create transactions', async () => {
   const harness = createGoalContributionHarness({
@@ -665,9 +795,20 @@ const mountNavigation = async (t: import('node:test').TestContext, path: string,
   workspacesStore.workspaces = Object.entries({ 'workspace-a': 2500, 'workspace-b': 125 }).map(([id, expenseLimit]) => ({
     id, name: id, expenseLimit, currency: 'COP', ownerId: 'user-a', members: ['user-a'], createdAt: '2026-01-01'
   }))
+  const notificationsStore = {
+    toasts: [] as Array<[string, string]>,
+    confirms: [] as Array<Record<string, unknown>>,
+    confirmResult: true,
+    success(message: string) { this.toasts.push(['success', message]) },
+    error(message: string) { this.toasts.push(['error', message]) },
+    info(message: string) { this.toasts.push(['info', message]) },
+    async confirm(options: Record<string, unknown>) { this.confirms.push(options); return this.confirmResult }
+  }
   const stores = {
     authStore,
-    settingsStore: { currency: 'COP', loadSettings: noOp },
+    // Reactive like the real store: the main currency can arrive after a view is mounted.
+    settingsStore: Vue.reactive({ currency: 'COP', loadSettings: noOp }),
+    notificationsStore,
     workspacesStore,
     accountsStore: { accounts: [account], netWorthByCurrency: { COP: 100 }, getAccountById: () => account, fetchAccounts: noOp },
     transactionsStore: Vue.reactive({ transactions: [] as Transaction[], categories: [], fetchCategories: noOp, fetchTransactions: noOp }),
@@ -1061,4 +1202,127 @@ test('P1 S1: sidebar drawer and mobile shortcuts identify the correct section', 
   await budgetShortcut.click()
   assert.equal(router.currentRoute.value.fullPath, '/goals')
   assert.equal(budgetShortcut.props['aria-current'], 'page')
+})
+
+test('S7 T5b: deleting a goal asks for a danger confirmation and reports a failure with a toast', async t => {
+  const { root, stores } = await mountNavigation(t, '/goals?tab=savings')
+  const notifications = stores.notificationsStore
+  const deletions: string[] = []
+  let failDelete = false
+  Object.assign(stores.goalsStore, {
+    async deleteGoal(id: string) {
+      if (failDelete) throw new Error('denied')
+      deletions.push(id)
+    }
+  })
+  const deleteButton = () => root.descendants.find(node => node.props['aria-label'] === 'Eliminar meta')!
+
+  notifications.confirmResult = false
+  await deleteButton().click()
+  assert.deepEqual(deletions, [], 'cancelling keeps the goal')
+  assert.deepEqual(notifications.confirms, [{
+    title: '¿Eliminar esta meta?',
+    message: 'Esta acción no se puede deshacer. Tus cuentas y movimientos no cambian.',
+    confirmLabel: 'Eliminar',
+    tone: 'danger'
+  }])
+
+  notifications.confirmResult = true
+  await deleteButton().click()
+  assert.deepEqual(deletions, ['trip'])
+  assert.deepEqual(notifications.toasts, [])
+
+  failDelete = true
+  await deleteButton().click()
+  assert.deepEqual(notifications.toasts, [['error', 'No se pudo eliminar la meta de ahorro. Inténtalo de nuevo.']])
+})
+
+const fillNewGoal = async (root: ViewNode, currency?: string) => {
+  const byId = (id: string) => root.descendants.find(node => node.props.id === id)!
+  await root.find('button', 'Nuevo Objetivo').click()
+  byId('goal-name').props['onUpdate:modelValue']('Fondo')
+  byId('goal-target').props['onUpdate:modelValue'](500)
+  byId('goal-date').props['onUpdate:modelValue']('2030-01-01')
+  if (currency) byId('goal-currency').props['onUpdate:modelValue'](currency)
+  await byId('create-goal-form').props.onSubmit({ preventDefault() {} })
+  await Vue.nextTick()
+}
+
+test('S7 T5b: a new goal starts in the main currency, even when it loads late, until the user picks another', async t => {
+  const { root, stores } = await mountNavigation(t, '/goals?tab=savings')
+  const created: Array<Record<string, unknown>> = []
+  Object.assign(stores.goalsStore, { async addGoal(goal: Record<string, unknown>) { created.push(goal) } })
+  // The user's main currency arrives after the view mounted.
+  stores.settingsStore.currency = 'EUR'
+  await root.find('button', 'Nuevo Objetivo').click()
+  const currencySelect = root.descendants.find(node => node.props.id === 'goal-currency')!
+  assert.deepEqual(
+    currencySelect.descendants.filter(node => node.tag === 'option').map(node => node.props.value),
+    ['COP', 'MXN', 'EUR', 'USD', 'CLP', 'ARS', 'PEN'],
+    'every supported main currency can be chosen'
+  )
+
+  await fillNewGoal(root)
+  await fillNewGoal(root, 'USD')
+  await fillNewGoal(root)
+  assert.deepEqual(created.map(goal => goal.currency), ['EUR', 'USD', 'EUR'], 'a reset form returns to the main currency')
+})
+
+test('S7 T5b: a goal that cannot be created keeps the form open and shows an error toast', async t => {
+  const { root, stores } = await mountNavigation(t, '/goals?tab=savings')
+  Object.assign(stores.goalsStore, { async addGoal() { throw new Error('denied') } })
+  await fillNewGoal(root)
+  assert.deepEqual(stores.notificationsStore.toasts, [['error', 'No se pudo crear la meta de ahorro. Inténtalo de nuevo.']])
+  assert.ok(root.descendants.some(node => node.props.id === 'create-goal-form'))
+})
+
+test('S7 T5b: goal amounts and dates use the es-CO format with the main currency as fallback', async t => {
+  const { root, stores } = await mountNavigation(t, '/goals?tab=savings')
+  const money = (amount: number, currency: string) => new Intl.NumberFormat('es-CO', {
+    style: 'currency', currency, minimumFractionDigits: 0, maximumFractionDigits: 2
+  }).format(amount)
+  stores.settingsStore.currency = 'EUR'
+  stores.goalsStore.goals.push(
+    { id: 'usd', name: 'Viaje USD', targetAmount: 1234.5, currentAmount: 0, currency: 'USD', targetDate: new Date(2030, 0, 1) },
+    { id: 'legacy', name: 'Sin moneda', targetAmount: 300, currentAmount: 0, currency: '', targetDate: new Date(2030, 0, 1) }
+  )
+  await Vue.nextTick()
+
+  const titles = new Set(root.descendants.map(node => node.props.title))
+  for (const expected of [money(100, 'COP'), money(1234.5, 'USD'), money(300, 'EUR')]) {
+    assert.ok(titles.has(expected), `expected an amount shown as ${JSON.stringify(expected)}`)
+  }
+  const dueDate = new Intl.DateTimeFormat('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(2030, 0, 1))
+  root.find('p', `Meta: ${dueDate}`)
+
+  // The contribution amount shows the same currency symbol as the formatted amounts.
+  const contributeButtons = root.descendants.filter(node => node.props['aria-label'] === 'Aportar saldo')
+  const amountPrefix = async (index: number) => {
+    await contributeButtons[index].click()
+    const input = root.descendants.find(node => node.props.id === 'contribute-amount')!
+    return [input.parent!.children.find(node => node.tag === 'span')?.content, input.props.class]
+  }
+  assert.deepEqual(await amountPrefix(0), ['$', 'field font-semibold pl-8'])
+  assert.deepEqual(await amountPrefix(1), ['US$', 'field font-semibold pl-14'])
+})
+
+test('S7 T5b: a category limit that cannot be saved shows an error toast and keeps the typed amount', async t => {
+  t.mock.method(console, 'error', () => undefined)
+  const { root, stores } = await mountNavigation(t, '/goals')
+  ;(stores.transactionsStore.categories as unknown[]).push({ id: 'food', name: 'Comida', type: 'expense', icon: 'Utensils', color: '#f97316' })
+  await Vue.nextTick()
+  const saved: unknown[] = []
+  Object.assign(stores.goalsStore, {
+    async saveBudgetSettings(settings: { categoryBudgets: unknown }) {
+      saved.push(settings.categoryBudgets)
+      throw new Error('denied')
+    }
+  })
+  const input = root.descendants.find(node => node.props.id === 'base-cap-food')
+  assert.ok(input, 'the category with a limit has its editor')
+  await input.props.onChange({ target: { value: '150' } })
+  await Vue.nextTick()
+  assert.deepEqual(saved, [{ food: 150 }])
+  assert.deepEqual(stores.notificationsStore.toasts, [['error', 'No se pudo guardar el límite de Comida. Inténtalo de nuevo.']])
+  assert.equal(input.props.value, 150, 'the typed amount stays on screen, as before')
 })
