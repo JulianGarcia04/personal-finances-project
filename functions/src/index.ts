@@ -21,6 +21,7 @@ import {
   sendError,
   timeZoneForCountry,
   verifyBearerToken,
+  workspaceCardBasis,
   zonedYearMonth
 } from "./http";
 import {
@@ -62,15 +63,18 @@ import {
   resolveAlertBudgetId,
   scopeTotalSpend,
   spendFieldsChanged,
-  ALERT_CARD_BASIS,
   TOTAL_ALERT_SUBJECT,
   FUNDS_ALERT_SUBJECT,
   scopeFundsTotal,
-  skipsUnlinkedTransferWrite,
   incomeChangeAlertScope,
-  effectiveWorkspaceExchangeRates
+  effectiveWorkspaceExchangeRates,
+  alertCardBilling,
+  alertCardCredits,
+  alertTransactionTypes,
+  cardCreditAlertScopes,
+  creditedAccountOf,
+  skipsAlertWrite
 } from "./budgetAlerts";
-import { cardBillingByAccount } from "./agentQueries";
 import { DEFAULT_MONTHLY_BUDGET_ID, parseLegacyCategoryBudgetCurrency } from "./legacyCategoryBudgets";
 import { createGmailSender, SMTP_PASS, SMTP_USER, smtpConfigFromEnvironment, uniqueRecipients } from "./mailer";
 import { BudgetAlertEmailInput, renderBudgetAlertEmail } from "./templates/budgetAlert";
@@ -352,6 +356,12 @@ export const syncTransactionEmbedding = onDocumentWritten(
 // (users/{ownerId}.country -> time zone, .currency -> primary currency), the same sources the
 // agent uses for a user (timeZoneForCountry / resolvePrimaryCurrency), so every member gets
 // one shared, deterministic evaluation. Only the current local month is evaluated.
+// Card purchases count by the basis the owner chose for budgets (workspaces/{id}.budgetCardBasis,
+// budgetAlerts alertCardBilling): Consumo (default) in their statement cycle month; Pagos when
+// their statement is paid, so a payment or credit on a billing card also re-checks the budgets of
+// that card's expenses counting this month. Changing the basis writes only the workspace document,
+// which no trigger watches: it sends nothing, and the next write is evaluated under the new basis
+// with the same ledger, so thresholds already claimed never fire again.
 // Delivery order: email first, push only after the email outcome is decided. An email
 // failure releases the claim and rethrows (platform retry) before any push goes out, so a
 // retry never duplicates a push. Push is best-effort: it never throws, never releases the
@@ -367,18 +377,29 @@ export const notifyBudgetThreshold = onDocumentWritten(
     const before = event.data?.before?.exists ? event.data.before.data() : undefined;
     const after = event.data?.after?.exists ? event.data.after.data() : undefined;
     // An expense write can raise spending. An income or transfer write (create, edit or delete) can
-    // lower the month's income or a budget's funds. Deleting an expense can never newly cross a
-    // threshold.
+    // lower the month's income or a budget's funds. On the Consumo basis, deleting an expense can
+    // never newly cross a threshold. On the Pagos basis a card credit re-checks the card's monthly
+    // budgets below; a card debit (or deleting one) that shifts how a statement's payments are
+    // shared among other categories is picked up by the next write evaluating those categories.
     const expense = after?.type === "expense" ? after : undefined;
     const funding = (tx: Record<string, any> | undefined) => tx?.type === "income" || tx?.type === "transfer" ? tx : undefined;
     const written = expense ?? funding(before) ?? funding(after);
-    if (!written || typeof written.workspaceId !== "string" || !written.workspaceId) return;
+    // Under Pagos a loan repayment (or another non-expense credit) on a card pays its statements too.
+    const source = written ?? [before, after].find((tx) => creditedAccountOf(tx) !== null);
+    if (!source || typeof source.workspaceId !== "string" || !source.workspaceId) return;
     if (!spendFieldsChanged(before, after)) return;
 
-    const workspaceId: string = written.workspaceId;
+    const workspaceId: string = source.workspaceId;
     const workspaceSnap = await db.collection("workspaces").doc(workspaceId).get();
     const workspace = workspaceSnap.data();
     if (!workspace || workspace.budgetAlertsEnabled === false) return;
+    const cardBasis = workspaceCardBasis(workspace);
+    const loadAccounts = () => db.collection("accounts").where("workspaceId", "==", workspaceId).get();
+    const accountRows = (snap: Awaited<ReturnType<typeof loadAccounts>>) => snap.docs.map((d) => ({ ...d.data(), id: d.id }));
+    // Pagos: the billing cards decide which payments and credits move this month's spending.
+    const cardAccountsSnap = cardBasis === "payment" ? await loadAccounts() : null;
+    const cardCredits = alertCardCredits(cardBasis, before, after, cardAccountsSnap ? accountRows(cardAccountsSnap) : []);
+    if (!written && cardCredits.length === 0) return;
     // Every budget of the workspace (archived included): kinds decide per-period self-funding,
     // and active budgets' linked accounts decide which transfers move funds.
     const budgetsSnap = await db.collection("budgets").where("workspaceId", "==", workspaceId).get();
@@ -394,8 +415,9 @@ export const notifyBudgetThreshold = onDocumentWritten(
       for (const accountId of linked) if (typeof accountId === "string" && !links.has(accountId)) links.set(accountId, d.id);
     }
     const linkedBudgetOf = (accountId: string) => links.get(accountId) ?? null;
-    // A transfer between accounts no active budget links moves nothing the alerts measure.
-    if (skipsUnlinkedTransferWrite(before, after, linkedBudgetOf)) return;
+    // A transfer between accounts no active budget links moves nothing the alerts measure, unless
+    // it pays a billing card under Pagos.
+    if (skipsAlertWrite(before, after, linkedBudgetOf, cardCredits)) return;
     // Null for archived/foreign budgets: their category and overall caps never alert, but the
     // expense still counts toward the month's spending vs income unless its budget is self-funded
     // in the month (selfFundedBudgetIds).
@@ -412,14 +434,24 @@ export const notifyBudgetThreshold = onDocumentWritten(
       console.warn(`Budget alert FX rates for workspace ${workspaceId} are in ${mismatchedBase}, not ${primaryCurrency}; ignoring mismatched rates.`);
     }
     const month = zonedYearMonth(new Date(event.time), timeZone);
-    const accountsSnap = await db.collection("accounts").where("workspaceId", "==", workspaceId).get();
+    const accountsSnap = cardAccountsSnap ?? await loadAccounts();
     const creditAccountIds = new Set(
       accountsSnap.docs.filter((d) => d.get("type") === "credit").map((d) => d.id)
     );
     const effectiveLinkedBudgetOf = (accountId: string) =>
       creditAccountIds.has(accountId) ? null : linkedBudgetOf(accountId);
-    const billing = cardBillingByAccount(accountsSnap.docs.map((d) => ({ ...d.data(), id: d.id })), ALERT_CARD_BASIS);
-    const billingFor = (accountId?: string | null) => (accountId ? billing.get(accountId) ?? null : null);
+    const loadTransactions = async () => {
+      const snaps = await Promise.all(alertTransactionTypes(cardBasis).map((type) => db.collection("transactions")
+        .where("workspaceId", "==", workspaceId)
+        .where("type", "==", type)
+        .get()));
+      const [expenses, incomes, transfers, ...cardOnly] = snaps.map((snap) => snap.docs.map((d) => d.data()));
+      return { expenses, incomes, transfers, all: [expenses, incomes, transfers, ...cardOnly].flat() };
+    };
+    // Pagos weights each card statement by the payments made to it, so it needs every movement on
+    // the cards (whole history) before deciding what this write moves.
+    let loaded = cardBasis === "payment" ? await loadTransactions() : null;
+    const { billingFor } = alertCardBilling(workspace, accountRows(accountsSnap), loaded ? { transactions: loaded.all, timeZone } : undefined);
 
     // Which caps this write can move: its category cap, its additional budget's overall cap and
     // the workspace's month spending vs income (the default budget's overall cap).
@@ -431,7 +463,10 @@ export const notifyBudgetThreshold = onDocumentWritten(
     const scopeTotalApplies = budgetScope !== null && budgetScope.totalLimit !== null &&
       countsTowardScopeTotal(expense, budgetScope.scope, month, { timeZone, billingFor });
     const incomeChange = incomeChangeAlertScope(before, after, month, { timeZone }, effectiveLinkedBudgetOf);
-    const incomeApplies = countsTowardMonthlySpend(expense, month, { timeZone, billingFor }) || incomeChange?.monthlyIncome === true;
+    // Pagos: a payment or credit on a card moves the spending of that card's expenses into this month.
+    const cardScopes = cardCreditAlertScopes(loaded?.expenses ?? [], cardCredits, month, { timeZone, billingFor });
+    const incomeApplies = countsTowardMonthlySpend(expense, month, { timeZone, billingFor }) ||
+      incomeChange?.monthlyIncome === true || cardScopes.size > 0;
     // Additional budgets' spending vs the income assigned to them (their funds): the expense's
     // budget, and every budget whose assigned income an income write changed.
     const fundsScopes: BudgetScopeInfo[] = [];
@@ -442,7 +477,24 @@ export const notifyBudgetThreshold = onDocumentWritten(
       const scope = await loadBudgetScope(workspaceId, workspace, budgetId);
       if (scope) fundsScopes.push(scope);
     }
-    if (categoryCap === 0 && !scopeTotalApplies && !incomeApplies && fundsScopes.length === 0) return;
+    const categoryChecks: { info: BudgetScopeInfo; categoryId: string; cap: number }[] =
+      budgetScope && categoryCap > 0 ? [{ info: budgetScope, categoryId, cap: categoryCap }] : [];
+    const totalScopes: BudgetScopeInfo[] = budgetScope && budgetScope.totalLimit !== null && scopeTotalApplies ? [budgetScope] : [];
+    // The card's monthly budgets: their category caps, overall caps and funds. Event budgets count
+    // their full principal, which no payment changes.
+    for (const [budgetId, categories] of cardScopes) {
+      const info = [budgetScope, ...fundsScopes].find((entry) => entry?.scope.id === budgetId) ??
+        await loadBudgetScope(workspaceId, workspace, budgetId);
+      if (!info || info.scope.kind !== "monthly") continue;
+      for (const cardCategory of categories) {
+        if (categoryChecks.some((check) => check.info.scope.id === budgetId && check.categoryId === cardCategory)) continue;
+        const cap = await info.categoryCap(cardCategory);
+        if (cap > 0) categoryChecks.push({ info, categoryId: cardCategory, cap });
+      }
+      if (info.totalLimit !== null && !totalScopes.includes(info)) totalScopes.push(info);
+      if (budgetId !== DEFAULT_MONTHLY_BUDGET_ID && !fundsScopes.includes(info)) fundsScopes.push(info);
+    }
+    if (categoryChecks.length === 0 && totalScopes.length === 0 && !incomeApplies && fundsScopes.length === 0) return;
 
     const smtp = smtpConfigFromEnvironment();
     const memberUids = memberUidsOf(workspace.members);
@@ -451,34 +503,31 @@ export const notifyBudgetThreshold = onDocumentWritten(
     if (!smtp) console.warn("SMTP_USER / SMTP_PASS are not configured; budget alert email skipped.");
     if (!delivery.claim) return;
 
-    const [txSnap, incomeSnap, transferSnap] = await Promise.all(["expense", "income", "transfer"].map((type) => db.collection("transactions")
-      .where("workspaceId", "==", workspaceId)
-      .where("type", "==", type)
-      .get()));
-    const transactions = txSnap.docs.map((d) => d.data());
+    loaded ??= await loadTransactions();
+    const transactions = loaded.expenses;
     const spendOptions = { timeZone, reportingCurrency: primaryCurrency, exchangeRates, billingFor };
     const subjects: BudgetAlertSubject[] = [];
 
-    if (budgetScope && categoryCap > 0) {
-      const budget = capInReportingCurrency(categoryCap, budgetScope.capCurrency, primaryCurrency, exchangeRates);
-      const spent = categorySpendForScope(transactions, categoryId, budgetScope.scope, month, spendOptions);
+    for (const { info, categoryId: subjectId, cap } of categoryChecks) {
+      const budget = capInReportingCurrency(cap, info.capCurrency, primaryCurrency, exchangeRates);
+      const spent = categorySpendForScope(transactions, subjectId, info.scope, month, spendOptions);
       if (budget === null || spent === null) {
         console.warn(`Budget alert for workspace ${workspaceId} skipped: cap units unconfirmed or manual rate missing.`);
       } else {
-        subjects.push({ kind: "category", subjectId: categoryId, spent, budget, scope: budgetScope.scope, budgetName: budgetScope.budgetName });
+        subjects.push({ kind: "category", subjectId, spent, budget, scope: info.scope, budgetName: info.budgetName });
       }
     }
-    if (budgetScope && budgetScope.totalLimit !== null && scopeTotalApplies) {
-      const budget = capInReportingCurrency(budgetScope.totalLimit, budgetScope.capCurrency, primaryCurrency, exchangeRates);
-      const spent = scopeTotalSpend(transactions, budgetScope.scope, month, spendOptions);
+    for (const info of totalScopes) {
+      const budget = capInReportingCurrency(info.totalLimit ?? 0, info.capCurrency, primaryCurrency, exchangeRates);
+      const spent = scopeTotalSpend(transactions, info.scope, month, spendOptions);
       if (budget === null || spent === null) {
         console.warn(`Budget total alert for workspace ${workspaceId} skipped: cap units unconfirmed or manual rate missing.`);
       } else {
-        subjects.push({ kind: "total", subjectId: TOTAL_ALERT_SUBJECT, spent, budget, scope: budgetScope.scope, budgetName: budgetScope.budgetName });
+        subjects.push({ kind: "total", subjectId: TOTAL_ALERT_SUBJECT, spent, budget, scope: info.scope, budgetName: info.budgetName });
       }
     }
-    const incomes = incomeSnap.docs.map((d) => d.data());
-    const fundingMovements = [...incomes, ...transferSnap.docs.map((d) => d.data())];
+    const incomes = loaded.incomes;
+    const fundingMovements = [...incomes, ...loaded.transfers];
     for (const fundsScope of fundsScopes) {
       const funds = scopeFundsTotal(fundingMovements, fundsScope.scope, month, spendOptions, effectiveLinkedBudgetOf);
       const spent = scopeTotalSpend(transactions, fundsScope.scope, month, spendOptions);
