@@ -24,5 +24,7 @@ test('budget security retains its demo-only emulator configuration and complete 
 })
 
 test('the default test command retains existing application test discovery', () => {
-  assert.equal(manifest.scripts.test.split(/\s+/).slice(0, 3).join(' '), 'node --test src/**/*.test.ts')
+  // Quoted so Node expands the glob itself: the shell's `**` stops at one directory level and
+  // skipped src/App.test.ts and src/components/ui/*.test.ts.
+  assert.equal(manifest.scripts.test, "node --test 'src/**/*.test.ts' 'tests/runner/*.test.ts'")
 })
