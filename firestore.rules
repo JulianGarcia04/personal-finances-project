@@ -704,6 +704,11 @@ service cloud.firestore {
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(workspaceSettingsKeys()) &&
         isValidCategoryBudgetCurrencyUpdate() &&
         isValidExchangeRatesBaseCurrencyUpdate();
+      // How budgets count card expenses is shared by every member; only the owner changes it,
+      // alone and to a known value. It stays out of workspaceSettingsKeys() on purpose.
+      allow update: if isAuthenticated() && request.auth.uid == resource.data.ownerId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['budgetCardBasis']) &&
+        request.resource.data.budgetCardBasis in ['consumption', 'payment'];
       allow delete: if isAuthenticated() && resource.data.ownerId == request.auth.uid;
     }
 

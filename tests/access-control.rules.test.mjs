@@ -11,7 +11,8 @@ import { initializeApp, deleteApp } from 'firebase/app'
 import { getAuth, connectAuthEmulator, createUserWithEmailAndPassword } from 'firebase/auth'
 import {
   getFirestore, connectFirestoreEmulator, terminate,
-  doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, collection, arrayUnion, serverTimestamp
+  doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, collection, arrayUnion, serverTimestamp,
+  deleteField, writeBatch, runTransaction
 } from 'firebase/firestore'
 
 const projectId = 'demo-vault-access'
@@ -40,10 +41,11 @@ let adminDb
 let owner
 let member
 let outsider
+let anonymous
 let workspaceId
 let outsiderWorkspaceId
 
-async function signUp(label) {
+function clientApp(label) {
   const app = initializeApp({
     apiKey: 'emulator-only-fixture-key',
     authDomain: `${projectId}.firebaseapp.com`,
@@ -51,10 +53,15 @@ async function signUp(label) {
     appId: `1:123456789:web:${label}`
   }, `${label}-${Date.now()}-${Math.random()}`)
   apps.push(app)
-  const auth = getAuth(app)
-  connectAuthEmulator(auth, `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`, { disableWarnings: true })
   const db = getFirestore(app)
   connectFirestoreEmulator(db, '127.0.0.1', 8080)
+  return { app, db }
+}
+
+async function signUp(label) {
+  const { app, db } = clientApp(label)
+  const auth = getAuth(app)
+  connectAuthEmulator(auth, `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`, { disableWarnings: true })
   const credential = await createUserWithEmailAndPassword(auth, `${label}-${Date.now()}@example.test`, 'emulator-password-123')
   return { uid: credential.user.uid, db }
 }
@@ -66,6 +73,7 @@ before(async () => {
   owner = await signUp('owner')
   member = await signUp('member')
   outsider = await signUp('outsider')
+  anonymous = clientApp('anonymous')
   workspaceId = `ws-${owner.uid}`
   outsiderWorkspaceId = `ws-${outsider.uid}`
   await adminDb.collection('workspaces').doc(workspaceId).set({
@@ -171,6 +179,105 @@ test('S10: a member can update exchangeRatesBaseCurrency with a valid ISO-3 code
   await assert.rejects(updateDoc(ref, { exchangeRatesBaseCurrency: 'cop' }), denied)
   await assert.rejects(updateDoc(ref, { exchangeRatesBaseCurrency: 'INVALID' }), denied)
   await assert.rejects(updateDoc(ref, { exchangeRatesBaseCurrency: 123 }), denied)
+})
+
+// S6 card basis: each test resets the shared workspace so it does not depend on test order.
+const seedWorkspace = fields => adminDb.collection('workspaces').doc(workspaceId).set({
+  id: workspaceId, name: 'Shared', ownerId: owner.uid, members: [owner.uid, member.uid], currency: 'USD', expenseLimit: 100, ...fields
+})
+const storedWorkspace = async () => (await adminDb.collection('workspaces').doc(workspaceId).get()).data()
+const workspaceRef = user => doc(user.db, 'workspaces', workspaceId)
+
+test('S6: the owner can set the card basis the first time, flip it, set it via merge, repeat it, and replace an invalid stored value', async () => {
+  await seedWorkspace({})
+  await updateDoc(workspaceRef(owner), { budgetCardBasis: 'payment' })
+  assert.equal((await storedWorkspace()).budgetCardBasis, 'payment')
+  await updateDoc(workspaceRef(owner), { budgetCardBasis: 'payment' })
+  await setDoc(workspaceRef(owner), { budgetCardBasis: 'consumption' }, { merge: true })
+  assert.equal((await storedWorkspace()).budgetCardBasis, 'consumption')
+  await seedWorkspace({ budgetCardBasis: 'garbage' })
+  await updateDoc(workspaceRef(owner), { budgetCardBasis: 'payment' })
+  assert.equal((await storedWorkspace()).budgetCardBasis, 'payment')
+})
+
+test('S6: a member cannot set, change or delete the card basis', async () => {
+  await seedWorkspace({})
+  await assert.rejects(updateDoc(workspaceRef(member), { budgetCardBasis: 'payment' }), denied)
+  assert.equal((await storedWorkspace()).budgetCardBasis, undefined)
+  await seedWorkspace({ budgetCardBasis: 'payment' })
+  await assert.rejects(updateDoc(workspaceRef(member), { budgetCardBasis: 'consumption' }), denied)
+  await assert.rejects(updateDoc(workspaceRef(member), { budgetCardBasis: deleteField() }), denied)
+  assert.equal((await storedWorkspace()).budgetCardBasis, 'payment')
+})
+
+test('S6: a member cannot smuggle the card basis with an allowed settings key, a merge, a batch or a transaction', async () => {
+  await seedWorkspace({ budgetCardBasis: 'consumption' })
+  await assert.rejects(updateDoc(workspaceRef(member), { expenseLimit: 7, budgetCardBasis: 'payment' }), denied)
+  await assert.rejects(updateDoc(workspaceRef(member), { budgetAlertsEnabled: false, budgetCardBasis: 'payment' }), denied)
+  await assert.rejects(setDoc(workspaceRef(member), { budgetCardBasis: 'payment' }, { merge: true }), denied)
+  const batch = writeBatch(member.db)
+  batch.update(workspaceRef(member), { expenseLimit: 8 })
+  batch.update(workspaceRef(member), { budgetCardBasis: 'payment' })
+  await assert.rejects(batch.commit(), denied)
+  await assert.rejects(runTransaction(member.db, async transaction => {
+    await transaction.get(workspaceRef(member))
+    transaction.update(workspaceRef(member), { budgetCardBasis: 'payment' })
+  }), denied)
+  const stored = await storedWorkspace()
+  assert.equal(stored.budgetCardBasis, 'consumption')
+  assert.equal(stored.expenseLimit, 100)
+})
+
+test('S6: the owner cannot store an invalid, null, non-string, nested or deleted card basis', async () => {
+  await seedWorkspace({ budgetCardBasis: 'consumption' })
+  for (const value of ['monthly', 'Payment', 'PAYMENT', '', ' payment', null, 1, 0, true, ['payment'], { v: 'payment' }, arrayUnion('payment')]) {
+    await assert.rejects(updateDoc(workspaceRef(owner), { budgetCardBasis: value }), denied, `value ${JSON.stringify(value)}`)
+  }
+  await assert.rejects(updateDoc(workspaceRef(owner), { 'budgetCardBasis.kind': 'payment' }), denied)
+  await assert.rejects(updateDoc(workspaceRef(owner), { budgetCardBasis: deleteField() }), denied)
+  assert.equal((await storedWorkspace()).budgetCardBasis, 'consumption')
+})
+
+test('S6: the owner cannot combine the card basis with ownerId, members, another settings key or an unknown key', async () => {
+  await seedWorkspace({ budgetCardBasis: 'consumption' })
+  for (const extra of [
+    { ownerId: member.uid }, { members: arrayUnion(outsider.uid) }, { members: [owner.uid] },
+    { expenseLimit: 9 }, { budgetAlertsEnabled: false }, { name: 'Renamed' }, { currency: 'EUR' }, { somethingNew: true }
+  ]) {
+    await assert.rejects(updateDoc(workspaceRef(owner), { budgetCardBasis: 'payment', ...extra }), denied, `extra ${Object.keys(extra)}`)
+  }
+  const stored = await storedWorkspace()
+  assert.equal(stored.budgetCardBasis, 'consumption')
+  assert.equal(stored.ownerId, owner.uid)
+  assert.deepEqual(stored.members, [owner.uid, member.uid])
+  assert.equal(stored.expenseLimit, 100)
+  assert.equal(stored.name, 'Shared')
+})
+
+test('S6: outsiders and unauthenticated clients cannot read or set the card basis', async () => {
+  await seedWorkspace({ budgetCardBasis: 'consumption' })
+  await assert.rejects(updateDoc(workspaceRef(outsider), { budgetCardBasis: 'payment' }), denied)
+  await assert.rejects(updateDoc(workspaceRef(anonymous), { budgetCardBasis: 'payment' }), denied)
+  await assert.rejects(getDoc(workspaceRef(anonymous)), denied)
+  assert.equal((await storedWorkspace()).budgetCardBasis, 'consumption')
+})
+
+test('S6: every member settings key still updates while a valid or invalid card basis is stored, including a same-value basis echo', async () => {
+  const updates = {
+    expenseLimit: 5, budgetIncome: 1000, budgetNeedsPercent: 50, budgetWantsPercent: 30, budgetSavingsPercent: 20,
+    budgetAllocations: { a: 1 }, categoryBudgets: { food: 1 }, exchangeRates: { USD: 1 },
+    exchangeRatesBaseCurrency: 'COP', categoryBudgetCurrency: 'COP', budgetAlertsEnabled: false
+  }
+  for (const basis of ['payment', 'garbage']) {
+    await seedWorkspace({ budgetCardBasis: basis })
+    for (const [key, value] of Object.entries(updates)) await updateDoc(workspaceRef(member), { [key]: value })
+    await updateDoc(workspaceRef(member), { expenseLimit: 6, budgetCardBasis: basis })
+    await updateDoc(workspaceRef(owner), { expenseLimit: 7 })
+    const stored = await storedWorkspace()
+    assert.equal(stored.budgetCardBasis, basis)
+    assert.equal(stored.expenseLimit, 7)
+    assert.equal(stored.budgetAlertsEnabled, false)
+  }
 })
 
 test('an outsider cannot read or update the workspace', async () => {

@@ -586,7 +586,7 @@ import { useGoalsStore } from '@/stores/goalsStore'
 import { getSavingsGoalProgressAmount } from '@/lib/savingsGoals'
 import { Account, AccountType, Transaction } from '@/types'
 import { createCardBillingLookup, expenseAmountForMonth } from '@/lib/installments'
-import { BUDGET_BASIS_HINTS, BUDGET_BASIS_LABELS, budgetBasis } from '@/lib/budgetBasis'
+import { BUDGET_BASIS_HINTS, BUDGET_BASIS_LABELS } from '@/lib/budgetBasis'
 import { getTransactionDisplay } from '@/lib/transactionDisplay'
 import { splitMoney } from '@/lib/money'
 import { getAccountDisplayLabel, groupAccountsByPocket } from '@/lib/pockets'
@@ -729,7 +729,9 @@ const hasFxWarning = computed(() => {
 const cardBillingFor = computed(() => createCardBillingLookup(accountsStore.accounts, 'payment', {
   transactions: transactionsStore.transactions
 }))
-// Budget widgets follow the budget basis chosen in Goals ("Consumo del mes" by default).
+// Budget widgets follow the active workspace's card basis, set by its owner in Presupuestos
+// ("Consumo del mes" by default).
+const budgetBasis = computed(() => workspacesStore.activeBudgetCardBasis)
 const budgetBillingFor = computed(() => createCardBillingLookup(accountsStore.accounts, budgetBasis.value, {
   transactions: transactionsStore.transactions
 }))

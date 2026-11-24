@@ -422,6 +422,8 @@ test('S9: the per-budget panel lists active budgets with activity and their fund
 
 test('budget basis: Dashboard budget widgets follow the basis while cash flow keeps the payment month', () => {
   assert.ok(script)
+  assert.match(script, /const budgetBasis = computed\(\(\) => workspacesStore\.activeBudgetCardBasis\)/, 'budget widgets read the active workspace basis')
+  assert.doesNotMatch(script, /import \{[^}]*\bbudgetBasis\b[^}]*\} from '@\/lib\/budgetBasis'/, 'no device-wide basis')
   assert.match(script, /const cardBillingFor = computed\(\(\) => createCardBillingLookup\(accountsStore\.accounts, 'payment', \{\s*transactions: transactionsStore\.transactions\s*\}\)\)/)
   assert.match(script, /const budgetBillingFor = computed\(\(\) => createCardBillingLookup\(accountsStore\.accounts, budgetBasis\.value, \{\s*transactions: transactionsStore\.transactions\s*\}\)\)/)
   assert.equal(script.match(/cardBilling: budgetBillingFor\.value/g)?.length, 3)

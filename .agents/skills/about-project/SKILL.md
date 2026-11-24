@@ -33,7 +33,7 @@ vault-personal-finances (Root)
 
 ### Firestore Security Rules
 * `/users/{userId}`: Only the owner can write. `get` is allowed to the owner or to a co-member of the requester's active workspace (both uids checked on the workspace doc); `list` is denied. `secure/*` (encrypted API key) is server-only.
-* `/workspaces/{workspaceId}`: Create requires `ownerId == uid` and `members == [uid]`. Members can read and update only `expenseLimit`, `budget*`, `budgetAllocations`, `categoryBudgets`, `exchangeRates`. `members`/`ownerId` are server-only (changed by `inviteToWorkspace`). Only the owner can delete.
+* `/workspaces/{workspaceId}`: Create requires `ownerId == uid` and `members == [uid]`. Members can read and update only the keys in `workspaceSettingsKeys()` (`expenseLimit`, `budgetIncome`, `budget*Percent`, `budgetAllocations`, `categoryBudgets`, `exchangeRates*`, `categoryBudgetCurrency`, `budgetAlertsEnabled`). `budgetCardBasis` (`'consumption' | 'payment'`, how budgets count card expenses) is owner-only and must change alone. `members`/`ownerId` are server-only (changed by `inviteToWorkspace`). Only the owner can delete.
 * `/accounts/{accountId}`: Only workspace members (`isWorkspaceMember(resource.data.workspaceId)`) can read, update, or delete.
 * `/transactions/{transactionId}`: Only workspace members can read, update, or delete.
 * `/categories/{categoryId}`: Users can read categories that belong to their workspace OR global categories (`workspaceId == null`).

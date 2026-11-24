@@ -3,9 +3,7 @@ import assert from 'node:assert/strict'
 import {
   BUDGET_BASIS_HINTS,
   BUDGET_BASIS_LABELS,
-  budgetBasis,
-  parseBudgetBasis,
-  setBudgetBasis
+  parseBudgetBasis
 } from './budgetBasis.ts'
 
 test('parseBudgetBasis defaults to consumption and accepts payment', () => {
@@ -13,14 +11,6 @@ test('parseBudgetBasis defaults to consumption and accepts payment', () => {
   assert.equal(parseBudgetBasis('consumption'), 'consumption')
   assert.equal(parseBudgetBasis(null), 'consumption')
   assert.equal(parseBudgetBasis('other'), 'consumption')
-})
-
-test('budget basis starts on consumption and survives missing storage', () => {
-  assert.equal(budgetBasis.value, 'consumption')
-  setBudgetBasis('payment')
-  assert.equal(budgetBasis.value, 'payment')
-  setBudgetBasis('consumption')
-  assert.equal(budgetBasis.value, 'consumption')
 })
 
 test('each budget view names what it counts', () => {

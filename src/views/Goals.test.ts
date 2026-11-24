@@ -399,6 +399,8 @@ test('Dashboard goal progress uses the same live resolver and suppresses invalid
 
 test('budget basis: Goals shows the consumption/payment switch and counts budgets with it', () => {
   assertContains(/data-testid="goals-budget-basis"[\s\S]{0,400}<BudgetBasisSwitch \/>/, 'the budget area must start with the basis switch')
+  assertContains(/const budgetBasis = computed\(\(\) => workspacesStore\.activeBudgetCardBasis\)/, 'budgets count with the active workspace basis')
+  assertNotContains(/import \{[^}]*\bbudgetBasis\b[^}]*\} from '@\/lib\/budgetBasis'/, 'budgets must not use a device-wide basis')
   assertContains(/const cardBillingFor = computed\(\(\) => createCardBillingLookup\(accountsStore\.accounts, budgetBasis\.value, \{\s*transactions: transactionsStore\.transactions\s*\}\)\)/, 'budget figures must follow the chosen basis and apply card payments')
   assertContains(/vista «\{\{ BUDGET_BASIS_LABELS\[budgetBasis\] \}\}»/, 'the protected baseline must name the view it counts with')
 })
@@ -657,7 +659,7 @@ const mountNavigation = async (t: import('node:test').TestContext, path: string,
         await persistLimit()
       }
     }
-    return requireModule(id)
+    return requireModule(id.startsWith('@/') ? `../${id.slice(2)}.ts` : id)
   })
   const workspacesStore = storeModule.useWorkspacesStore(pinia)
   workspacesStore.workspaces = Object.entries({ 'workspace-a': 2500, 'workspace-b': 125 }).map(([id, expenseLimit]) => ({

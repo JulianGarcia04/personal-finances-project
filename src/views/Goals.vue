@@ -871,7 +871,7 @@ import { isReservedBudgetName } from '@/schemas'
 import { reportBudgetScope } from '@/lib/budgetReporting'
 import type { BudgetWorkspaceBudgetSnapshot } from '@/lib/budgetWorkspaceAdapter'
 import { createCardBillingLookup } from '@/lib/installments'
-import { BUDGET_BASIS_LABELS, budgetBasis } from '@/lib/budgetBasis'
+import { BUDGET_BASIS_LABELS } from '@/lib/budgetBasis'
 import BudgetBasisSwitch from '@/components/BudgetBasisSwitch.vue'
 import { parseDateOnly, toDateValue, toLocalDateKey } from '@/lib/dates'
 import { effectiveExchangeRates } from '@/lib/fx'
@@ -1131,7 +1131,8 @@ const budgetSuggestedCategories = computed(() => suggestCategoriesBySpending({
 }))
 // Card expenses count in their statement cycle month ("Consumo del mes") or when their
 // statement is paid ("Pagos del mes": payments already made count in their month, the unpaid
-// rest in the statement payment month), as chosen with the budget basis switch.
+// rest in the statement payment month), as the workspace owner set with the basis switch.
+const budgetBasis = computed(() => workspacesStore.activeBudgetCardBasis)
 const cardBillingFor = computed(() => createCardBillingLookup(accountsStore.accounts, budgetBasis.value, {
   transactions: transactionsStore.transactions
 }))

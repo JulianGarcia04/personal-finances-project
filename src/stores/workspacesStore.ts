@@ -3,12 +3,14 @@ import { db, auth } from '@/lib/firebase'
 import { Workspace, UserProfile } from '@/types'
 import { collection, query, where, getDocs, doc, setDoc, updateDoc, getDoc } from 'firebase/firestore'
 import { useAuthStore } from './authStore'
+import { parseBudgetBasis, type BudgetBasis } from '@/lib/budgetBasis'
 
 interface WorkspacesState {
   workspaces: Workspace[];
   activeWorkspaceProfiles: UserProfile[];
   loading: boolean;
   pendingExpenseLimitWrites: Set<string>;
+  pendingBudgetCardBasisWrites: Set<string>;
 }
 
 // Función auxiliar (puedes adaptarla a tu entorno)
@@ -25,8 +27,23 @@ export const useWorkspacesStore = defineStore('workspaces', {
     workspaces: [],
     activeWorkspaceProfiles: [],
     loading: false,
-    pendingExpenseLimitWrites: new Set()
+    pendingExpenseLimitWrites: new Set(),
+    pendingBudgetCardBasisWrites: new Set()
   }),
+  getters: {
+    activeWorkspace(state): Workspace | undefined {
+      const workspaceId = useAuthStore().activeWorkspaceId
+      return state.workspaces.find(w => w.id === workspaceId)
+    },
+    // Shared by every member and budget surface; absent or invalid counts consumption.
+    activeBudgetCardBasis(): BudgetBasis {
+      return parseBudgetBasis(this.activeWorkspace?.budgetCardBasis)
+    },
+    isActiveWorkspaceOwner(): boolean {
+      const uid = useAuthStore().user?.uid
+      return Boolean(uid && this.activeWorkspace?.ownerId === uid)
+    }
+  },
   actions: {
     async fetchMyWorkspaces() {
       const user = auth.currentUser
@@ -167,6 +184,28 @@ export const useWorkspacesStore = defineStore('workspaces', {
         if (ws) ws.expenseLimit = normalized
       } finally {
         this.pendingExpenseLimitWrites.delete(workspaceId)
+      }
+    },
+
+    // Only the owner changes how budgets count card expenses for every member (rules enforce it too).
+    async updateBudgetCardBasis(workspaceId: string, basis: BudgetBasis) {
+      if (basis !== 'consumption' && basis !== 'payment') {
+        throw new Error('Elige Consumo del mes o Pagos del mes.')
+      }
+      const uid = useAuthStore().user?.uid
+      if (!uid || this.workspaces.find(w => w.id === workspaceId)?.ownerId !== uid) {
+        throw new Error('Solo el dueño del espacio de trabajo puede cambiar cómo se cuentan las tarjetas.')
+      }
+      if (this.pendingBudgetCardBasisWrites.has(workspaceId)) {
+        throw new Error('Ya se está guardando cómo se cuentan las tarjetas en este espacio de trabajo.')
+      }
+      this.pendingBudgetCardBasisWrites.add(workspaceId)
+      try {
+        await updateDoc(doc(db, 'workspaces', workspaceId), { budgetCardBasis: basis })
+        const ws = this.workspaces.find(w => w.id === workspaceId)
+        if (ws) ws.budgetCardBasis = basis
+      } finally {
+        this.pendingBudgetCardBasisWrites.delete(workspaceId)
       }
     }
   }
