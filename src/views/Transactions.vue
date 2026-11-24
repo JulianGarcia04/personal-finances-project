@@ -862,14 +862,14 @@
             </div>
           </div>
 
-          <div v-if="canCarryBudget(editingOriginalType) && editTx.type === editingOriginalType" class="rounded-xl border border-border/60 bg-slate-900/30 p-3 space-y-2">
+          <div v-if="editBudgetSelectable" class="rounded-xl border border-border/60 bg-slate-900/30 p-3 space-y-2">
             <label class="block text-[10px] font-semibold text-text-secondary uppercase tracking-wider">
               Presupuesto asignado
               <select
                 v-if="budgetSettingsReady"
                 data-testid="budget-assignment-edit"
                 v-model="editBudgetId"
-                :disabled="isBudgetAssignmentPending(editingTxId) || !!editingLinkedBudget"
+                :disabled="!!editingLinkedBudget"
                 :aria-describedby="editingLinkedBudget ? 'edit-budget-lock' : undefined"
                 class="mt-1 field disabled:opacity-70"
               >
@@ -887,16 +887,7 @@
               <LinkIcon class="w-3 h-3 mt-px shrink-0" />
               <span>Este movimiento sale de una cuenta ligada a «{{ editingLinkedBudget.name }}», así que pertenece a ese presupuesto.</span>
             </p>
-            <button
-              type="button"
-              data-testid="budget-assignment-apply"
-              :disabled="!budgetSettingsReady || editBudgetId === editingOriginalBudgetId || isBudgetAssignmentPending(editingTxId)"
-              @click="applyEditBudgetAssignment"
-              class="w-full min-h-11 px-3 py-2 rounded-xl border border-accent-emerald/25 text-xs font-semibold text-accent-emerald hover:bg-accent-emerald/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              Actualizar presupuesto
-            </button>
-            <p class="text-[10px] text-text-muted">Esta acción solo cambia el presupuesto asignado; no modifica el monto ni otros datos.</p>
+            <p class="text-[10px] text-text-muted">El presupuesto se guarda junto con los demás cambios al pulsar «Guardar».</p>
           </div>
 
           <!-- Description and amount -->
@@ -1047,6 +1038,7 @@ import { useGoalsStore } from '@/stores/goalsStore'
 import { DEFAULT_MONTHLY_BUDGET_ID, budgetChangeForEdit, canAssignBudget, canCarryBudget, linkedBudgetForAccount, resolveBudgetId } from '@/lib/budgets'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useAuthStore } from '@/stores/authStore'
+import { useNotificationsStore } from '@/stores/notificationsStore'
 import type { Category, Transaction, TransactionType } from '@/types'
 import { TransactionSchema } from '@/schemas'
 import { getMonthlyInstallmentAmount } from '@/lib/installments'
@@ -1077,9 +1069,9 @@ const transactionsStore = useTransactionsStore()
 const goalsStore = useGoalsStore()
 const workspacesStore = useWorkspacesStore()
 const authStore = useAuthStore()
+const notifications = useNotificationsStore()
 const budgetSettingsReady = ref(false)
 const budgetSettingsError = ref('')
-const assigningBudgetIds = ref(new Set<string>())
 const editBudgetId = ref(DEFAULT_MONTHLY_BUDGET_ID)
 const editingOriginalBudgetId = ref(DEFAULT_MONTHLY_BUDGET_ID)
 const editingOriginalType = ref<TransactionType>('expense')
@@ -1168,20 +1160,28 @@ const handleBatchDelete = async () => {
     return !tx || canDeleteMirrorTransaction(tx)
   })
   if (ids.length === 0) return
-  if (confirm(`¿Eliminar ${ids.length} transacciones? Esto actualizará los saldos de las cuentas.`)) {
-    const failed: string[] = []
-    for (const id of ids) {
-      try {
-        await transactionsStore.deleteTransaction(id)
-        selectedTxIds.value = selectedTxIds.value.filter(selectedId => selectedId !== id)
-      } catch (err) {
-        console.error('Error en batch delete', err)
-        failed.push(err instanceof Error ? err.message : 'No se pudo eliminar una transacción.')
-      }
+  const confirmed = await notifications.confirm({
+    title: 'Eliminar transacciones',
+    message: `¿Eliminar ${ids.length === 1 ? 'la transacción seleccionada' : `${ids.length} transacciones`}? Esto actualizará los saldos de las cuentas.`,
+    confirmLabel: 'Eliminar',
+    tone: 'danger'
+  })
+  if (!confirmed) return
+  const failed: string[] = []
+  for (const id of ids) {
+    try {
+      await transactionsStore.deleteTransaction(id)
+      selectedTxIds.value = selectedTxIds.value.filter(selectedId => selectedId !== id)
+    } catch (err) {
+      console.error('Error en batch delete', err)
+      failed.push(err instanceof Error ? err.message : 'No se pudo eliminar una transacción.')
     }
-    if (failed.length > 0) {
-      alert(failed[0])
-    }
+  }
+  if (failed.length > 0) {
+    // Failed movements stay selected; the first reason explains the most common cause.
+    const count = failed.length === 1 ? 'No se pudo eliminar 1' : `No se pudieron eliminar ${failed.length}`
+    const total = `${ids.length} ${ids.length === 1 ? 'transacción' : 'transacciones'}`
+    notifications.error(`${count} de ${total}. ${failed[0]}`)
   }
 }
 // -----------------
@@ -1314,45 +1314,21 @@ const budgetOptionsForExpense = (currentBudgetId?: string | null, accountId = ''
   ].filter(option => allowed(option.id))
 }
 
-const isBudgetAssignmentPending = (transactionId: string) =>
-  assigningBudgetIds.value.has(transactionId)
+// The budget selector shows for a persisted expense or income whose draft keeps its type.
+const editBudgetSelectable = computed(() =>
+  canCarryBudget(editingOriginalType.value) && editTx.value.type === editingOriginalType.value)
 
-const assignBudgetToExpense = async (transaction: any, budgetId: string): Promise<boolean> => {
-  if (!budgetSettingsReady.value || !canCarryBudget(transaction.type)) return false
-  if (resolveBudgetId(transaction.budgetId) === budgetId) return false
-  if (!canAssignBudget(linkableBudgets.value, transaction.accountId, budgetId)) return false
-  if (assigningBudgetIds.value.has(transaction.id)) return false
-
-  assigningBudgetIds.value.add(transaction.id)
-  try {
-    await transactionsStore.assignExpenseBudget(transaction.id, budgetId)
-    return true
-  } catch (error: unknown) {
-    console.error('Error actualizando presupuesto del movimiento:', error)
-    alert(error instanceof Error ? error.message : 'No se pudo actualizar el presupuesto del movimiento')
-    return false
-  } finally {
-    assigningBudgetIds.value.delete(transaction.id)
-  }
+// Budget picked in the edit form; "Guardar" saves it in the same write as the rest of the edit.
+// Undefined when the selector is hidden, not ready or left unchanged.
+const editBudgetChoice = (): string | undefined => {
+  if (!budgetSettingsReady.value || !editBudgetSelectable.value) return undefined
+  return editBudgetId.value === editingOriginalBudgetId.value ? undefined : editBudgetId.value
 }
 
-const applyEditBudgetAssignment = async () => {
-  if (!budgetSettingsReady.value) return
-
-  const transaction = transactionsStore.transactions.find(tx => tx.id === editingTxId.value)
-  if (!transaction || !canCarryBudget(transaction.type)) return
-
-  const selectedOption = budgetOptionsForExpense(editingOriginalBudgetId.value)
-    .find(option => option.id === editBudgetId.value)
-  if (!selectedOption || selectedOption.archived) {
-    editBudgetId.value = editingOriginalBudgetId.value
-    return
-  }
-
-  const saved = await assignBudgetToExpense(transaction, editBudgetId.value)
-  if (saved) editingOriginalBudgetId.value = resolveBudgetId(editBudgetId.value)
-  else editBudgetId.value = editingOriginalBudgetId.value
-}
+// Only a budget the selector offers as active can be chosen (never archived or from elsewhere).
+const isOfferedEditBudget = (budgetId: string) =>
+  budgetOptionsForExpense(editingOriginalBudgetId.value, editingTransaction.value?.accountId)
+    .some(option => option.id === budgetId && !option.archived)
 
 // Computed properties for Edit Modal
 // Bridges are left out, except the one the movement already uses so the form can show it.
@@ -1605,7 +1581,7 @@ const saveTransaction = async () => {
   })
 
   if (!validation.success) {
-    alert(validation.error.errors[0].message)
+    notifications.error(validation.error.errors[0].message)
     return
   }
 
@@ -1629,7 +1605,7 @@ const saveTransaction = async () => {
     closeAddModal()
   } catch (err: any) {
     console.error('Error guardando transacción:', err)
-    alert(err?.message || 'No se pudo guardar el movimiento')
+    notifications.error(err?.message || 'No se pudo guardar el movimiento')
   } finally {
     loading.value = false
   }
@@ -1645,7 +1621,7 @@ const openEditModal = async (tx: any) => {
     // successful refresh still cannot find it.
     if (await accountsStore.fetchAccounts() &&
         referencesDeletedAccount(tx, accountsStore.accounts, loadedAccountsWorkspaceId())) {
-      alert(DELETED_ACCOUNT_HISTORY_MESSAGE)
+      notifications.error(DELETED_ACCOUNT_HISTORY_MESSAGE)
       return
     }
   }
@@ -1741,7 +1717,12 @@ const saveEditedTransaction = async () => {
   })
 
   if (!validation.success) {
-    alert(validation.error.errors[0].message)
+    notifications.error(validation.error.errors[0].message)
+    return
+  }
+  const chosenBudgetId = editBudgetChoice()
+  if (chosenBudgetId !== undefined && !isOfferedEditBudget(chosenBudgetId)) {
+    notifications.error('El presupuesto elegido ya no está disponible. Elige otro.')
     return
   }
 
@@ -1759,12 +1740,13 @@ const saveEditedTransaction = async () => {
       notes: editTx.value.notes || null,
       installments,
       userId: editTx.value.userId || undefined,
-      linkedBudgetId: editLinkedBudget.value?.id ?? null
+      linkedBudgetId: editLinkedBudget.value?.id ?? null,
+      chosenBudgetId
     })
     closeEditModal()
   } catch (err: any) {
     console.error('Error actualizando transacción:', err)
-    alert(err?.message || 'No se pudo actualizar el movimiento')
+    notifications.error(err?.message || 'No se pudo actualizar el movimiento')
   } finally {
     loading.value = false
   }
@@ -1806,13 +1788,18 @@ const clearEditReceipt = () => {
 }
 
 const handleDelete = async (id: string) => {
-  if (confirm('¿Estás seguro de que deseas eliminar este movimiento? El saldo de la cuenta asociada se actualizará correspondientemente.')) {
-    try {
-      await transactionsStore.deleteTransaction(id)
-    } catch (err) {
-      console.error('Error al borrar movimiento:', err)
-      alert(err instanceof Error ? err.message : 'No se pudo eliminar el movimiento.')
-    }
+  const confirmed = await notifications.confirm({
+    title: 'Eliminar movimiento',
+    message: '¿Estás seguro de que deseas eliminar este movimiento? El saldo de la cuenta asociada se actualizará correspondientemente.',
+    confirmLabel: 'Eliminar',
+    tone: 'danger'
+  })
+  if (!confirmed) return
+  try {
+    await transactionsStore.deleteTransaction(id)
+  } catch (err) {
+    console.error('Error al borrar movimiento:', err)
+    notifications.error(err instanceof Error ? err.message : 'No se pudo eliminar el movimiento.')
   }
 }
 
@@ -1832,7 +1819,7 @@ const confirmSettlementReversal = async () => {
     settlementToReverse.value = null
   } catch (err: any) {
     console.error('Error al revertir la liquidación contable:', err)
-    alert(err?.message || 'No se pudo corregir la contabilidad de esta liquidación.')
+    notifications.error(err?.message || 'No se pudo corregir la contabilidad de esta liquidación.')
   } finally {
     reversingSettlement.value = false
   }

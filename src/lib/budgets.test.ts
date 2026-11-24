@@ -396,6 +396,24 @@ test('an edit decides the budget in the same write: linked account first, then t
   assert.deepEqual(budgetChangeForEdit({ fromType: 'transfer', toType: 'income', linkedBudgetId: null }), { action: 'keep' })
 })
 
+test('S7: an edit saves the budget the user chose in the same write, unless the account or the type decides it', () => {
+  // The user's choice for an expense or income that keeps its type and account link.
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'expense', toType: 'expense', linkedBudgetId: null, chosenBudgetId: 'viaje' }), { action: 'set', budgetId: 'viaje' })
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'income', toType: 'income', linkedBudgetId: null, chosenBudgetId: 'viaje' }), { action: 'set', budgetId: 'viaje' })
+  // Choosing the default monthly budget stores no reference.
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'expense', toType: 'expense', linkedBudgetId: null, chosenBudgetId: 'default-monthly' }), { action: 'clear' })
+  // A linked account forces its budget over the choice.
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'expense', toType: 'expense', linkedBudgetId: 'casa', chosenBudgetId: 'viaje' }), { action: 'set', budgetId: 'casa' })
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'expense', toType: 'expense', linkedBudgetId: 'casa', chosenBudgetId: 'default-monthly' }), { action: 'set', budgetId: 'casa' })
+  // A type change decides the budget; the choice applies only to the type it was made for.
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'expense', toType: 'transfer', linkedBudgetId: null, chosenBudgetId: 'viaje' }), { action: 'clear' })
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'expense', toType: 'income', linkedBudgetId: null, chosenBudgetId: 'viaje' }), { action: 'clear' })
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'transfer', toType: 'expense', linkedBudgetId: null, chosenBudgetId: 'viaje' }), { action: 'keep' })
+  // No choice (absent or null) keeps the stored budget, as before.
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'expense', toType: 'expense', linkedBudgetId: null, chosenBudgetId: null }), { action: 'keep' })
+  assert.deepEqual(budgetChangeForEdit({ fromType: 'expense', toType: 'expense', linkedBudgetId: null }), { action: 'keep' })
+})
+
 test('a link change lists the accounts that join and leave a budget, ignoring order', () => {
   assert.deepEqual(linkedAccountsChange(['a', 'b'], ['b', 'c']), { changed: true, added: ['c'], removed: ['a'] })
   assert.deepEqual(linkedAccountsChange(undefined, ['a']), { changed: true, added: ['a'], removed: [] })

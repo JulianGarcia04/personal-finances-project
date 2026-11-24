@@ -61,6 +61,8 @@ type TransactionUpdate = {
   userId?: string;
   // Active budget the edited account is linked to, if any (its movements belong to it).
   linkedBudgetId?: string | null;
+  // Budget the user chose in the edit form, saved in the same write; omitted when unchanged.
+  chosenBudgetId?: string | null;
 }
 
 // Categorías por defecto iniciales
@@ -205,6 +207,8 @@ async function commitPocketMovement(options: {
   next?: PocketMovementTransaction
   // Linked budget of the target account; budget transition is derived from live before.type.
   linkedBudgetId?: string | null
+  // Budget the user chose for the edited movement, if any.
+  chosenBudgetId?: string | null
 }): Promise<{ id: string; data: any; deltas: Record<string, number>; budgetChange?: EditBudgetChange }> {
   const transactionRef = options.transactionId
     ? doc(db, 'transactions', options.transactionId)
@@ -326,7 +330,8 @@ async function commitPocketMovement(options: {
     const liveBudgetChange = budgetChangeForEdit({
       fromType: before.type,
       toType: options.next.type,
-      linkedBudgetId: options.linkedBudgetId ?? null
+      linkedBudgetId: options.linkedBudgetId ?? null,
+      chosenBudgetId: options.chosenBudgetId ?? null
     })
     const { createdAt: _ignoredCreatedAt, ...mutableNext } = options.next
     transaction.update(transactionRef, { ...mutableNext, ...(budgetPatchFor(liveBudgetChange) ?? {}) })
@@ -1792,7 +1797,8 @@ export const useTransactionsStore = defineStore('transactions', {
           // The budget follows the edit in the same write as the pocket movement.
           const result = await commitPocketMovement({
             kind: 'updated', transactionId, workspaceId, userId: user.uid, next,
-            linkedBudgetId: updates.linkedBudgetId ?? null
+            linkedBudgetId: updates.linkedBudgetId ?? null,
+            chosenBudgetId: updates.chosenBudgetId ?? null
           })
           const updatedTx = withBudgetChange(
             { ...oldTx, ...next, date: transactionDate },
@@ -1831,7 +1837,8 @@ export const useTransactionsStore = defineStore('transactions', {
           const liveBudgetChange = budgetChangeForEdit({
             fromType: storedOld.type,
             toType: updates.type,
-            linkedBudgetId: updates.linkedBudgetId ?? null
+            linkedBudgetId: updates.linkedBudgetId ?? null,
+            chosenBudgetId: updates.chosenBudgetId ?? null
           })
           const budgetField = budgetPatchFor(liveBudgetChange) ?? {}
 
@@ -1990,7 +1997,7 @@ export const useTransactionsStore = defineStore('transactions', {
       const twinRef = doc(db, 'transactions', oldTx.mirrorOf)
       this.loading = true
       try {
-        const patch = await runTransaction(db, async (transaction) => {
+        const committed = await runTransaction(db, async (transaction) => {
           const [editedSnap, twinSnap] = await Promise.all([transaction.get(editedRef), transaction.get(twinRef)])
           if (!editedSnap.exists()) throw new Error('La transacción ya no existe.')
           if (!twinSnap.exists()) {
@@ -2043,7 +2050,17 @@ export const useTransactionsStore = defineStore('transactions', {
             } : {})
           }
           const mirrorPatch = { ...shared, amount: -spent, ...(editingBridgeLeg ? {} : ownFields) }
-          transaction.update(doc(db, 'transactions', bridgeLeg.id), bridgePatch)
+          // Only the expense leg carries a budget: the one chosen in its form travels in this write.
+          // A bridge is never linked to a budget (the rules refuse the link), so no link applies.
+          const budgetChange: EditBudgetChange = editingBridgeLeg
+            ? budgetChangeForEdit({
+                fromType: edited.type,
+                toType: updates.type,
+                linkedBudgetId: null,
+                chosenBudgetId: updates.chosenBudgetId ?? null
+              })
+            : { action: 'keep' }
+          transaction.update(doc(db, 'transactions', bridgeLeg.id), { ...bridgePatch, ...(budgetPatchFor(budgetChange) ?? {}) })
           transaction.update(doc(db, 'transactions', mirrorLeg.id), mirrorPatch)
           if (deltas.bridge !== 0) {
             const [bridgeRef, sourceRef, receivableRef] = accountRefs
@@ -2051,10 +2068,13 @@ export const useTransactionsStore = defineStore('transactions', {
             transaction.update(sourceRef, { balance: increment(deltas.source) })
             transaction.update(receivableRef, { balance: increment(deltas.receivable) })
           }
-          return editingBridgeLeg ? bridgePatch : mirrorPatch
+          return { patch: editingBridgeLeg ? bridgePatch : mirrorPatch, budgetChange }
         })
 
-        const updatedTx = { ...oldTx, ...patch, date: transactionDate } as Transaction
+        const updatedTx = withBudgetChange(
+          { ...oldTx, ...committed.patch, date: transactionDate } as Transaction,
+          committed.budgetChange
+        )
         if (authStore.activeWorkspaceId === workspaceId) {
           const currentIndex = this.transactions.findIndex(existing => existing.id === oldTx.id)
           if (currentIndex !== -1) this.transactions[currentIndex] = updatedTx

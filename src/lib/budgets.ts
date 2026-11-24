@@ -44,19 +44,26 @@ export type EditBudgetChange =
   | { action: 'set'; budgetId: string }
 
 /**
- * Budget an edited movement carries, decided in the same write as the financial edit (the rules
- * accept a budget change next to other fields only in these cases): transfers and loans carry
- * none, a movement of a linked account takes that account's budget, and switching between
- * expense and income leaves the old budget.
+ * Budget an edited movement carries, decided in the same write as the rest of the edit: transfers
+ * and loans carry none, a movement of a linked account takes that account's budget, and switching
+ * between expense and income leaves the old budget. Otherwise the budget the user chose in the
+ * edit form applies (the default monthly budget stores no reference); without a choice
+ * (`chosenBudgetId` absent or null) the stored budget stays.
  */
 export const budgetChangeForEdit = (edit: {
   fromType: string
   toType: string
   linkedBudgetId: string | null
+  chosenBudgetId?: string | null
 }): EditBudgetChange => {
   if (!canCarryBudget(edit.toType)) return { action: 'clear' }
   if (edit.linkedBudgetId) return { action: 'set', budgetId: edit.linkedBudgetId }
   if (canCarryBudget(edit.fromType) && edit.fromType !== edit.toType) return { action: 'clear' }
+  if (edit.chosenBudgetId != null && edit.fromType === edit.toType) {
+    return edit.chosenBudgetId === DEFAULT_MONTHLY_BUDGET_ID
+      ? { action: 'clear' }
+      : { action: 'set', budgetId: edit.chosenBudgetId }
+  }
   return { action: 'keep' }
 }
 

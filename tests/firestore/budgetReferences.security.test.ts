@@ -150,8 +150,12 @@ test('outsider and anonymous access retain existing transaction authorization', 
     await deniedUnchanged(() => list('transactions', wsA, actor))
     await deniedUnchanged(() => setDoc(transactionRef(id('outsider-create'), actor), rawTransaction({ budgetId: activeBudget.id })))
     await deniedUnchanged(() => updateDoc(transactionRef(ref.id, actor), { budgetId: null }))
+    await deniedUnchanged(() => updateDoc(transactionRef(ref.id, actor), { amount: -20, budgetId: activeBudget.id }))
     await deniedUnchanged(() => deleteDoc(transactionRef(ref.id, actor)))
   }
+  // A member of workspace A alone cannot edit a workspace B movement, budget or not.
+  const inB = await createTransaction({ workspaceId: wsB, accountId: `${runId}-account-b` })
+  await deniedUnchanged(() => updateDoc(transactionRef(inB.id, member), { amount: -20, budgetId: foreignBudget.id }))
 })
 
 test('a member of both workspaces cannot assign a foreign budget on create or update', async () => {
@@ -195,7 +199,7 @@ test('transfers cannot carry explicit additional or default-monthly references',
   }
   const income = await createTransaction({ type: 'income', amount: 17, budgetId: activeBudget.id })
   await deniedUnchanged(() => updateDoc(income, { type: 'loan_payment' }))
-  await deniedUnchanged(() => updateDoc(income, { budgetId: 'default-monthly', amount: 18 }))
+  await deniedUnchanged(() => updateDoc(income, { type: 'loan_payment', budgetId: 'default-monthly', amount: 18 }))
 })
 
 test('transaction workspace identity cannot change or be removed even for dual members', async () => {
@@ -203,10 +207,25 @@ test('transaction workspace identity cannot change or be removed even for dual m
   for (const workspaceId of [wsB, null, deleteField()]) {
     await deniedUnchanged(() => updateDoc(ref, { workspaceId }))
   }
+  await deniedUnchanged(() => updateDoc(ref, { workspaceId: wsB, accountId: `${runId}-account-b`, amount: -20, budgetId: foreignBudget.id }))
+  await deniedUnchanged(() => updateDoc(ref, { workspaceId: deleteField(), budgetId: activeBudget.id }))
 })
 
-test('budget reassignment cannot accompany any ledger, installment, receipt or mirror-field mutation', async () => {
-  const ref = await createTransaction()
+// S7 (D1): "Guardar" saves the chosen budget in the same write as the edit. Next to other fields a
+// budget change passes exactly the budget-only checks, so the field decides alone whether it may change.
+test('S7: a chosen budget may accompany any edit the field allows alone, and only a valid budget', async () => {
+  const archived = await createBudget()
+  await updateDoc(archived, { archived: true, updatedAt: serverTimestamp() })
+  const outcome = async operation => {
+    try {
+      await operation()
+      return 'allowed'
+    } catch (error) {
+      assert.equal(error.code, 'permission-denied')
+      return 'denied'
+    }
+  }
+  const outcomes = {}
   for (const [field, value] of [
     ['amount', -99], ['accountId', `${runId}-account-b`], ['currency', 'EUR'],
     ['date', new Date('2026-11-01T00:00:00Z')], ['categoryId', 'different-category'],
@@ -214,23 +233,58 @@ test('budget reassignment cannot accompany any ledger, installment, receipt or m
     ['installments', 3], ['toAccountId', `${runId}-account-b`], ['mirrorTransactionId', 'different-mirror'],
     ['createdAt', new Date('2020-01-01T00:00:00Z')], ['userId', memberId], ['updatedAt', serverTimestamp()]
   ]) {
-    await deniedUnchanged(() => updateDoc(ref, { budgetId: activeBudget.id, [field]: value }))
+    const alone = await outcome(async () => updateDoc(await createTransaction(), { [field]: value }))
+    const combined = await createTransaction()
+    const withBudget = await outcome(() => updateDoc(combined, { budgetId: activeBudget.id, [field]: value }))
+    assert.equal(withBudget, alone, `${field} with a valid budget`)
+    if (withBudget === 'allowed') assert.equal((await dataOf(combined)).budgetId, activeBudget.id)
+    const invalid = await createTransaction()
+    for (const budgetId of [archived.id, foreignBudget.id, id('missing'), 'path/segment']) {
+      await deniedUnchanged(() => updateDoc(invalid, { budgetId, [field]: value }))
+    }
+    outcomes[field] = alone
   }
+  // The edits "Guardar" sends are among the allowed ones.
+  for (const field of ['amount', 'date', 'categoryId', 'description', 'receiptUrl', 'notes', 'installments', 'userId']) {
+    assert.equal(outcomes[field], 'allowed', field)
+  }
+  const ref = await createTransaction({ budgetId: activeBudget.id })
+  await updateDoc(ref, { amount: -40, notes: 'Back to default', budgetId: deleteField() })
+  assert.deepEqual([(await dataOf(ref)).amount, 'budgetId' in (await dataOf(ref))], [-40, false])
 })
 
-test('absent/null/default representation changes are budget-only mutations, while same-value resend is an ordinary edit', async () => {
+test('S7: budget-only batch assignment is unchanged: valid budgets apply together, an invalid one rejects the batch', async () => {
+  const refs = [await createTransaction(), await createTransaction({ type: 'income', amount: 17 }), await createTransaction({ budgetId: 'default-monthly' })]
+  const assign = budgetId => {
+    const batch = writeBatch(dual)
+    for (const ref of refs) batch.update(ref, { budgetId })
+    return batch.commit()
+  }
+  await assign(activeBudget.id)
+  for (const ref of refs) assert.equal((await dataOf(ref)).budgetId, activeBudget.id)
+  await assign(null)
+  for (const ref of refs) assert.equal((await dataOf(ref)).budgetId, null)
+  const archived = await createBudget()
+  await updateDoc(archived, { archived: true, updatedAt: serverTimestamp() })
+  for (const budgetId of [archived.id, foreignBudget.id]) await deniedUnchanged(() => assign(budgetId))
+  const transfer = await createTransaction({ type: 'transfer', amount: 17, toAccountId: `${runId}-account-a` })
+  await deniedUnchanged(() => updateDoc(transfer, { budgetId: activeBudget.id }))
+})
+
+test('absent/null/default representation changes apply alone or with an edit, while same-value resend is an ordinary edit', async () => {
   for (const old of ['absent', null, 'default-monthly']) {
     for (const next of ['absent', null, 'default-monthly']) {
       if (old === next) continue
-      const ref = await createTransaction(old === 'absent' ? {} : { budgetId: old })
-      const patch = { budgetId: next === 'absent' ? deleteField() : next }
-      await deniedUnchanged(() => updateDoc(ref, { ...patch, notes: 'Mixed representation edit' }))
-      const before = await dataOf(ref)
-      const expected = { ...before }
-      if (next === 'absent') delete expected.budgetId
-      else expected.budgetId = next
-      await updateDoc(ref, patch)
-      assert.deepEqual(await dataOf(ref), expected)
+      for (const extra of [{}, { notes: 'Mixed representation edit' }]) {
+        const ref = await createTransaction(old === 'absent' ? {} : { budgetId: old })
+        const patch = { budgetId: next === 'absent' ? deleteField() : next }
+        const before = await dataOf(ref)
+        const expected = { ...before, ...extra }
+        if (next === 'absent') delete expected.budgetId
+        else expected.budgetId = next
+        await updateDoc(ref, { ...patch, ...extra })
+        assert.deepEqual(await dataOf(ref), expected)
+      }
     }
   }
   for (const budgetId of [null, 'default-monthly', activeBudget.id]) {
@@ -351,6 +405,19 @@ const privilegedDocument = async (path, fields) => {
   if (!response.ok) throw new Error(`Privileged fixture failed (${response.status}): ${await response.text()}`)
 }
 
+// Budgets are never deleted by the client; a deleted parent can only come from outside the app.
+const createDeletedBudget = async () => {
+  const budget = await createBudget()
+  if (configuredProject !== projectId || host !== '127.0.0.1' || Number(portText) !== 8185) {
+    throw new Error('Privileged fixtures are restricted to demo-vault-b2 at 127.0.0.1:8185')
+  }
+  const response = await fetch(`http://${host}:${portText}/v1/projects/${projectId}/databases/(default)/documents/budgets/${budget.id}`, {
+    method: 'DELETE', headers: { authorization: 'Bearer owner' }
+  })
+  if (!response.ok) throw new Error(`Privileged delete failed (${response.status}): ${await response.text()}`)
+  return budget.id
+}
+
 test('an account link requires an active same-workspace budget that lists the account', async () => {
   const account = await createAccount()
   const listing = await createBudget()
@@ -454,9 +521,10 @@ test('a type change drops the budget in the same write as the financial edit', a
   const switched = await createTransaction({ budgetId: activeBudget.id })
   await updateDoc(switched, { type: 'income', amount: 17, budgetId: deleteField() })
   assert.deepEqual([(await dataOf(switched)).type, 'budgetId' in (await dataOf(switched))], ['income', false])
-  // Without a type switch the budget still cannot change together with ledger fields.
+  // Without a type switch the user's choice may travel with ledger fields (S7).
   const kept = await createTransaction({ budgetId: activeBudget.id })
-  await deniedUnchanged(() => updateDoc(kept, { amount: -30, budgetId: deleteField() }))
+  await updateDoc(kept, { amount: -30, budgetId: deleteField() })
+  assert.deepEqual([(await dataOf(kept)).amount, 'budgetId' in (await dataOf(kept))], [-30, false])
   // Leaving the linked account's movement without its budget is still locked.
   const account = await createAccount()
   const budget = await createLinkedBudget([account.id])
@@ -506,4 +574,179 @@ test('S6: credit cards cannot be linked to a budget, linked accounts cannot beco
   await updateDoc(linkedBudget, { linkedAccountIds: deleteField(), updatedAt: serverTimestamp() })
   await deleteDoc(checking)
   assert.ok(!(await list('accounts', wsA)).some(([key]) => key === checking.id))
+})
+
+test('S7: an edit of a linked account keeps its budget; a different chosen budget is refused', async () => {
+  const account = await createAccount()
+  const budget = await createLinkedBudget([account.id])
+  const ref = await createTransaction({ accountId: account.id, budgetId: budget.id })
+  for (const budgetId of [activeBudget.id, 'default-monthly', null, deleteField()]) {
+    await deniedUnchanged(() => updateDoc(ref, { amount: -25, notes: 'Linked edit', budgetId }))
+  }
+  await updateDoc(ref, { amount: -25, notes: 'Linked edit', budgetId: budget.id })
+  assert.deepEqual([(await dataOf(ref)).amount, (await dataOf(ref)).budgetId], [-25, budget.id])
+})
+
+test('S7: a pocket movement edit changes its budget in the same write as its balance', async () => {
+  const parentId = id('budget-pocket-parent')
+  const pocketId = id('budget-pocket')
+  const movementId = id('budget-pocket-movement')
+  await privilegedDocument(`accounts/${parentId}`, {
+    workspaceId: wsA, userId: dualId, name: 'Parent', type: 'savings', balance: 100, limit: 0, currency: 'USD',
+    childAccountIds: [pocketId], createdAt: new Date('2026-10-01T00:00:00Z')
+  })
+  await privilegedDocument(`accounts/${pocketId}`, {
+    workspaceId: wsA, userId: dualId, name: 'Pocket', type: 'savings', balance: 50, limit: 0, currency: 'USD',
+    parentAccountId: parentId, childAccountIds: [], pocketActivity: true, openingAllocationId: null,
+    createdAt: new Date('2026-10-01T00:00:00Z')
+  })
+  await privilegedDocument(`transactions/${movementId}`, {
+    workspaceId: wsA, userId: dualId, accountId: pocketId, toAccountId: null, amount: -10, type: 'expense',
+    categoryId: `${runId}-category`, description: 'Pocket purchase', currency: 'USD',
+    date: new Date('2026-10-02T12:00:00Z'), createdAt: new Date('2026-10-02T12:00:00Z')
+  })
+  const edit = (budgetId, amount) => {
+    const batch = writeBatch(dual)
+    batch.update(transactionRef(movementId), { amount, budgetId })
+    batch.update(accountRef(pocketId), {
+      balance: 50 + (amount + 10), lastPocketMovementId: movementId, lastPocketMovementType: 'updated', pocketActivity: true
+    })
+    return batch.commit()
+  }
+  const archived = await createBudget()
+  await updateDoc(archived, { archived: true, updatedAt: serverTimestamp() })
+  for (const budgetId of [archived.id, foreignBudget.id, await createDeletedBudget()]) await deniedUnchanged(() => edit(budgetId, -15))
+  await edit(activeBudget.id, -15)
+  assert.deepEqual([(await dataOf(transactionRef(movementId))).amount, (await dataOf(transactionRef(movementId))).budgetId], [-15, activeBudget.id])
+  assert.equal((await dataOf(accountRef(pocketId))).balance, 45)
+
+  // A pocket transfer and the pocket's opening allocation never take a budget.
+  const pocketTransferId = id('budget-pocket-transfer')
+  await privilegedDocument(`transactions/${pocketTransferId}`, {
+    workspaceId: wsA, userId: dualId, accountId: pocketId, toAccountId: `${runId}-account-a`, amount: 5, type: 'transfer',
+    categoryId: '', description: 'Pocket transfer', currency: 'USD',
+    date: new Date('2026-10-02T12:00:00Z'), createdAt: new Date('2026-10-02T12:00:00Z')
+  })
+  const openingId = id('budget-pocket-opening')
+  await privilegedDocument(`transactions/${openingId}`, {
+    workspaceId: wsA, userId: dualId, accountId: parentId, toAccountId: pocketId, amount: 50, type: 'transfer',
+    categoryId: '', description: 'Opening allocation', currency: 'USD', pocketAllocation: true,
+    date: new Date('2026-10-01T12:00:00Z'), createdAt: new Date('2026-10-01T12:00:00Z')
+  })
+  for (const movement of [pocketTransferId, openingId]) {
+    for (const budgetId of [activeBudget.id, 'default-monthly']) {
+      await deniedUnchanged(() => updateDoc(transactionRef(movement), { description: 'Renamed', budgetId }))
+    }
+  }
+})
+
+// One shared expense: the expense leg on a bridge in workspace A, its transfer twin in workspace B.
+const createSharedExpense = async () => {
+  const bridgeId = id('budget-bridge')
+  const receivableId = id('budget-receivable')
+  const expenseLegId = id('budget-shared-expense')
+  const transferLegId = id('budget-shared-transfer')
+  const legDate = new Date('2026-10-03T12:00:00Z')
+  await privilegedDocument(`accounts/${bridgeId}`, {
+    workspaceId: wsA, userId: dualId, name: 'Bridge', type: 'checking', balance: -30, limit: 0, currency: 'USD',
+    mirror: { workspaceId: wsB, accountId: receivableId, sourceAccountId: `${runId}-account-b` },
+    createdAt: new Date('2026-10-01T00:00:00Z')
+  })
+  await privilegedDocument(`accounts/${receivableId}`, {
+    workspaceId: wsB, userId: dualId, name: 'Receivable', type: 'checking', balance: 30, limit: 0, currency: 'USD',
+    createdAt: new Date('2026-10-01T00:00:00Z')
+  })
+  await privilegedDocument(`transactions/${expenseLegId}`, {
+    workspaceId: wsA, userId: dualId, accountId: bridgeId, toAccountId: null, amount: -30, type: 'expense',
+    categoryId: `${runId}-category`, description: 'Shared dinner', currency: 'USD', mirrorOf: transferLegId,
+    date: legDate, createdAt: legDate
+  })
+  await privilegedDocument(`transactions/${transferLegId}`, {
+    workspaceId: wsB, userId: dualId, accountId: `${runId}-account-b`, toAccountId: receivableId, amount: 30,
+    type: 'transfer', categoryId: '', description: 'Shared dinner', currency: 'USD', mirrorOf: expenseLegId,
+    date: legDate, createdAt: legDate
+  })
+  return { expenseLeg: transactionRef(expenseLegId), transferLeg: transactionRef(transferLegId) }
+}
+const editBothLegs = (legs, expensePatch, transferPatch) => {
+  const batch = writeBatch(dual)
+  batch.update(legs.expenseLeg, expensePatch)
+  batch.update(legs.transferLeg, transferPatch)
+  return batch.commit()
+}
+
+test('S7: a shared expense edit changes the expense leg budget together with both legs', async () => {
+  const legs = await createSharedExpense()
+  await deniedUnchanged(() => editBothLegs(legs, { amount: -40, budgetId: foreignBudget.id }, { amount: 40 }))
+  await updateDoc(legs.expenseLeg, { notes: 'Own field', budgetId: activeBudget.id })
+  await editBothLegs(legs, { amount: -40, budgetId: null }, { amount: 40 })
+  const [expenseLeg, transferLeg] = [await dataOf(legs.expenseLeg), await dataOf(legs.transferLeg)]
+  assert.deepEqual([expenseLeg.amount, expenseLeg.budgetId, expenseLeg.notes, transferLeg.amount], [-40, null, 'Own field', 40])
+  // Changing the shared date on both legs may carry the budget too.
+  const nextDate = new Date('2026-10-04T12:00:00Z')
+  await editBothLegs(legs, { date: nextDate, budgetId: activeBudget.id }, { date: nextDate })
+  assert.equal((await dataOf(legs.expenseLeg)).budgetId, activeBudget.id)
+})
+
+test('S7: a budget never reaches the transfer leg or excuses a broken shared expense pair', async () => {
+  const legs = await createSharedExpense()
+  // The transfer leg never carries a budget, alone or in the pair edit.
+  await deniedUnchanged(() => updateDoc(legs.transferLeg, { budgetId: activeBudget.id }))
+  for (const budgetId of [foreignBudget.id, 'default-monthly']) {
+    await deniedUnchanged(() => editBothLegs(legs, { amount: -40 }, { amount: 40, budgetId }))
+  }
+  // The pair rules still hold when the expense leg also changes its budget.
+  const budgetId = activeBudget.id
+  await deniedUnchanged(() => updateDoc(legs.expenseLeg, { amount: -40, budgetId }))
+  await deniedUnchanged(() => editBothLegs(legs, { amount: -40, budgetId }, { amount: 41 }))
+  await deniedUnchanged(() => editBothLegs(legs, { amount: 40, budgetId }, { amount: -40 }))
+  await deniedUnchanged(() => updateDoc(legs.expenseLeg, { date: new Date('2026-10-04T12:00:00Z'), budgetId }))
+  await deniedUnchanged(() => updateDoc(legs.expenseLeg, { description: 'Other', budgetId }))
+})
+
+test('S7: a deleted budget is refused next to an edit, and a movement can leave it in the same write', async () => {
+  const deleted = await createDeletedBudget()
+  for (const [type, amount] of [['expense', -20], ['income', 20]]) {
+    const ref = await createTransaction(type === 'income' ? { type, amount: 17 } : {})
+    await deniedUnchanged(() => updateDoc(ref, { amount, budgetId: deleted }))
+  }
+  const stale = transactionRef(id('deleted-parent'))
+  await privilegedDocument(`transactions/${stale.id}`, {
+    workspaceId: wsA, userId: dualId, accountId: `${runId}-account-a`, amount: -17, currency: 'USD', type: 'expense',
+    categoryId: `${runId}-category`, description: 'Stale reference', budgetId: deleted,
+    date: new Date('2026-10-01T00:00:00Z'), createdAt: new Date('2026-10-01T00:00:00Z')
+  })
+  await updateDoc(stale, { amount: -22, budgetId: deleteField() })
+  assert.deepEqual([(await dataOf(stale)).amount, 'budgetId' in (await dataOf(stale))], [-22, false])
+})
+
+test('S7: loans never take a budget next to an edit, and an expense becoming a loan must drop its budget', async () => {
+  for (const [type, amount] of [['loan', -17], ['loan_payment', 17]]) {
+    const ref = await createTransaction({ type, amount, categoryId: '' })
+    await deniedUnchanged(() => updateDoc(ref, { amount: amount * 2, budgetId: activeBudget.id }))
+    await deniedUnchanged(() => updateDoc(ref, { notes: 'Loan note', budgetId: 'default-monthly' }))
+    const unassigned = await createTransaction()
+    await deniedUnchanged(() => updateDoc(unassigned, { type, amount, categoryId: '', budgetId: activeBudget.id }))
+    const kept = await createTransaction({ budgetId: activeBudget.id })
+    await deniedUnchanged(() => updateDoc(kept, { type, amount, categoryId: '' }))
+    await updateDoc(kept, { type, amount, categoryId: '', budgetId: deleteField() })
+    assert.deepEqual([(await dataOf(kept)).type, 'budgetId' in (await dataOf(kept))], [type, false])
+  }
+})
+
+test('S7: a type change may set a new active budget in the same write, never an archived or foreign one', async () => {
+  const archived = await createBudget()
+  await updateDoc(archived, { archived: true, updatedAt: serverTimestamp() })
+  const toIncome = { type: 'income', amount: 17 }
+  const toExpense = { type: 'expense', amount: -17, toAccountId: null, categoryId: `${runId}-category` }
+  const transfer = () => createTransaction({ type: 'transfer', amount: 17, toAccountId: `${runId}-account-a`, categoryId: '' })
+  const expense = await createTransaction()
+  await deniedUnchanged(() => updateDoc(expense, { ...toIncome, budgetId: archived.id }))
+  await deniedUnchanged(() => updateDoc(expense, { ...toIncome, budgetId: foreignBudget.id }))
+  const fromTransfer = await transfer()
+  await deniedUnchanged(() => updateDoc(fromTransfer, { ...toExpense, budgetId: foreignBudget.id }))
+  await deniedUnchanged(() => updateDoc(fromTransfer, { ...toExpense, budgetId: archived.id }))
+  await updateDoc(expense, { ...toIncome, budgetId: activeBudget.id })
+  await updateDoc(fromTransfer, { ...toExpense, budgetId: activeBudget.id })
+  assert.deepEqual([(await dataOf(expense)).budgetId, (await dataOf(fromTransfer)).budgetId], [activeBudget.id, activeBudget.id])
 })

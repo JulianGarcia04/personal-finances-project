@@ -3,10 +3,11 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import ts from 'typescript'
 import { computed, effectScope, reactive, ref, watch } from 'vue'
-import { DEFAULT_MONTHLY_BUDGET_ID, budgetChangeForEdit, canAssignBudget, canCarryBudget, resolveBudgetId } from '../lib/budgets.ts'
+import { DEFAULT_MONTHLY_BUDGET_ID, budgetChangeForEdit, canAssignBudget, canCarryBudget, linkedBudgetForAccount, resolveBudgetId } from '../lib/budgets.ts'
 import { toDateValue, toLocalDateKey } from '../lib/dates.ts'
 import { DELETED_ACCOUNT_HISTORY_MESSAGE, referencesDeletedAccount } from '../lib/deletedAccountHistory.ts'
 import { canDeleteMirrorTransaction } from '../lib/mirror.ts'
+import { TransactionSchema } from '../schemas.ts'
 
 const componentSource = readFileSync(new URL('./Transactions.vue', import.meta.url), 'utf8')
 const templateEnd = componentSource.indexOf('<script setup lang="ts">')
@@ -48,7 +49,8 @@ test('runs Transactions setup when there are already movements to display', () =
     useAuthStore: () => ({}),
     useGoalsStore: () => ({ operatingBudgets: [] }),
     useTransactionsStore: () => ({ filteredTransactions: () => [{ id: 'movement', type: 'expense' }] }),
-    useWorkspacesStore: () => ({})
+    useWorkspacesStore: () => ({}),
+    useNotificationsStore: () => ({})
   }
   // Keep the actual declaration order and Vue's watcher behavior rather than testing functions in isolation.
   const setupBody = sourceFile.statements.filter(statement => !ts.isImportDeclaration(statement))
@@ -86,10 +88,13 @@ test('reassigns a budget only from the edit modal, never inline on list rows or 
     .sort()
   assert.deepEqual(markers, ['edit'])
   assert.doesNotMatch(template, /handleBudgetAssignmentChange/)
-  assert.equal(/v-if="canCarryBudget\(editingOriginalType\) && editTx\.type === editingOriginalType"[\s\S]{0,500}data-testid="budget-assignment-edit"/.test(template), true, 'edit budget selector must require a persisted expense or income with an unchanged draft type')
+  assert.equal(/v-if="editBudgetSelectable"[\s\S]{0,500}data-testid="budget-assignment-edit"/.test(template), true, 'edit budget selector must stay behind editBudgetSelectable')
+  assert.match(script, /const editBudgetSelectable = computed\(\(\) =>\s+canCarryBudget\(editingOriginalType\.value\) && editTx\.value\.type === editingOriginalType\.value\)/, 'the selector requires a persisted expense or income with an unchanged draft type')
   assert.equal(/editingOriginalType\.value = tx\.type/.test(script), true, 'openEditModal must record the persisted transaction type')
   assert.match(template, /data-testid="budget-assignment-edit"[\s\S]{0,500}v-model="editBudgetId"/)
-  assert.match(template, /data-testid="budget-assignment-apply"[\s\S]{0,200}@click="applyEditBudgetAssignment"/)
+  // S7: one "Guardar" saves the budget with the edit; there is no separate budget-only action.
+  assert.doesNotMatch(componentSource, /budget-assignment-apply|applyEditBudgetAssignment|assignBudgetToExpense|Actualizar presupuesto|assignExpenseBudget/)
+  assert.match(template, /El presupuesto se guarda junto con los demás cambios al pulsar «Guardar»\./)
 
   const addModalStart = template.indexOf(':open="showAddModal"')
   const editModalStart = template.indexOf('<!-- Edit Transaction Modal -->')
@@ -116,46 +121,247 @@ test('offers the default and active budgets, retaining only an already assigned 
   ])
 })
 
-test('uses the B3 budget-only action for expenses and income, suppressing transfers, no-ops, and duplicate in-flight writes', async () => {
-  const calls: Array<[string, string]> = []
-  let financialWrites = 0
-  const pendingIds = new Set<string>(['pending-expense'])
-  const budgetSettingsReady = { value: true }
-  const assignBudget = evaluateComponentFunction<(
-    transaction: { id: string; type: string; budgetId?: string | null },
-    budgetId: string
-  ) => Promise<boolean>>('assignBudgetToExpense', {
-    transactionsStore: {
-      assignExpenseBudget: async (transactionId: string, budgetId: string) => { calls.push([transactionId, budgetId]) },
-      updateTransaction: async () => { financialWrites += 1 }
-    },
-    assigningBudgetIds: { value: pendingIds },
-    budgetSettingsReady,
-    resolveBudgetId,
-    canCarryBudget,
-    canAssignBudget,
-    linkableBudgets: { value: [{ id: 'casa', name: 'Casa', archived: false, linkedAccountIds: ['cash-casa'] }] },
-    alert: () => undefined
+type Notifications = { errors: string[]; confirms: Array<Record<string, unknown>>; answer: boolean }
+const notificationsFake = (answer = true) => {
+  const record: Notifications = { errors: [], confirms: [], answer }
+  return {
+    record,
+    notifications: {
+      success: () => undefined,
+      info: () => undefined,
+      error: (message: string) => { record.errors.push(message) },
+      confirm: async (options: Record<string, unknown>) => { record.confirms.push(options); return record.answer }
+    }
+  }
+}
+
+const editBudgets = [
+  { budget: { id: 'viaje', name: 'Viaje', archived: false } },
+  { budget: { id: 'viejo', name: 'Viejo', archived: true } },
+  { budget: { id: 'casa', name: 'Casa', archived: false, linkedAccountIds: ['cash-casa'] } }
+]
+
+// Runs the real saveEditedTransaction with its real budget helpers and a recording store.
+const saveEditHarness = (options: {
+  original?: { type: string; budgetId: string; accountId?: string }
+  draft?: Record<string, unknown>
+  chosen?: string
+  ready?: boolean
+  update?: () => Promise<void>
+} = {}) => {
+  const original = { type: 'expense', budgetId: DEFAULT_MONTHLY_BUDGET_ID, accountId: 'bank', ...options.original }
+  const updates: Array<[string, Record<string, unknown>]> = []
+  const { record, notifications } = notificationsFake()
+  let closed = 0
+  const editTx = { value: {
+    type: original.type, accountId: original.accountId, toAccountId: '', categoryId: 'food', amount: 100,
+    installments: 1, date: '2026-11-15', description: 'Mercado', notes: '', userId: '', ...options.draft
+  } }
+  const editBudgetId = { value: options.chosen ?? original.budgetId }
+  const editingOriginalBudgetId = { value: original.budgetId }
+  const editingOriginalType = { value: original.type }
+  const editingTransaction = { value: { id: 'tx-1', accountId: original.accountId, type: original.type } }
+  const budgetOptionsForExpense = evaluateComponentFunction('budgetOptionsForExpense', {
+    goalsStore: { operatingBudgets: editBudgets },
+    linkableBudgets: { value: editBudgets.map(({ budget }) => budget) },
+    DEFAULT_MONTHLY_BUDGET_ID, resolveBudgetId, canAssignBudget
   })
+  const editBudgetSelectable = { value: canCarryBudget(editingOriginalType.value) && editTx.value.type === editingOriginalType.value }
+  const editBudgetChoice = evaluateComponentFunction('editBudgetChoice', {
+    budgetSettingsReady: { value: options.ready ?? true }, editBudgetSelectable, editBudgetId, editingOriginalBudgetId
+  })
+  const isOfferedEditBudget = evaluateComponentFunction('isOfferedEditBudget', {
+    budgetOptionsForExpense, editingOriginalBudgetId, editingTransaction
+  })
+  const save = evaluateComponentFunction<() => Promise<void>>('saveEditedTransaction', {
+    editTx, isEditCreditExpense: { value: false }, TransactionSchema, notifications, loading: { value: false },
+    transactionsStore: {
+      updateTransaction: async (id: string, update: Record<string, unknown>) => {
+        updates.push([id, update])
+        await options.update?.()
+      }
+    },
+    editingTxId: { value: 'tx-1' }, editUploadedReceiptUrl: { value: '' },
+    editLinkedBudget: { value: linkedBudgetForAccount(editBudgets.map(({ budget }) => budget), String(editTx.value.accountId)) },
+    closeEditModal: () => { closed++ }, editBudgetChoice, isOfferedEditBudget
+  })
+  return { save, updates, record, closed: () => closed }
+}
 
-  assert.equal(await assignBudget({ id: 'expense-1', type: 'expense', budgetId: null }, 'event-1'), true)
-  assert.equal(await assignBudget({ id: 'income-1', type: 'income' }, 'event-1'), true)
-  assert.deepEqual(calls, [['expense-1', 'event-1'], ['income-1', 'event-1']])
-  assert.equal(await assignBudget({ id: 'transfer-1', type: 'transfer' }, 'event-1'), false)
-  assert.equal(await assignBudget({ id: 'default-1', type: 'expense' }, DEFAULT_MONTHLY_BUDGET_ID), false)
-  assert.equal(await assignBudget({ id: 'pending-expense', type: 'expense' }, 'event-1'), false)
-  assert.deepEqual(calls, [['expense-1', 'event-1'], ['income-1', 'event-1']])
-  assert.equal(financialWrites, 0)
+test('S7: "Guardar" sends the chosen budget with the edit in one update', async () => {
+  const combined = saveEditHarness({ chosen: 'viaje', draft: { amount: 150 } })
+  await combined.save()
+  assert.equal(combined.updates.length, 1)
+  assert.equal(combined.updates[0][1].amount, -150)
+  assert.equal(combined.updates[0][1].chosenBudgetId, 'viaje')
+  assert.equal(combined.closed(), 1)
 
-  // A linked account's movement can only move to that account's budget.
-  assert.equal(await assignBudget({ id: 'linked-1', type: 'expense', accountId: 'cash-casa', budgetId: 'casa' } as never, DEFAULT_MONTHLY_BUDGET_ID), false)
-  assert.equal(await assignBudget({ id: 'linked-2', type: 'income', accountId: 'cash-casa' } as never, 'event-1'), false)
-  assert.equal(await assignBudget({ id: 'linked-3', type: 'expense', accountId: 'cash-casa' } as never, 'casa'), true)
-  assert.deepEqual(calls.at(-1), ['linked-3', 'casa'])
+  // A budget-only change also travels through "Guardar".
+  const budgetOnly = saveEditHarness({ original: { type: 'income', budgetId: 'viaje' }, chosen: DEFAULT_MONTHLY_BUDGET_ID })
+  await budgetOnly.save()
+  assert.equal(budgetOnly.updates[0][1].chosenBudgetId, DEFAULT_MONTHLY_BUDGET_ID)
+})
 
-  budgetSettingsReady.value = false
-  assert.equal(await assignBudget({ id: 'unready-expense', type: 'expense' }, 'event-1'), false)
-  assert.equal(calls.length, 3)
+test('S7: "Guardar" sends no budget choice when the selector is unchanged, hidden or not ready', async () => {
+  for (const options of [
+    { draft: { amount: 150 } },
+    { chosen: 'viaje', draft: { type: 'income' } },
+    { original: { type: 'transfer', budgetId: DEFAULT_MONTHLY_BUDGET_ID }, chosen: 'viaje', draft: { toAccountId: 'cash', categoryId: '' } },
+    { chosen: 'viaje', ready: false }
+  ]) {
+    const harness = saveEditHarness(options)
+    await harness.save()
+    assert.equal(harness.updates.length, 1, JSON.stringify(options))
+    assert.equal(harness.updates[0][1].chosenBudgetId, undefined, JSON.stringify(options))
+  }
+})
+
+test('S7: a linked account sends its budget whatever the selector shows', async () => {
+  const harness = saveEditHarness({ original: { type: 'expense', budgetId: DEFAULT_MONTHLY_BUDGET_ID, accountId: 'cash-casa' }, chosen: 'casa' })
+  await harness.save()
+  assert.equal(harness.updates[0][1].linkedBudgetId, 'casa')
+})
+
+test('S7: an archived or unknown budget is refused before any write', async () => {
+  for (const chosen of ['viejo', 'otro-workspace']) {
+    const harness = saveEditHarness({ chosen, draft: { amount: 150 } })
+    await harness.save()
+    assert.deepEqual(harness.updates, [], chosen)
+    assert.deepEqual(harness.record.errors, ['El presupuesto elegido ya no está disponible. Elige otro.'], chosen)
+    assert.equal(harness.closed(), 0)
+  }
+})
+
+test('S7: an archived current budget stays visible but not choosable, and a linked account only offers its budget', () => {
+  const budgetOptionsForExpense = evaluateComponentFunction('budgetOptionsForExpense', {
+    goalsStore: { operatingBudgets: editBudgets },
+    linkableBudgets: { value: editBudgets.map(({ budget }) => budget) },
+    DEFAULT_MONTHLY_BUDGET_ID, resolveBudgetId, canAssignBudget
+  })
+  const offered = (originalBudgetId: string, accountId: string) => evaluateComponentFunction<(budgetId: string) => boolean>('isOfferedEditBudget', {
+    budgetOptionsForExpense, editingOriginalBudgetId: { value: originalBudgetId }, editingTransaction: { value: { accountId } }
+  })
+  assert.deepEqual(['viaje', 'viejo', 'otro-workspace', DEFAULT_MONTHLY_BUDGET_ID, 'casa'].map(offered('viejo', 'bank')), [true, false, false, true, true])
+  assert.deepEqual(['viaje', DEFAULT_MONTHLY_BUDGET_ID, 'casa'].map(offered('casa', 'cash-casa')), [false, false, true])
+})
+
+test('S7: edit validation and save failures show an error toast and keep the form open', async () => {
+  const invalid = saveEditHarness({ draft: { description: '' } })
+  await invalid.save()
+  assert.deepEqual(invalid.updates, [])
+  assert.deepEqual(invalid.record.errors, ['La descripción es requerida'])
+
+  const failing = saveEditHarness({ update: async () => { throw new Error('Sin conexión.') } })
+  await failing.save()
+  assert.deepEqual(failing.record.errors, ['Sin conexión.'])
+  assert.equal(failing.closed(), 0)
+})
+
+test('S7: deleting a movement asks with a danger confirmation and reports a failure as a toast', async () => {
+  const deleted: string[] = []
+  const run = (answer: boolean, fail = false) => {
+    const { record, notifications } = notificationsFake(answer)
+    const handleDelete = evaluateComponentFunction<(id: string) => Promise<void>>('handleDelete', {
+      notifications,
+      transactionsStore: {
+        deleteTransaction: async (id: string) => {
+          if (fail) throw new Error('No se pudo borrar.')
+          deleted.push(id)
+        }
+      }
+    })
+    return { record, handleDelete }
+  }
+
+  const declined = run(false)
+  await declined.handleDelete('tx-1')
+  assert.deepEqual(deleted, [])
+  assert.deepEqual(declined.record.errors, [], 'cancelling shows nothing')
+  assert.equal(declined.record.confirms[0].tone, 'danger')
+  assert.equal(declined.record.confirms[0].confirmLabel, 'Eliminar')
+
+  const failed = run(true, true)
+  await failed.handleDelete('tx-1')
+  assert.deepEqual(failed.record.errors, ['No se pudo borrar.'])
+
+  const accepted = run(true)
+  await accepted.handleDelete('tx-1')
+  assert.deepEqual(deleted, ['tx-1'])
+  assert.deepEqual(accepted.record.errors, [])
+})
+
+test('S7: a batch delete asks once and reports how many movements failed', async () => {
+  const run = (answer: boolean, failing: string[], selection = ['a', 'b', 'c'], failure: (id: string) => unknown = id => new Error(`Falló ${id}.`)) => {
+    const { record, notifications } = notificationsFake(answer)
+    const deleted: string[] = []
+    const selectedTxIds = { value: selection }
+    const handleBatchDelete = evaluateComponentFunction<() => Promise<void>>('handleBatchDelete', {
+      notifications,
+      selectedTxIds,
+      canDeleteMirrorTransaction,
+      transactionsStore: {
+        transactions: [],
+        deleteTransaction: async (id: string) => {
+          if (failing.includes(id)) throw failure(id)
+          deleted.push(id)
+        }
+      }
+    })
+    return { record, deleted, selectedTxIds, handleBatchDelete }
+  }
+
+  const declined = run(false, [])
+  await declined.handleBatchDelete()
+  assert.deepEqual(declined.deleted, [])
+  assert.deepEqual(declined.record.errors, [], 'cancelling shows nothing')
+  assert.equal(declined.record.confirms.length, 1)
+  assert.equal(declined.record.confirms[0].tone, 'danger')
+  assert.match(String(declined.record.confirms[0].message), /3 transacciones/)
+
+  const partial = run(true, ['a', 'c'])
+  await partial.handleBatchDelete()
+  assert.deepEqual(partial.deleted, ['b'])
+  assert.deepEqual(partial.selectedTxIds.value, ['a', 'c'], 'failed movements stay selected')
+  assert.deepEqual(partial.record.errors, ['No se pudieron eliminar 2 de 3 transacciones. Falló a.'])
+
+  const single = run(true, ['b'])
+  await single.handleBatchDelete()
+  assert.deepEqual(single.record.errors, ['No se pudo eliminar 1 de 3 transacciones. Falló b.'])
+
+  // Count and total agree in number: one selected movement is singular throughout.
+  const onlyOne = run(true, ['a'], ['a'])
+  await onlyOne.handleBatchDelete()
+  assert.match(String(onlyOne.record.confirms[0].message), /la transacción seleccionada/)
+  assert.deepEqual(onlyOne.record.errors, ['No se pudo eliminar 1 de 1 transacción. Falló a.'])
+  assert.deepEqual(onlyOne.selectedTxIds.value, ['a'])
+  const allOfFive = run(true, ['a', 'b'], ['a', 'b', 'c', 'd', 'e'])
+  await allOfFive.handleBatchDelete()
+  assert.deepEqual(allOfFive.record.errors, ['No se pudieron eliminar 2 de 5 transacciones. Falló a.'])
+
+  // A rejection that is not an Error still explains itself.
+  const nonError = run(true, ['b'], ['a', 'b'], () => 'x')
+  await nonError.handleBatchDelete()
+  assert.deepEqual(nonError.record.errors, ['No se pudo eliminar 1 de 2 transacciones. No se pudo eliminar una transacción.'])
+})
+
+test('S7: reversing a settlement reports a failure as a toast', async () => {
+  const { record, notifications } = notificationsFake()
+  const settlementToReverse = { value: { id: 'settlement-1' } }
+  const confirmSettlementReversal = evaluateComponentFunction<() => Promise<void>>('confirmSettlementReversal', {
+    notifications, settlementToReverse, reversingSettlement: { value: false },
+    transactionsStore: { reverseSettlement: async () => { throw new Error('No se pudo revertir.') } }
+  })
+  await confirmSettlementReversal()
+  assert.deepEqual(record.errors, ['No se pudo revertir.'])
+  assert.deepEqual(settlementToReverse.value, { id: 'settlement-1' })
+})
+
+test('S7: Transactions uses the shared toasts and confirmation, never native dialogs', () => {
+  assert.doesNotMatch(script, /(?<![\w.])(alert|confirm)\(/)
+  assert.match(script, /const notifications = useNotificationsStore\(\)/)
+  // The new-movement form reports its validation and save failures the same way.
+  assert.match(script, /if \(!validation\.success\) \{\s+notifications\.error\(validation\.error\.errors\[0\]\.message\)/)
+  assert.match(script, /notifications\.error\(err\?\.message \|\| 'No se pudo guardar el movimiento'\)/)
 })
 
 test('a linked account\'s movements only offer that account\'s budget', () => {
@@ -248,7 +454,7 @@ test('pre-fills the edit form with the local calendar day of an evening movement
     DELETED_ACCOUNT_HISTORY_MESSAGE,
     accountsStore: { accounts: [{ id: 'a1' }], fetchAccounts: async () => true },
     loadedAccountsWorkspaceId: () => 'ws-1',
-    alert: () => assert.fail('an existing account must open the edit form')
+    notifications: { error: () => assert.fail('an existing account must open the edit form') }
   })
 
   openEditModal({ id: 'tx-1', type: 'expense', accountId: 'a1', amount: -10, description: 'Dinner', date: new Date(2026, 9, 15, 21, 0) })
@@ -279,7 +485,7 @@ const deletedAccountEditHarness = (refresh: () => Promise<boolean>) => {
     DELETED_ACCOUNT_HISTORY_MESSAGE,
     accountsStore,
     loadedAccountsWorkspaceId: () => 'ws-1',
-    alert: (message: string) => alerts.push(message)
+    notifications: { error: (message: string) => alerts.push(message) }
   })
   return { openEditModal, accountsStore, alerts, editingTxId, editTx }
 }
