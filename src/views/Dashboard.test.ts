@@ -16,15 +16,22 @@ import {
 import {
   alignedMonthPeriods,
   budgetCardFigures,
+  committedCardPayments,
   expenseAmountInPeriod,
   hasBudgetActivity,
   isDateInPeriod,
   percentChange,
+  previousFullMonths,
+  projectionChecks,
   projectMonthEndExpenses,
-  splitMonthEndExpenses
+  runwayDays,
+  spendableUntilMonthEnd,
+  splitMonthEndExpenses,
+  type ProjectionCheck
 } from '../lib/dashboardMetrics.ts'
 import { createCardBillingLookup, expenseAmountForMonth, type BillingAccount, type ImputationBasis } from '../lib/installments.ts'
 import { buildCardStatementLedger } from '../lib/cardStatements.ts'
+import { BUDGET_BASIS_LABELS } from '../lib/budgetBasis.ts'
 import { daysUntil, getNextOccurrence } from '../lib/creditCycle.ts'
 
 const componentSource = readFileSync(new URL('./Dashboard.vue', import.meta.url), 'utf8')
@@ -249,7 +256,7 @@ test('Dashboard budget estimate counts this month\'s card purchases by consumpti
   assert.equal(estimateFor('payment').value.amount, 60)
 })
 
-test('Dashboard projects card statements once, preserving the all-budget and category projections separately from the base cap', () => {
+test('Dashboard projects card statements once, keeping the cash-flow projection apart from the base and category cap projections', () => {
   const now = new Date()
   const transactions = [
     currentMonthExpense({ amount: -50, accountId: 'visa', date: previousMonthFirstDay(), categoryId: 'food', currency: 'EUR' }),
@@ -258,22 +265,25 @@ test('Dashboard projects card statements once, preserving the all-budget and cat
     currentMonthExpense({ amount: -100, accountId: 'visa', date: previousMonthFirstDay(), budgetId: 'archived-event' }),
     currentMonthExpense({ amount: -20, accountId: 'cash', budgetId: 'extra-monthly' })
   ]
-  const projection = evaluateComputed<{ total: number; budgeted: number; base: number; baseSpent: number }>('monthEndProjection', {
+  const dependencies = {
     computed: computedDependency,
     transactionsStore: { transactions },
     goalsStore: { categoryBudgets: { food: 100 } },
     convert: (amount: number, currency: string) => currency === 'EUR' ? amount * 2 : amount,
     cardBillingFor: billingDependency([visa]),
+    budgetBillingFor: billingDependency([visa], 'payment'),
     splitMonthEndExpenses,
     projectMonthEndExpenses,
     resolveBudgetId,
     DEFAULT_MONTHLY_BUDGET_ID
-  })
+  }
+  const projection = evaluateComputed<number>('monthEndProjection', dependencies)
+  const capProjection = evaluateComputed<{ budgeted: number; base: number; baseSpent: number }>('budgetMonthEndProjection', dependencies)
   const elapsed = now.getDate()
   const days = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
 
-  assert.deepEqual(projection.value, {
-    total: (60 / elapsed) * days + 200,
+  assert.equal(projection.value, (60 / elapsed) * days + 200)
+  assert.deepEqual(capProjection.value, {
     budgeted: (10 / elapsed) * days + 100,
     base: (40 / elapsed) * days + 100,
     baseSpent: 140
@@ -420,15 +430,200 @@ test('S9: the per-budget panel lists active budgets with activity and their fund
   assert.match(componentSource, /data-testid="dashboard-budget-breakdown"[\s\S]*?to="\/goals"/)
 })
 
-test('budget basis: Dashboard budget widgets follow the basis while cash flow keeps the payment month', () => {
+test('budget basis: Dashboard budget comparisons follow the basis while cash flow keeps the payment month', () => {
   assert.ok(script)
   assert.match(script, /const budgetBasis = computed\(\(\) => workspacesStore\.activeBudgetCardBasis\)/, 'budget widgets read the active workspace basis')
   assert.doesNotMatch(script, /import \{[^}]*\bbudgetBasis\b[^}]*\} from '@\/lib\/budgetBasis'/, 'no device-wide basis')
   assert.match(script, /const cardBillingFor = computed\(\(\) => createCardBillingLookup\(accountsStore\.accounts, 'payment', \{\s*transactions: transactionsStore\.transactions\s*\}\)\)/)
   assert.match(script, /const budgetBillingFor = computed\(\(\) => createCardBillingLookup\(accountsStore\.accounts, budgetBasis\.value, \{\s*transactions: transactionsStore\.transactions\s*\}\)\)/)
+  // Budget side: all-budgets estimate, per-budget panel and category caps, plus the base and
+  // category cap projections.
   assert.equal(script.match(/cardBilling: budgetBillingFor\.value/g)?.length, 3)
+  assert.equal(script.match(/billingFor: budgetBillingFor\.value/g)?.length, 1)
   assert.equal(script.match(/cardBilling: cardBillingFor\.value/g), null)
+  // Cash-flow side: the month-end projection headline, month-over-month expenses, runway,
+  // member expenses, the category donut and the six-month bar chart.
+  assert.equal(script.match(/billingFor: cardBillingFor\.value/g)?.length, 1)
+  assert.equal(script.match(/cardBillingFor\.value\(/g)?.length, 5)
   assert.equal(componentSource.match(/data-testid="dashboard-budget-basis-caption"/g)?.length, 3)
+  assert.equal(componentSource.match(/data-testid="dashboard-cap-basis"/g)?.length, 2)
+})
+
+// --- S6: budget comparisons follow the workspace basis; cash flow keeps the payment month ---
+
+// Visa (closing 31, due 10) has a 1,000 purchase this month, on the statement paid next month,
+// and 300 of it was already transferred to the card this month. Mastercard (closing 1, due 31)
+// has a 200 purchase from last month that is due at this month's end. The base budget also has
+// 100 in cash; another monthly budget has 400 in cash plus the Mastercard purchase.
+const basisFixture = () => {
+  const now = new Date()
+  const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1, 12)
+  const transactions = [
+    { ...currentMonthExpense({ amount: -1000, accountId: 'visa', date: thisMonth }), userId: 'bo' },
+    currentMonthExpense({ amount: -100, accountId: 'cash', date: thisMonth, budgetId: DEFAULT_MONTHLY_BUDGET_ID }),
+    currentMonthExpense({ amount: -400, accountId: 'cash', date: thisMonth, budgetId: 'extra-monthly', categoryId: 'travel' }),
+    currentMonthExpense({
+      amount: -200,
+      accountId: 'mastercard',
+      date: new Date(now.getFullYear(), now.getMonth() - 1, 15, 12),
+      budgetId: 'extra-monthly',
+      categoryId: 'travel'
+    }),
+    { type: 'transfer', amount: 300, currency: 'USD', date: thisMonth, accountId: 'savings', toAccountId: 'visa' }
+  ] as unknown as BudgetExpenseTransaction[]
+  const accounts = [
+    { ...visa, name: 'Visa', currency: 'USD', balance: -700 },
+    { id: 'mastercard', type: 'credit', name: 'Mastercard', currency: 'USD', statementClosingDay: 1, paymentDueDay: 31, balance: -200 },
+    { id: 'cash', type: 'cash', name: 'Efectivo', currency: 'USD', balance: 5000 }
+  ] as BillingAccount[]
+  return { transactions, accounts }
+}
+
+const DASHBOARD_COMPUTED = [
+  'monthEndProjection', 'budgetMonthEndProjection', 'projectionStatus', 'projectionExceeds',
+  'baseExpenseLimitPercent', 'baseExpenseLimitExceeded', 'allExpensesData', 'liquidityDays',
+  'expensesByCategory', 'memberExpenses', 'upcomingCardPayments', 'committedCards', 'spendable',
+  'capBasisNote'
+]
+
+// Evaluates the real Dashboard computed values for the fixture, with the workspace basis on the
+// budget side; each one reads the others lazily, as Vue does.
+const dashboardWithBasis = (basis: ImputationBasis) => {
+  const { transactions, accounts } = basisFixture()
+  const scope: Record<string, unknown> = {
+    computed: computedDependency,
+    transactionsStore: { transactions },
+    accountsStore: { accounts },
+    goalsStore: { categoryBudgets: { food: 2000 } },
+    workspacesStore: { activeWorkspaceProfiles: [{ uid: 'ana', displayName: 'Ana' }, { uid: 'bo', displayName: 'Bo' }] },
+    authStore: { user: { uid: 'ana' } },
+    convert: (amount: number) => amount,
+    cardBillingFor: { value: createCardBillingLookup(accounts, 'payment', { transactions: transactions as never }) },
+    budgetBillingFor: { value: createCardBillingLookup(accounts, basis, { transactions: transactions as never }) },
+    budgetBasis: { value: basis },
+    BUDGET_BASIS_LABELS,
+    currentExpenseLimit: { value: 1000 },
+    budgetSummary: { value: { totalLimitForReporting: 2000 } },
+    liquidBalance: { value: 5000 },
+    availableBalance: { value: 5000 },
+    budgetMonthFilter: () => null,
+    getCategory: (id: string) => ({ name: id }),
+    alignedMonthPeriods,
+    expenseAmountForMonth,
+    expenseAmountInPeriod,
+    isDateInPeriod,
+    percentChange,
+    previousFullMonths,
+    runwayDays,
+    committedCardPayments,
+    spendableUntilMonthEnd,
+    splitMonthEndExpenses,
+    projectMonthEndExpenses,
+    projectionChecks,
+    resolveBudgetId,
+    DEFAULT_MONTHLY_BUDGET_ID,
+    getNextOccurrence,
+    daysUntil,
+    buildCardStatementLedger
+  }
+  for (const name of DASHBOARD_COMPUTED) {
+    scope[name] = { get value() { return evaluateComputed(name, scope).value } }
+  }
+  scope.getMoMData = (type: 'income' | 'expense', view: 'all' | 'budget') =>
+    (evaluateComputed('getMoMData', scope) as unknown as (type: string, view: string) => unknown)(type, view)
+  const read = <Value>(name: string) => (scope[name] as { value: Value }).value
+  return { read, transactions, accounts }
+}
+
+// What the budget cards report for the base monthly budget with the same basis.
+const baseBudgetSpend = (basis: ImputationBasis) => {
+  const { transactions, accounts } = basisFixture()
+  const now = new Date()
+  return reportBudgetScope({
+    scope: { id: DEFAULT_MONTHLY_BUDGET_ID, kind: 'monthly', capCurrency: 'USD' },
+    transactions,
+    period: { year: now.getFullYear(), month: now.getMonth() },
+    reportingCurrency: 'USD',
+    exchangeRates: {},
+    cardBilling: createCardBillingLookup(accounts, basis, { transactions: transactions as never })
+  }).monthlyAllocation.amount
+}
+
+const projectedFromPace = (pace: number, committed = 0) => {
+  const now = new Date()
+  return (pace / now.getDate()) * new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate() + committed
+}
+
+type CapChecks = { budget: ProjectionCheck | null; limit: ProjectionCheck | null }
+
+test('S6: with "Consumo del mes" the base cap counts this month\'s card purchase although its statement is paid next month', () => {
+  const { read } = dashboardWithBasis('consumption')
+  const spent = baseBudgetSpend('consumption')
+
+  // The whole 1,000 card purchase plus 100 in cash; the other budget's 600 never counts.
+  assert.equal(spent, 1100)
+  assert.equal(Math.round(read<number>('baseExpenseLimitPercent')), 110)
+  assert.equal(read<number>('baseExpenseLimitPercent'), (spent! / 1000) * 100, 'the cap shows what the budget cards count')
+  assert.equal(read<boolean>('baseExpenseLimitExceeded'), true)
+  const checks = read<CapChecks>('projectionStatus')
+  assert.deepEqual(checks.limit, { projected: projectedFromPace(1100), cap: 1000, exceeds: true })
+  assert.deepEqual(checks.budget, { projected: projectedFromPace(1100), cap: 2000, exceeds: projectedFromPace(1100) > 2000 })
+  assert.equal(read<boolean>('projectionExceeds'), true)
+  assert.equal(read<string>('capBasisNote'), 'Tarjetas según «Consumo del mes», como en tus presupuestos.')
+})
+
+test('S6: with "Pagos del mes" the base cap counts the card purchase by its ledger, as the budget cards do', () => {
+  const { read } = dashboardWithBasis('payment')
+  const spent = baseBudgetSpend('payment')
+
+  // Only the 300 already transferred to the card counts this month, plus 100 in cash.
+  assert.equal(spent, 400)
+  assert.equal(Math.round(read<number>('baseExpenseLimitPercent')), 40)
+  assert.equal(read<number>('baseExpenseLimitPercent'), (spent! / 1000) * 100, 'the cap shows what the budget cards count')
+  assert.equal(read<boolean>('baseExpenseLimitExceeded'), false)
+  const checks = read<CapChecks>('projectionStatus')
+  assert.deepEqual(checks.limit, { projected: projectedFromPace(400), cap: 1000, exceeds: projectedFromPace(400) > 1000 })
+  assert.deepEqual(checks.budget, { projected: projectedFromPace(400), cap: 2000, exceeds: projectedFromPace(400) > 2000 })
+  assert.equal(read<string>('capBasisNote'), 'Tarjetas según «Pagos del mes», como en tus presupuestos.')
+})
+
+test('S6: cash-flow figures and upcoming card payments are identical under both bases and keep the payment month', () => {
+  const cashFlow = (basis: ImputationBasis) => {
+    const { read } = dashboardWithBasis(basis)
+    return {
+      projection: read<number>('monthEndProjection'),
+      expenses: read<{ current: number; toDate: number; previous: number; percent: number }>('allExpensesData'),
+      runway: read<number | null>('liquidityDays'),
+      byCategory: read<Record<string, number>>('expensesByCategory'),
+      members: read<Array<{ name: string; amount: number }>>('memberExpenses'),
+      upcoming: read<Array<{ id: string; amount: number | null; debt: number }>>('upcomingCardPayments'),
+      committedCards: read<number>('committedCards'),
+      spendable: read<{ amount: number }>('spendable')
+    }
+  }
+  const payment = cashFlow('payment')
+
+  assert.deepEqual(cashFlow('consumption'), payment)
+  // 300 already paid of the Visa purchase, 100 + 400 in cash and the Mastercard statement due now.
+  assert.equal(payment.expenses.current, 1000)
+  assert.equal(payment.projection, projectedFromPace(800, 200))
+  assert.deepEqual(payment.byCategory, { food: 400, travel: 600 })
+  assert.deepEqual(payment.members, [{ name: 'Ana', amount: 700 }, { name: 'Bo', amount: 300 }])
+  const mastercard = payment.upcoming.find(card => card.id === 'mastercard')
+  assert.equal(mastercard?.amount, 200)
+  assert.equal(mastercard?.debt, 200)
+  assert.equal(payment.committedCards, 200, 'Pagos de tarjeta por vencer este mes')
+  assert.equal(payment.spendable.amount, 4800)
+})
+
+test('S6: the Dashboard tells what counts against a cap apart from what was paid or remains to pay', () => {
+  const template = componentSource.split('<script setup lang="ts">')[0]
+  assert.match(script, /const capBasisNote = computed\(\(\) => `Tarjetas según «\$\{BUDGET_BASIS_LABELS\[budgetBasis\.value\]\}», como en tus presupuestos\.`\)/)
+  // The note sits with the cap projections and under the base cap bar, with the full hint on hover.
+  assert.match(template, /projectionStatus\.limit\.cap[\s\S]*?:title="budgetBasisCaption" data-testid="dashboard-cap-basis">\{\{ capBasisNote \}\}/)
+  assert.match(template, /baseExpenseLimitPercent, 100\)[\s\S]*?:title="budgetBasisCaption" data-testid="dashboard-cap-basis">\{\{ capBasisNote \}\}/)
+  assert.match(template, /Gastos estimados al cierre a tu ritmo actual\. Tarjetas: lo que pagas este mes\./)
+  assert.match(template, /Pagos de tarjeta por vencer este mes:/)
 })
 
 // --- Card payments already made (cash flow and upcoming payments) ---

@@ -97,7 +97,7 @@
           </div>
           <div class="mt-3 pt-3 sm:mt-4 sm:pt-4 border-t border-white/5 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-text-muted">
             <span>Cuentas corrientes y efectivo: <span class="font-semibold text-text-primary tabular-nums whitespace-nowrap">{{ formatKpi(availableBalance) }}</span></span>
-            <span>Pagos de tarjeta este mes: <span class="font-semibold text-text-primary tabular-nums whitespace-nowrap">−{{ formatKpi(committedCards) }}</span></span>
+            <span>Pagos de tarjeta por vencer este mes: <span class="font-semibold text-text-primary tabular-nums whitespace-nowrap">−{{ formatKpi(committedCards) }}</span></span>
           </div>
         </div>
 
@@ -107,11 +107,11 @@
           <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Proyección de cierre</span>
           <h4
             :class="['min-w-0 font-display font-bold text-base sm:text-2xl tabular-nums mt-1 sm:mt-2', projectionExceeds ? 'text-accent-amber' : 'text-text-primary']"
-            :title="formatKpi(monthEndProjection.total)"
+            :title="formatKpi(monthEndProjection)"
           >
-            <span class="whitespace-nowrap">{{ splitMoney(formatKpi(monthEndProjection.total))[0] }}</span> <span class="inline-block max-w-full truncate align-bottom whitespace-nowrap">{{ splitMoney(formatKpi(monthEndProjection.total))[1] }}</span>
+            <span class="whitespace-nowrap">{{ splitMoney(formatKpi(monthEndProjection))[0] }}</span> <span class="inline-block max-w-full truncate align-bottom whitespace-nowrap">{{ splitMoney(formatKpi(monthEndProjection))[1] }}</span>
           </h4>
-          <span class="text-[10px] text-text-muted mt-0.5 block leading-tight">Gastos estimados al cierre a tu ritmo actual</span>
+          <span class="text-[10px] text-text-muted mt-0.5 block leading-tight">Gastos estimados al cierre a tu ritmo actual. Tarjetas: lo que pagas este mes.</span>
           <div v-if="projectionStatus.budget || projectionStatus.limit" class="mt-2 pt-2 sm:mt-3 sm:pt-3 border-t border-white/5 space-y-1.5 text-[10px] leading-tight">
             <div v-if="projectionStatus.budget" :class="projectionStatus.budget.exceeds ? 'text-accent-amber' : 'text-text-secondary'">
               <span class="block">{{ projectionStatus.budget.exceeds ? '⚠️ ' : '' }}Categorías con presupuesto</span>
@@ -121,6 +121,7 @@
               <span class="block">{{ projectionStatus.limit.exceeds ? '⚠️ ' : '' }}Tope del presupuesto mensual base</span>
               <span class="tabular-nums"><span class="whitespace-nowrap font-semibold">{{ formatKpi(projectionStatus.limit.projected) }}</span> de <span class="whitespace-nowrap">{{ formatKpi(projectionStatus.limit.cap) }}</span></span>
             </div>
+            <p class="text-text-muted" :title="budgetBasisCaption" data-testid="dashboard-cap-basis">{{ capBasisNote }}</p>
           </div>
         </div>
 
@@ -248,6 +249,7 @@
             <div class="w-full h-1 bg-white/10 rounded-full overflow-hidden">
               <div class="h-full rounded-full" :class="baseExpenseLimitExceeded ? 'bg-accent-rose' : 'bg-accent-emerald'" :style="{ width: Math.min(baseExpenseLimitPercent, 100) + '%' }"></div>
             </div>
+            <p class="mt-1 text-[10px] text-text-muted" :title="budgetBasisCaption" data-testid="dashboard-cap-basis">{{ capBasisNote }}</p>
           </div>
         </div>
 
@@ -736,6 +738,8 @@ const budgetBillingFor = computed(() => createCardBillingLookup(accountsStore.ac
   transactions: transactionsStore.transactions
 }))
 const budgetBasisCaption = computed(() => `Vista: ${BUDGET_BASIS_LABELS[budgetBasis.value]}. ${BUDGET_BASIS_HINTS[budgetBasis.value]}`)
+// Short note next to the cap comparisons, which sit beside cash-flow figures.
+const capBasisNote = computed(() => `Tarjetas según «${BUDGET_BASIS_LABELS[budgetBasis.value]}», como en tus presupuestos.`)
 
 const allBudgetsEstimatedMonthly = computed(() => {
   const now = new Date()
@@ -926,24 +930,33 @@ const spendable = computed(() =>
 
 // Proyección de cierre: purchases made this month at the current daily pace plus
 // amounts of earlier purchases already imputed to this month (later installments and
-// card statements due this month), added once. Keep the all-budget forecast, the
-// base cap comparison and the narrower comparison against category caps separate.
+// card statements due this month), added once. The all-budget forecast is cash flow,
+// so card expenses count when they are paid.
 const monthEndProjection = computed(() => {
   const now = new Date()
+  const { pace, committed } = splitMonthEndExpenses(transactionsStore.transactions, now, {
+    convert,
+    billingFor: cardBillingFor.value
+  })
+  return projectMonthEndExpenses({ paceExpensesToDate: pace, committedExpenses: committed, now })
+})
+
+// The same projection compared against caps: the base monthly budget against its cap and its
+// categories with a budget against their caps. Like every budget widget, card expenses
+// follow the workspace basis.
+const budgetMonthEndProjection = computed(() => {
+  const now = new Date()
   const budgets = goalsStore.categoryBudgets
-  const transactions = transactionsStore.transactions
-  const options = { convert, billingFor: cardBillingFor.value }
-  const all = splitMonthEndExpenses(transactions, now, options)
-  const baseTransactions = transactions.filter(t => resolveBudgetId(t.budgetId) === DEFAULT_MONTHLY_BUDGET_ID)
+  const options = { convert, billingFor: budgetBillingFor.value }
+  const baseTransactions = transactionsStore.transactions.filter(t => resolveBudgetId(t.budgetId) === DEFAULT_MONTHLY_BUDGET_ID)
   const base = splitMonthEndExpenses(baseTransactions, now, options)
   const budgeted = splitMonthEndExpenses(baseTransactions, now, {
     ...options,
     include: t => Boolean(t.categoryId && budgets[t.categoryId] > 0)
   })
-  const project = ({ pace, committed }: typeof all) =>
+  const project = ({ pace, committed }: typeof base) =>
     projectMonthEndExpenses({ paceExpensesToDate: pace, committedExpenses: committed, now })
   return {
-    total: project(all),
     budgeted: project(budgeted),
     base: project(base),
     baseSpent: base.pace + base.committed
@@ -952,9 +965,9 @@ const monthEndProjection = computed(() => {
 
 const projectionStatus = computed(() =>
   projectionChecks({
-    budgetedProjection: monthEndProjection.value.budgeted,
+    budgetedProjection: budgetMonthEndProjection.value.budgeted,
     budgetTotal: budgetSummary.value?.totalLimitForReporting ?? 0,
-    baseProjection: monthEndProjection.value.base,
+    baseProjection: budgetMonthEndProjection.value.base,
     expenseLimit: currentExpenseLimit.value
   })
 )
@@ -1030,9 +1043,9 @@ const currentExpenseLimit = computed(() => {
   return ws?.expenseLimit || 0
 })
 const baseExpenseLimitPercent = computed(() => currentExpenseLimit.value > 0
-  ? (monthEndProjection.value.baseSpent / currentExpenseLimit.value) * 100
+  ? (budgetMonthEndProjection.value.baseSpent / currentExpenseLimit.value) * 100
   : 0)
-const baseExpenseLimitExceeded = computed(() => monthEndProjection.value.baseSpent > currentExpenseLimit.value)
+const baseExpenseLimitExceeded = computed(() => budgetMonthEndProjection.value.baseSpent > currentExpenseLimit.value)
 
 const savingsRate = computed(() => {
   if (monthlyIncome.value === 0) return 0
