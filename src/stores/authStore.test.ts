@@ -19,6 +19,19 @@ test('the client waits as long as the server function may run (540 s), not the 7
   assert.match(store, /const DELETE_ACCOUNT_TIMEOUT_MS = 540_000/)
 })
 
+test('S8.3: the auth store loads none of the workspace-scoped stores, statically or lazily', () => {
+  // goalsStore loads authStore and accountsStore lazily; if authStore loaded these stores, those lazy
+  // imports would stop working (build warning INEFFECTIVE_DYNAMIC_IMPORT). Activation lives in
+  // src/composables/useWorkspaceActivation.ts instead.
+  const imports = ts.preProcessFile(store, true, true).importedFiles.map(file => file.fileName)
+  assert.ok(imports.includes('./workspacesStore'), 'the parser sees the existing imports')
+  for (const name of ['accountsStore', 'goalsStore', 'transactionsStore']) {
+    assert.ok(!imports.some(path => path.replace(/\.ts$/, '').endsWith(`/${name}`)), `authStore must not import ${name}`)
+    assert.doesNotMatch(store, new RegExp(`\\b${name}\\b|use${name[0].toUpperCase()}${name.slice(1)}`), `authStore must not use ${name}`)
+  }
+  assert.doesNotMatch(store, /\bactivateWorkspace\b/, 'activation moved out of the auth store')
+})
+
 const requireModule = createRequire(import.meta.url)
 const transpile = (path: string) => ts.transpile(
   readFileSync(new URL(path, import.meta.url), 'utf8').replaceAll('import.meta.env', '({})'),
@@ -36,13 +49,9 @@ new Function('exports', 'require', transpile('./workspacesStore.ts'))(workspaces
   return resolveLocal(id)
 })
 
-// Loads the real auth store with Firebase and the workspace-scoped stores replaced by recorders.
+// Loads the real auth store with Firebase replaced by recorders.
 const loadAuthStore = (t: TestContext) => {
-  const writes: [string, Record<string, unknown>][] = []
   const sets: [string, Record<string, unknown>][] = []
-  const reloads: [string, string | null][] = []
-  let authStore: { activeWorkspaceId: string | null } | null = null
-  const reload = (name: string) => async () => { reloads.push([name, authStore?.activeWorkspaceId ?? null]) }
   const storeModule = {} as typeof import('./authStore.ts')
   new Function('exports', 'require', transpile('./authStore.ts'))(storeModule, (id: string) => {
     if (id === '@/lib/firebase') return { db: {}, auth: {}, functions: {} }
@@ -55,7 +64,6 @@ const loadAuthStore = (t: TestContext) => {
     if (id === 'firebase/firestore') return {
       collection: (_db: object, name: string) => ({ name }),
       doc: (...args: unknown[]) => args.length === 1 ? { id: 'ws-new', path: 'workspaces/ws-new' } : `${args[1]}/${args[2]}`,
-      updateDoc: async (path: string, data: Record<string, unknown>) => { writes.push([path, data]) },
       serverTimestamp: () => 'server-time',
       runTransaction: async (_db: object, run: (tx: object) => Promise<unknown>) => run({
         get: async () => ({ exists: () => false }),
@@ -63,35 +71,12 @@ const loadAuthStore = (t: TestContext) => {
       })
     }
     if (id === './workspacesStore') return workspacesModule
-    if (id === './accountsStore') return { useAccountsStore: () => ({ fetchAccounts: reload('accounts') }) }
-    if (id === './transactionsStore') return {
-      useTransactionsStore: () => ({ fetchTransactions: reload('transactions'), fetchCategories: reload('categories') })
-    }
-    if (id === './goalsStore') return {
-      useGoalsStore: () => ({ fetchGoals: reload('goals'), loadBudgetSettings: reload('budgetSettings') })
-    }
     return resolveLocal(id)
   })
   const pinia = createPinia()
   t.after(() => disposePinia(pinia))
-  const instance = storeModule.useAuthStore(pinia)
-  authStore = instance
-  return { store: instance, writes, sets, reloads }
+  return { store: storeModule.useAuthStore(pinia), sets }
 }
-
-test('S7: activating a workspace switches to it, then reloads every workspace-scoped store for it', async t => {
-  const { store, writes, reloads } = loadAuthStore(t)
-  store.user = { uid: 'user-a', email: 'ana@example.com', displayName: 'Ana' }
-  store.profile = { uid: 'user-a', email: 'ana@example.com', displayName: 'Ana', currency: 'COP', createdAt: new Date(), activeWorkspaceId: 'personal' }
-  store.activeWorkspaceId = 'personal'
-
-  await store.activateWorkspace('hogar')
-  assert.equal(store.activeWorkspaceId, 'hogar')
-  assert.equal(store.profile.activeWorkspaceId, 'hogar')
-  assert.deepEqual(writes, [['users/user-a', { activeWorkspaceId: 'hogar' }]])
-  assert.deepEqual(reloads.map(([name]) => name).sort(), ['accounts', 'budgetSettings', 'categories', 'goals', 'transactions'])
-  assert.ok(reloads.every(([, workspaceId]) => workspaceId === 'hogar'), 'every reload reads the new workspace')
-})
 
 test('S7: the first workspace at sign-up goes through the shared creation rule and keeps its exact documents', async t => {
   const action = store.slice(store.indexOf('async ensureUserProfile('), store.indexOf('async resetPassword('))

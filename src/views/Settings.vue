@@ -576,6 +576,7 @@ import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useGoalsStore } from '@/stores/goalsStore'
 import { useNotificationsStore } from '@/stores/notificationsStore'
+import { activateWorkspace } from '@/composables/useWorkspaceActivation'
 import { ApiKeySchema, CategorySchema } from '@/schemas'
 import { getPushStatus, enablePush, disablePush, onForegroundMessage, type PushStatus } from '@/lib/push'
 import { CATEGORY_COLORS, CATEGORY_ICONS, getCategoryIconComponent } from '@/lib/categoryIcons'
@@ -914,8 +915,9 @@ const handleCreateWorkspace = async () => {
   
   creatingWorkspace.value = true
   try {
-    // The store confirms its limit currency in your main currency, switches to it and reloads its data.
-    await workspacesStore.createWorkspace(newWorkspaceName.value.trim(), settingsStore)
+    // The store confirms its limit currency in your main currency, then switches to it and reloads its
+    // data through the shared activation (the same one as the sidebar switcher).
+    await workspacesStore.createWorkspace(newWorkspaceName.value.trim(), settingsStore, activateWorkspace)
     track('workspace_created')
     newWorkspaceName.value = ''
     budgetAlertsEnabled.value = goalsStore.budgetAlertsEnabled

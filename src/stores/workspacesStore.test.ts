@@ -123,15 +123,16 @@ test('S6: a delayed owner write for A does not change the basis shown after swit
   assert.equal(store.activeBudgetCardBasis, 'payment')
 })
 
-// Workspace creation with recording fakes for the new document, the profile write and the activation.
+// Workspace creation with recording fakes for the new document, the profile write and the activation
+// the caller passes in (src/composables/useWorkspaceActivation.ts in the app).
 const loadCreationStore = (t: TestContext) => {
   const authStore = Vue.reactive({
     user: { uid: 'owner' },
-    profile: { workspaces: ['personal'] } as { workspaces: string[] },
-    activeWorkspaceId: 'personal',
-    activated: [] as string[],
-    async activateWorkspace(workspaceId: string) { this.activated.push(workspaceId); this.activeWorkspaceId = workspaceId }
+    profile: { workspaces: ['personal'] } as { workspaces: string[] } | null,
+    activeWorkspaceId: 'personal'
   })
+  const activated: string[] = []
+  const activate = async (workspaceId: string) => { activated.push(workspaceId); authStore.activeWorkspaceId = workspaceId }
   const created: [string, Record<string, unknown>][] = []
   const updated: [string, Record<string, unknown>][] = []
   const storeModule = {} as typeof import('./workspacesStore.ts')
@@ -150,13 +151,13 @@ const loadCreationStore = (t: TestContext) => {
   t.after(() => disposePinia(pinia))
   const store = storeModule.useWorkspacesStore(pinia)
   store.workspaces = [workspace('personal', { ownerId: 'owner', members: ['owner'] })]
-  return { store, storeModule, authStore, created, updated }
+  return { store, storeModule, authStore, activate, activated, created, updated }
 }
 
 test('S7: a new workspace stores its budget-limit currency already confirmed in the creator main currency', async t => {
   for (const currency of ['COP', 'EUR']) {
-    const { store, authStore, created, updated } = loadCreationStore(t)
-    assert.equal(await store.createWorkspace('Hogar', { countryConfigured: true, currency }), 'new-ws')
+    const { store, activate, activated, created, updated } = loadCreationStore(t)
+    assert.equal(await store.createWorkspace('Hogar', { countryConfigured: true, currency }, activate), 'new-ws')
     const [[path, data]] = created
     assert.equal(path, 'workspaces/new-ws')
     assert.deepEqual({ ...data, createdAt: 'any' }, {
@@ -168,17 +169,17 @@ test('S7: a new workspace stores its budget-limit currency already confirmed in 
     // Existing behavior: listed, added to the profile and made active.
     assert.deepEqual(store.workspaces.map(w => w.id), ['personal', 'new-ws'])
     assert.deepEqual(updated, [['users/owner', { workspaces: ['personal', 'new-ws'] }]])
-    assert.deepEqual(authStore.activated, ['new-ws'], 'switches through the shared activation, which reloads its data')
+    assert.deepEqual(activated, ['new-ws'], 'switches through the shared activation, which reloads its data')
   }
 })
 
 test('S7: before the creator picks a main currency, a new workspace leaves the limit currency for onboarding', async t => {
-  const { store, created, authStore } = loadCreationStore(t)
-  await store.createWorkspace('Hogar', { countryConfigured: false, currency: 'USD' })
+  const { store, created, activate, activated } = loadCreationStore(t)
+  await store.createWorkspace('Hogar', { countryConfigured: false, currency: 'USD' }, activate)
   const [[, data]] = created
   assert.equal(Object.hasOwn(data, 'categoryBudgetCurrency'), false)
   assert.equal(data.currency, 'USD', 'the profile currency (a sign-up default) is kept, never a fixed code')
-  assert.deepEqual(authStore.activated, ['new-ws'])
+  assert.deepEqual(activated, ['new-ws'])
 })
 
 test('S7: the shared creation rule writes exactly the confirmation patch onboarding writes, for every supported currency', t => {
@@ -194,15 +195,37 @@ test('S7: the shared creation rule writes exactly the confirmation patch onboard
 test('S7: a stored main currency with other casing, spaces or an unknown code still creates the workspace', async t => {
   const fallback = defaultCurrencyCode(null)
   for (const [stored, expected] of [['cop', 'COP'], [' COP', 'COP'], ['eur ', 'EUR'], [' mxn ', 'MXN'], ['Peso', fallback], ['', fallback]]) {
-    const { store, created, authStore } = loadCreationStore(t)
-    assert.equal(await store.createWorkspace('Hogar', { countryConfigured: true, currency: stored }), 'new-ws', JSON.stringify(stored))
+    const { store, created, activate, activated } = loadCreationStore(t)
+    assert.equal(await store.createWorkspace('Hogar', { countryConfigured: true, currency: stored }, activate), 'new-ws', JSON.stringify(stored))
     const [[, data]] = created
     assert.equal(data.currency, expected, JSON.stringify(stored))
     assert.equal(data.categoryBudgetCurrency, expected, 'normalized like the rest of the app, then confirmed')
     assert.deepEqual(planLegacyCategoryBudgetCurrencyConfirmation(data, expected), { status: 'unchanged' })
-    assert.deepEqual(authStore.activated, ['new-ws'])
+    assert.deepEqual(activated, ['new-ws'])
   }
-  const { store, created } = loadCreationStore(t)
-  await store.createWorkspace('Hogar', { countryConfigured: false, currency: ' usd' })
+  const { store, created, activate } = loadCreationStore(t)
+  await store.createWorkspace('Hogar', { countryConfigured: false, currency: ' usd' }, activate)
   assert.deepEqual({ currency: created[0][1].currency, confirmed: Object.hasOwn(created[0][1], 'categoryBudgetCurrency') }, { currency: 'USD', confirmed: false })
+})
+
+test('S8.3: creation activates at the same point as before: after the profile write, while loading, never without a profile', async t => {
+  const { store, updated } = loadCreationStore(t)
+  const seen: unknown[] = []
+  await store.createWorkspace('Hogar', { countryConfigured: true, currency: 'COP' }, async workspaceId => {
+    seen.push([workspaceId, updated.length, store.loading])
+  })
+  assert.deepEqual(seen, [['new-ws', 1, true]], 'activated once, after the profile write, before loading ends')
+  assert.equal(store.loading, false)
+
+  const failing = loadCreationStore(t)
+  await assert.rejects(failing.store.createWorkspace('Hogar', { countryConfigured: true, currency: 'COP' }, async () => {
+    throw new Error('reload failed')
+  }), /reload failed/, 'a failed activation still fails the creation')
+  assert.equal(failing.store.loading, false)
+
+  const withoutProfile = loadCreationStore(t)
+  withoutProfile.authStore.profile = null
+  assert.equal(await withoutProfile.store.createWorkspace('Hogar', { countryConfigured: true, currency: 'COP' }, withoutProfile.activate), 'new-ws')
+  assert.deepEqual(withoutProfile.activated, [], 'no profile, no profile write and no activation')
+  assert.deepEqual(withoutProfile.updated, [])
 })

@@ -113,7 +113,9 @@ export const useWorkspacesStore = defineStore('workspaces', {
       }
     },
     
-    async createWorkspace(name: string, creator: WorkspaceCreator) {
+    // `activate` is the shared switch-and-reload (src/composables/useWorkspaceActivation.ts), passed in
+    // by the caller: this store must not import the workspace-scoped stores, because authStore imports it.
+    async createWorkspace(name: string, creator: WorkspaceCreator, activate: (workspaceId: string) => Promise<void>) {
       const user = auth.currentUser
       if (!user) return
 
@@ -145,7 +147,7 @@ export const useWorkspacesStore = defineStore('workspaces', {
           })
           
           // Switch to it and reload every workspace-scoped store, exactly like the sidebar switcher.
-          await authStore.activateWorkspace(workspaceId)
+          await activate(workspaceId)
         }
         
         return workspaceId

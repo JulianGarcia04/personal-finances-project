@@ -221,6 +221,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useNotificationsStore } from '@/stores/notificationsStore'
+import { activateWorkspace } from '@/composables/useWorkspaceActivation'
 import { 
   LayoutDashboard as DashboardIcon, 
   Landmark as AccountsIcon, 
@@ -348,7 +349,7 @@ const switchWorkspace = async (workspaceId: string) => {
   isOpen.value = false // Cierra sidebar en móvil
 
   // Shared with workspace creation: switches and reloads every workspace-scoped store.
-  await authStore.activateWorkspace(workspaceId)
+  await activateWorkspace(workspaceId)
 
   // Opcional: Redirigir al dashboard para limpiar vistas profundas
   if (router.currentRoute.value.name !== 'Dashboard') {

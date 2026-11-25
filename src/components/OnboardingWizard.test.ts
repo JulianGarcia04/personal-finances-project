@@ -205,7 +205,7 @@ const mountWizard = async (t: TestContext, setup: WizardSetup) => {
       if (dialog()) seen.push(`${authStore.activeWorkspaceId}: ${header()}`)
     }
   }
-  // Like authStore.activateWorkspace: switch, then reload (the wizard also loads on the context change).
+  // Like activateWorkspace (src/composables/useWorkspaceActivation.ts): switch, then reload (the wizard also loads on the context change).
   const activate = async (workspaceId: string, appReload = true) => {
     authStore.activeWorkspaceId = workspaceId
     await tick()

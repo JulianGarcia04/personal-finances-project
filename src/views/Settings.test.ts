@@ -184,6 +184,7 @@ test('S7: a failed workspace creation shows an error toast without technical det
       settingsStore: { countryConfigured: true, currency: 'COP' },
       goalsStore: { budgetAlertsEnabled: true },
       budgetAlertsEnabled: ref(true),
+      activateWorkspace: async () => {},
       workspacesStore: {
         createWorkspace: async (name: string) => {
           created.push(name)
@@ -211,6 +212,9 @@ test('S7: a workspace created from Settings gets the main currency and shows its
   const goalsStore = { budgetAlertsEnabled: false }
   const budgetAlertsEnabled = ref(false)
   const calls: unknown[][] = []
+  const activated: string[] = []
+  // The shared activation (switch + reload): the new workspace's settings arrive with it.
+  const activateWorkspace = async (workspaceId: string) => { activated.push(workspaceId); goalsStore.budgetAlertsEnabled = true }
   const handleCreateWorkspace = evaluateSetupConst<() => Promise<void>>('handleCreateWorkspace', {
     ...ui.deps,
     newWorkspaceName: ref('Hogar'),
@@ -219,18 +223,25 @@ test('S7: a workspace created from Settings gets the main currency and shows its
     settingsStore,
     goalsStore,
     budgetAlertsEnabled,
+    activateWorkspace,
     workspacesStore: {
-      // The store creates, confirms the limit currency and activates (switch + shared reload).
-      createWorkspace: async (...args: unknown[]) => { calls.push(args); goalsStore.budgetAlertsEnabled = true }
+      // The store creates, confirms the limit currency and activates through the activation it is given.
+      createWorkspace: async (...args: unknown[]) => {
+        calls.push(args)
+        await (args[2] as (workspaceId: string) => Promise<void>)('new-ws')
+      }
     }
   })
   await handleCreateWorkspace()
-  assert.deepEqual(calls, [['Hogar', settingsStore]], 'the creator settings decide the confirmed limit currency')
+  assert.deepEqual(calls, [['Hogar', settingsStore, activateWorkspace]],
+    'the creator settings decide the confirmed limit currency; the shared activation switches and reloads')
+  assert.deepEqual(activated, ['new-ws'])
   assert.equal(budgetAlertsEnabled.value, true, 'the alerts switch shows the new workspace, not the previous one')
   assert.deepEqual(ui.errors, [])
 
+  assert.match(script, /import \{ activateWorkspace \} from '@\/composables\/useWorkspaceActivation'/)
   const handler = settings.slice(settings.indexOf('const handleCreateWorkspace = async'), settings.indexOf('const handleInviteUser'))
-  assert.doesNotMatch(handler, /switchWorkspace|activateWorkspace|fetchAccounts|fetchTransactions|loadBudgetSettings/,
+  assert.doesNotMatch(handler, /switchWorkspace|activateWorkspace\(|fetchAccounts|fetchTransactions|loadBudgetSettings/,
     'no second switch or reload next to the shared one')
 })
 

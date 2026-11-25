@@ -838,6 +838,7 @@ const mountNavigation = async (t: import('node:test').TestContext, path: string,
       if (id === 'chart.js') return { Chart: class { static register = noOp; destroy = noOp }, registerables: [] }
       if (id === '@/lib/analytics') return { track: noOp }
       if (id === '@/components/ui/useBodyScrollLock') return { useBodyScrollLock: noOp }
+      if (id === '@/composables/useWorkspaceActivation') return { activateWorkspace: noOp }
       if (id.endsWith('/BaseSheet.vue')) return { default: MockSheet }
       if (id.endsWith('/BudgetBasisSwitch.vue')) return { default: () => Vue.h('div', 'Consumo del mes / Pagos del mes') }
       if (id.endsWith('.vue')) return { default: () => null }

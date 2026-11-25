@@ -59,16 +59,19 @@ const sidebarScript = ts.transpile(compileScript(descriptor, { id: 'Sidebar.vue'
   target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS
 })
 
-const mountSidebar = async (t: TestContext, logout: () => Promise<void> = async () => {}, realAuthStore?: object) => {
+type Activation = { authStore: object, activateWorkspace: (workspaceId: string) => Promise<void> }
+const mountSidebar = async (t: TestContext, logout: () => Promise<void> = async () => {}, real?: Activation) => {
   const fakeAuthStore = Vue.reactive({
     isAuthenticated: true,
     user: { uid: 'user-a', displayName: 'Ana Gómez', email: 'ana@example.com' },
     activeWorkspaceId: 'hogar',
-    activated: [] as string[],
-    async activateWorkspace(workspaceId: string) { this.activated.push(workspaceId); this.activeWorkspaceId = workspaceId },
     logout
   })
-  const authStore = (realAuthStore ?? fakeAuthStore) as typeof fakeAuthStore
+  const authStore = (real?.authStore ?? fakeAuthStore) as typeof fakeAuthStore
+  // Records each shared activation (switch + reload) of the fake auth store.
+  const activated: string[] = []
+  const activateWorkspace = real?.activateWorkspace ??
+    (async (workspaceId: string) => { activated.push(workspaceId); fakeAuthStore.activeWorkspaceId = workspaceId })
   const notifications = { errors: [] as string[], error(message: string) { this.errors.push(message) }, success: noOp, info: noOp }
   const stores: Record<string, unknown> = {
     authStore,
@@ -84,6 +87,7 @@ const mountSidebar = async (t: TestContext, logout: () => Promise<void> = async 
     if (id === 'vue') return { ...Vue, Transition: (_: unknown, { slots }: Vue.SetupContext) => slots.default?.() }
     if (id === 'vue-router') return Router
     if (id === '@/components/ui/useBodyScrollLock') return { useBodyScrollLock: noOp }
+    if (id === '@/composables/useWorkspaceActivation') return { activateWorkspace }
     if (id.endsWith('.vue')) return { default: () => null }
     if (id.startsWith('@/stores/')) {
       const name = id.slice('@/stores/'.length)
@@ -125,7 +129,7 @@ const mountSidebar = async (t: TestContext, logout: () => Promise<void> = async 
     assert.ok(node, `expected a "${label}" button`)
     return node
   }
-  return { root, router, authStore, notifications, header, drawer, button }
+  return { root, router, authStore, activated, notifications, header, drawer, button }
 }
 
 test('S7: the mobile header shows the active workspace and opens the existing switcher in the drawer', async t => {
@@ -150,14 +154,14 @@ test('S7: the mobile header shows the active workspace and opens the existing sw
 })
 
 test('S7: choosing a workspace still switches through the shared activation, closes the drawer and returns to the Dashboard', async t => {
-  const { router, authStore, header, drawer, button } = await mountSidebar(t)
+  const { router, activated, header, drawer, button } = await mountSidebar(t)
   const control = button(header(), /Hogar con Camila/)
   await control.props.onClick()
   await Vue.nextTick()
 
   await button(drawer(), 'Personal').props.onClick()
   await new Promise(setImmediate)
-  assert.deepEqual(authStore.activated, ['personal'], 'one activation of the chosen workspace (switch + reload)')
+  assert.deepEqual(activated, ['personal'], 'one activation of the chosen workspace (switch + reload)')
   assert.equal(drawer().props.inert, true, 'the drawer closes')
   assert.equal(router.currentRoute.value.name, 'Dashboard')
   assert.match(button(header(), /Personal/).content, /Personal/, 'the header follows the new active workspace')
@@ -165,8 +169,9 @@ test('S7: choosing a workspace still switches through the shared activation, clo
 })
 
 test('S7: workspace switching delegates its data reload to the shared activation instead of repeating it', () => {
-  assert.match(workspaceSwitch, /authStore\.activateWorkspace\(workspaceId\)/)
-  assert.doesNotMatch(workspaceSwitch, /fetchAccounts|fetchTransactions|loadBudgetSettings/)
+  assert.match(sidebar, /import \{ activateWorkspace \} from '@\/composables\/useWorkspaceActivation'/)
+  assert.match(workspaceSwitch, /(?<![.\w])activateWorkspace\(workspaceId\)/)
+  assert.doesNotMatch(workspaceSwitch, /authStore\.activateWorkspace|fetchAccounts|fetchTransactions|loadBudgetSettings/)
 })
 
 test('S7: a failed logout shows an error toast and stays signed in', async t => {
@@ -189,13 +194,15 @@ test('S7: a successful logout still goes to the login page without a toast', asy
   assert.equal(router.currentRoute.value.name, 'Login')
 })
 
-// The real auth store (its shared activation) over recording Firestore and slow workspace-scoped stores.
+// The real shared activation and auth store over recording Firestore and slow workspace-scoped stores.
 const tick = () => new Promise(setImmediate)
-const authScript = ts.transpile(
-  readFileSync(new URL('../stores/authStore.ts', import.meta.url), 'utf8').replaceAll('import.meta.env', '({})'),
+const transpileFile = (path: string) => ts.transpile(
+  readFileSync(new URL(path, import.meta.url), 'utf8').replaceAll('import.meta.env', '({})'),
   { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }
 )
-const loadRealAuthStore = (t: TestContext, log: string[]) => {
+const authScript = transpileFile('../stores/authStore.ts')
+const activationScript = transpileFile('../composables/useWorkspaceActivation.ts')
+const loadRealActivation = (t: TestContext, log: string[]): Activation & { authStore: { activeWorkspaceId: string | null, profile: { activeWorkspaceId?: string | null } | null } } => {
   let store: { activeWorkspaceId: string | null } | null = null
   const slow = (name: string) => async () => {
     const workspaceId = store?.activeWorkspaceId
@@ -222,11 +229,6 @@ const loadRealAuthStore = (t: TestContext, log: string[]) => {
       }
     }
     if (id === './workspacesStore') return { newWorkspaceCurrencyFields: noOp }
-    if (id === './accountsStore') return { useAccountsStore: () => ({ fetchAccounts: slow('accounts') }) }
-    if (id === './transactionsStore') return {
-      useTransactionsStore: () => ({ fetchTransactions: slow('transactions'), fetchCategories: slow('categories') })
-    }
-    if (id === './goalsStore') return { useGoalsStore: () => ({ fetchGoals: slow('goals'), loadBudgetSettings: slow('budgetSettings') }) }
     return requireModule(id.startsWith('@/') ? `../${id.slice(2)}.ts` : id)
   })
   const pinia = createPinia()
@@ -236,13 +238,24 @@ const loadRealAuthStore = (t: TestContext, log: string[]) => {
   instance.profile = { uid: 'user-a', email: 'ana@example.com', displayName: 'Ana Gómez', currency: 'COP', createdAt: new Date(), activeWorkspaceId: 'hogar' }
   instance.activeWorkspaceId = 'hogar'
   store = instance
-  return instance
+  const activation = {} as typeof import('../composables/useWorkspaceActivation.ts')
+  new Function('exports', 'require', activationScript)(activation, (id: string) => {
+    if (id === '@/stores/authStore') return { useAuthStore: () => instance }
+    if (id === '@/stores/accountsStore') return { useAccountsStore: () => ({ fetchAccounts: slow('accounts') }) }
+    if (id === '@/stores/transactionsStore') return {
+      useTransactionsStore: () => ({ fetchTransactions: slow('transactions'), fetchCategories: slow('categories') })
+    }
+    if (id === '@/stores/goalsStore') return { useGoalsStore: () => ({ fetchGoals: slow('goals'), loadBudgetSettings: slow('budgetSettings') }) }
+    assert.fail(`unexpected import ${id}`)
+  })
+  return { authStore: instance, activateWorkspace: activation.activateWorkspace }
 }
 
 test('S7: switching keeps its sequence: profile write, the five reloads for the new workspace, all awaited, then the Dashboard', async t => {
   const log: string[] = []
-  const authStore = loadRealAuthStore(t, log)
-  const { router, drawer, button, root } = await mountSidebar(t, undefined, authStore)
+  const real = loadRealActivation(t, log)
+  const { authStore } = real
+  const { router, drawer, button, root } = await mountSidebar(t, undefined, real)
   router.afterEach(to => { log.push(`route ${String(to.name)}`) })
   await button(root, 'Más').props.onClick()
   await Vue.nextTick()
