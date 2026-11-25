@@ -37,6 +37,22 @@ export interface CardStatementLedger {
   weight: (paymentBucket: number, targetBucket: number) => number;
   /** Still unpaid of every statement paid up to `paymentBucket`, overdue ones included. */
   pendingThrough: (paymentBucket: number) => number;
+  /**
+   * Server-only detail of `weight`: each payment applied to the statement paid in `paymentBucket`,
+   * in the order applied. Empty without a statement.
+   */
+  payments: (paymentBucket: number) => StatementPayment[];
+  /** Share of the statement paid in `paymentBucket` still unpaid (1 without a statement). */
+  unpaidShare: (paymentBucket: number) => number;
+}
+
+export interface StatementPayment {
+  /** Instant of the credit (ms); -Infinity for credit the card had before its first movement. */
+  time: number;
+  /** Month the payment counts in (year * 12 + month). */
+  bucket: number;
+  /** Share of the statement it paid. */
+  share: number;
 }
 
 const cents = (value: number) => Math.round(value * 100);
@@ -51,6 +67,7 @@ interface Statement {
   totalCents: number;
   remainingCents: number;
   paidByMonth: Map<number, number>;
+  payments: { time: number; bucket: number; cents: number }[];
 }
 
 export function buildCardStatementLedger(
@@ -65,7 +82,7 @@ export function buildCardStatementLedger(
 
   const charge = (bucket: number, amountCents: number) => {
     if (amountCents <= 0) return;
-    const statement = statements.get(bucket) ?? { totalCents: 0, remainingCents: 0, paidByMonth: new Map() };
+    const statement = statements.get(bucket) ?? { totalCents: 0, remainingCents: 0, paidByMonth: new Map(), payments: [] };
     statement.totalCents += amountCents;
     statement.remainingCents += amountCents;
     statements.set(bucket, statement);
@@ -128,6 +145,7 @@ export function buildCardStatementLedger(
       if (applied > 0) {
         statement.remainingCents -= applied;
         statement.paidByMonth.set(credit.bucket, (statement.paidByMonth.get(credit.bucket) ?? 0) + applied);
+        statement.payments.push({ time: credit.time, bucket: credit.bucket, cents: applied });
         left -= applied;
       }
       if (statement.remainingCents === 0) next++;
@@ -148,6 +166,15 @@ export function buildCardStatementLedger(
         if (bucket <= paymentBucket) pendingCents += statement.remainingCents;
       }
       return pendingCents / 100;
+    },
+    payments: paymentBucket => {
+      const statement = statements.get(paymentBucket);
+      if (!statement || statement.totalCents === 0) return [];
+      return statement.payments.map(({ time, bucket, cents }) => ({ time, bucket, share: cents / statement.totalCents }));
+    },
+    unpaidShare: paymentBucket => {
+      const statement = statements.get(paymentBucket);
+      return !statement || statement.totalCents === 0 ? 1 : statement.remainingCents / statement.totalCents;
     }
   };
 }

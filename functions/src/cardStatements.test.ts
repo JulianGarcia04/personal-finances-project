@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { cardBillingByAccount as reExported } from "./agentQueries";
 import { buildCardStatementLedger, cardBillingByAccount, CardLedgerTransaction } from "./cardStatements";
 import { CardBilling, cardBillingOf, expenseAmountForMonth } from "./http";
@@ -227,6 +228,70 @@ test("on random cards each purchase adds up to its amount over the months and th
     }
     assert.equal(ledger.pendingThrough(2100 * 12), Math.max(0, -balance), `card ${card}`);
   }
+});
+
+test("payments lists what each payment paid of a statement (instant, month, share) and unpaidShare what is left", () => {
+  const purchase = expense("2026-10-03", 1000); // due 4-nov
+  const ledger = ledgerFor([purchase, payment("2026-10-10", 600), payment("2026-11-02", 100)], -300);
+  assert.deepEqual(ledger.payments(bucket(2026, 10)), [
+    { time: Date.parse("2026-10-10T12:00:00Z"), bucket: bucket(2026, 9), share: 0.6 },
+    { time: Date.parse("2026-11-02T12:00:00Z"), bucket: bucket(2026, 10), share: 0.1 }
+  ]);
+  assert.equal(ledger.unpaidShare(bucket(2026, 10)), 0.3);
+  // The same split by month that weight gives.
+  assert.equal(ledger.weight(bucket(2026, 10), bucket(2026, 9)), 0.6);
+  assert.equal(ledger.weight(bucket(2026, 10), bucket(2026, 10)), 0.4);
+  // Without a statement nothing was paid; credit the card had before its first movement has no instant.
+  assert.deepEqual(ledger.payments(bucket(2026, 11)), []);
+  assert.equal(ledger.unpaidShare(bucket(2026, 11)), 1);
+  const opening = ledgerFor([purchase], 0);
+  assert.deepEqual(opening.payments(bucket(2026, 10)), [{ time: -Infinity, bucket: bucket(2026, 9), share: 1 }]);
+  assert.equal(opening.unpaidShare(bucket(2026, 10)), 0);
+});
+
+// Seeded random cards: the payment details split each statement exactly like weight, and weight and
+// pendingThrough keep the values they had before the details existed (SHA-256 of every value, pinned
+// from the ledger at a6c71bc).
+test("on random cards the payment details agree with weight, and weight and pendingThrough are unchanged", () => {
+  let seed = 11;
+  const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const pick = <T>(values: readonly T[]) => values[Math.floor(random() * values.length)];
+  const randomDate = () => new Date(Date.UTC(2025 + Math.floor(random() * 2), Math.floor(random() * 12), 1 + Math.floor(random() * 28), Math.floor(random() * 24)));
+  const randomAmount = () => Math.round((random() * 2_000_000 + 1) * 100) / 100;
+  const randomCard = () => {
+    const billing: CardBilling = { statementClosingDay: 1 + Math.floor(random() * 31), paymentDueDay: 1 + Math.floor(random() * 31) };
+    const balance = random() < 0.3 ? 0 : -Math.round(random() * 3_000_000) + (random() < 0.2 ? 5_000_000 : 0);
+    const movements: CardLedgerTransaction[] = Array.from({ length: 2 + Math.floor(random() * 25) }, () => {
+      const kind = pick(["expense", "expense", "expense", "in", "out", "income", "loan_payment", "loan"] as const);
+      const date = randomDate();
+      if (kind === "expense") return { type: "expense", amount: -randomAmount(), date, installments: pick([1, 1, 3, 6, 12]), accountId: "nu" };
+      if (kind === "in") return { type: "transfer", amount: randomAmount(), date, accountId: "bank", toAccountId: "nu" };
+      if (kind === "out") return { type: "transfer", amount: randomAmount(), date, accountId: "nu", toAccountId: "bank" };
+      if (kind === "loan") return { type: "loan", amount: -randomAmount(), date, accountId: "nu" };
+      return { type: kind, amount: randomAmount() / 10, date, accountId: "nu" };
+    });
+    return buildCardStatementLedger({ id: "nu", balance }, billing, movements, UTC);
+  };
+  // Every statement and month the random cards can reach (the opening balance sits one month early).
+  const FIRST = 2024 * 12 + 10;
+  const LAST = 2028 * 12;
+  const hash = createHash("sha256");
+  for (let card = 0; card < 100; card++) {
+    const ledger = randomCard();
+    for (let statement = FIRST; statement <= LAST; statement++) {
+      hash.update(`${statement}:${ledger.pendingThrough(statement)}`);
+      const payments = ledger.payments(statement);
+      const unpaid = ledger.unpaidShare(statement);
+      assert.ok(Math.abs(payments.reduce((sum, paid) => sum + paid.share, 0) + unpaid - 1) < 1e-9, `card ${card} statement ${statement}`);
+      for (let month = FIRST; month <= LAST; month++) {
+        const weight = ledger.weight(statement, month);
+        hash.update(`,${weight}`);
+        const paid = payments.filter(entry => entry.bucket === month).reduce((sum, entry) => sum + entry.share, 0);
+        assert.ok(Math.abs(weight - paid - (statement === month ? unpaid : 0)) < 1e-9, `card ${card} statement ${statement} month ${month}`);
+      }
+    }
+  }
+  assert.equal(hash.digest("hex"), "bc384d45f6bd74b3f5be5d3562adee25e4c9bc8a8d1e3e3a885ce1f02ae52acb");
 });
 
 test("cardBillingByAccount lives with the ledger and agentQueries re-exports the same function", () => {

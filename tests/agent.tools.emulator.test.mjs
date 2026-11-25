@@ -4,6 +4,7 @@
 //   firebase emulators:exec --project demo-vault-access --only auth,firestore \
 //     --config tests/firebase.pockets.json "node --test tests/agent.tools.emulator.test.mjs"
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { after, before, test } from 'node:test'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
@@ -198,7 +199,7 @@ test('getWorkspaceSettings reports budgets vs actual for the current month', asy
   assert.deepEqual(settings.goalAllocations, [{ goalId: ids.goal, goalName: 'Viaje a Japón', amount: 500_000 }])
 })
 
-test('P1 S6: under Pagos the budget figures follow the card ledger over the whole card history; cash flow keeps the payment month', async () => {
+test('P1 S6: under Pagos the budget figures follow the card ledger over the whole card history, and so does cash flow (P1 S8.4)', async () => {
   // Own workspace and user (writes need the user's active workspace), so the shared fixture is untouched.
   const workspaceId = `${ids.workspaceId}-pagos`
   const owner = `${userId}-pagos`
@@ -238,11 +239,11 @@ test('P1 S6: under Pagos the budget figures follow the card ledger over the whol
   const settings = await pagos('getWorkspaceSettings')
   assert.deepEqual(spentByCategory(settings), { Tecnología: 40_000, Comida: 30_000 })
   assert.equal(settings.currentMonth.expenseLimit.spent, 70_000)
-  // Cash flow: the June statement was due in July and the October one is due in November.
-  assert.equal(settings.currentMonth.totals.expenses, 0)
+  // Cash flow counts the card like the Dashboard: the late June payment and the early part, both in October.
+  assert.equal(settings.currentMonth.totals.expenses, 70_000)
   assert.ok(settings.notes.some(note => note.includes('base Pagos')))
   const summary = await pagos('getFinancialSummary', { preset: 'this_month' })
-  assert.equal(summary.totals.expenses, 0)
+  assert.equal(summary.totals.expenses, 70_000)
   assert.equal(summary.byBudget.monthlyExpense, 70_000)
 
   // A card expense written in the same chat: the ledger reads the new balance, not the cached one.
@@ -254,7 +255,7 @@ test('P1 S6: under Pagos the budget figures follow the card ledger over the whol
   // The Nov 5 statement is now 120,000, of which 30,000 (a quarter) was paid in October.
   assert.deepEqual(spentByCategory(after), { Tecnología: 40_000, Comida: 30_000 })
   assert.equal(after.currentMonth.expenseLimit.spent, 70_000)
-  assert.equal(after.currentMonth.totals.expenses, 0)
+  assert.equal(after.currentMonth.totals.expenses, 70_000)
 })
 
 // Pagos with more billing cards than one `in` query takes (30), in their own workspace. Dates are
@@ -344,7 +345,8 @@ test('P1 S6: under Pagos with 35 billing cards the Asesor reads every card histo
   // 33 cards x 5,000 paid this month + card 34: 6,000 + card 00: 10,000 x 5,000 / 11,000 of its statement.
   const expected = 175_545.45
   const settings = await runTool(tools, 'getWorkspaceSettings')
-  assert.deepEqual(budgetFigures(settings, fixture.food), { food: expected, base: expected, cashFlow: 0 })
+  // Cash flow counts the same card payments (every purchase is Comida in the base budget).
+  assert.deepEqual(budgetFigures(settings, fixture.food), { food: expected, base: expected, cashFlow: expected })
   assert.equal(await frontendFoodSpent(fixture), expected)
   const summary = await runTool(tools, 'getFinancialSummary', { preset: 'this_month' })
   assert.equal(summary.byBudget.monthlyExpense, expected)
@@ -355,7 +357,7 @@ test('P1 S6: a card purchase of last month written and deleted in the same chat 
   const chat = fixture.tools()
   const card05 = fixture.cards[5]
   const balanceOf = async () => (await runTool(chat, 'listAccounts')).accounts.find(row => row.id === card05)?.balance
-  const before = { food: 175_545.45, base: 175_545.45, cashFlow: 0 }
+  const before = { food: 175_545.45, base: 175_545.45, cashFlow: 175_545.45 }
   // Loads (and caches) the accounts in this chat before the write.
   assert.deepEqual(budgetFigures(await runTool(chat, 'getWorkspaceSettings'), fixture.food), before)
   assert.equal(await balanceOf(), -5_000)
@@ -367,7 +369,7 @@ test('P1 S6: a card purchase of last month written and deleted in the same chat 
   // Its statement is due on the 5th of this month and the 5,000 paid on the 20th settle it first, so
   // all 20,000 count this month and card 05's own purchase nothing (+15,000). A stale cached
   // balance (-5,000) would read as prior credit and leave 175,545.45.
-  const afterCreate = { food: 190_545.45, base: 190_545.45, cashFlow: 20_000 }
+  const afterCreate = { food: 190_545.45, base: 190_545.45, cashFlow: 190_545.45 }
   assert.deepEqual(budgetFigures(await runTool(chat, 'getWorkspaceSettings'), fixture.food), afterCreate)
   assert.deepEqual(budgetFigures(await runTool(fixture.tools(), 'getWorkspaceSettings'), fixture.food), afterCreate)
   assert.equal(await frontendFoodSpent(fixture), afterCreate.food)
@@ -377,6 +379,97 @@ test('P1 S6: a card purchase of last month written and deleted in the same chat 
   assert.deepEqual(deleted, { success: true, message: 'Transacción eliminada y saldos restaurados.' })
   assert.deepEqual(budgetFigures(await runTool(chat, 'getWorkspaceSettings'), fixture.food), before)
   assert.deepEqual(budgetFigures(await runTool(fixture.tools(), 'getWorkspaceSettings'), fixture.food), before)
+})
+
+test('P1 S8.4: a workspace without billing cards gets byte-identical summaries (card ledger only for billing cards)', async () => {
+  // The shared fixture in its own workspace, with the Visa's billing days removed: no account bills
+  // by statement, so the Asesor reads no card history and counts cards like before the ledger.
+  const workspaceId = 'ws-agent-no-billing-cards'
+  const owner = 'agent-user-no-billing-cards'
+  const noCards = await seedAgentFixture(db, { workspaceId, userId: owner, now: FIXED_NOW })
+  await db.collection('accounts').doc(noCards.accounts.card).update({ statementClosingDay: null, paymentDueDay: null })
+  const noCardTools = buildAgentTools(db, { workspaceId, userId: owner, timeZone: TIME_ZONE, primaryCurrency: 'COP', now: () => FIXED_NOW })
+  const outputs = {}
+  for (const [key, name, input] of [
+    ['month', 'getFinancialSummary', { preset: 'this_month', groupBy: 'category', compareWithPrevious: true, topN: 10 }],
+    ['lastMonth', 'getFinancialSummary', { preset: 'last_month', groupBy: 'day' }],
+    ['range', 'getFinancialSummary', { startDate: '2026-09-15', endDate: '2026-11-30', groupBy: 'month' }],
+    ['averages', 'getFinancialSummary', { lastCompleteMonths: 2, groupBy: 'account', type: 'expense' }],
+    ['settings', 'getWorkspaceSettings', {}]
+  ]) outputs[key] = await runTool(noCardTools, name, input)
+  // Readable totals first, to locate a difference.
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(outputs).map(([key, value]) => [key, value.totals ?? value.currentMonth.totals])),
+    {
+      month: { income: 5_000_000, expenses: 560_000, net: 4_440_000, savingsRate: 88.8, upcomingInstallments: 0 },
+      lastMonth: { income: 4_000_000, expenses: 210_000, net: 3_790_000, savingsRate: 94.8, upcomingInstallments: 0 },
+      range: { income: 9_000_000, expenses: 770_000, net: 8_230_000, savingsRate: 91.4, upcomingInstallments: 100_000 },
+      averages: { income: 0, expenses: 210_000, net: -210_000, savingsRate: 0, upcomingInstallments: 0 },
+      settings: { income: 5_000_000, expenses: 560_000, net: 4_440_000, savingsRate: 88.8, upcomingInstallments: 0 }
+    }
+  )
+  // SHA-256 of the exact JSON of all five outputs, captured at a6c71bc (before the card ledger
+  // joined the cash flow): groups, top expenses, comparison, averages, byBudget, budgets and notes.
+  assert.equal(createHash('sha256').update(JSON.stringify(outputs)).digest('hex'), 'df4f4b047499ab724f0a13e0048cd755e59b9e3fc4bf3176a62184ec362333f8')
+})
+
+/** `db` that records every `where` as "field op", so a test can see which queries a tool ran. */
+const recordingQueries = (target, log) => new Proxy(target, {
+  get(object, key) {
+    const value = object[key]
+    if (typeof value !== 'function') return value
+    if (key === 'where') return (...args) => { log.push(`${args[0]} ${args[1]}`); return recordingQueries(value.apply(object, args), log) }
+    if (['collection', 'doc', 'orderBy', 'limit', 'select'].includes(key)) return (...args) => recordingQueries(value.apply(object, args), log)
+    return value.bind(object)
+  }
+})
+
+test('P1 S8.4: a date-only card expense counts in Consumo budgets and, with a payment, in cash flow; a mirror-card summary reads no card history', async () => {
+  const workspaceId = `${ids.workspaceId}-legacy`
+  const owner = `${userId}-legacy`
+  const id = name => `${workspaceId}-${name}`
+  const local = (month, day) => Timestamp.fromDate(zonedWallClockToInstant(2026, month, day, 12, TIME_ZONE))
+  const batch = db.batch()
+  const set = (collection, docId, data) => batch.set(db.collection(collection).doc(docId), data)
+  set('workspaces', workspaceId, {
+    name: 'Legacy', ownerId: owner, members: [owner], currency: 'COP',
+    categoryBudgets: { [id('food')]: 500_000 }, categoryBudgetCurrency: 'COP', expenseLimit: 1_000_000
+  })
+  set('categories', id('food'), { workspaceId, userId: owner, name: 'Comida', type: 'expense' })
+  const account = (key, data) => set('accounts', id(key), { workspaceId, userId: owner, name: key, currency: 'COP', limit: 0, ...data })
+  account('bank', { type: 'checking', balance: 1_000_000 })
+  // Closes on the 25th, due on the 5th of the next month. Balance = -100,000 - 70,000 + 120,000.
+  account('visa', { type: 'credit', balance: -50_000, statementClosingDay: 25, paymentDueDay: 5 })
+  // A shared-expense bridge with billing days: mirrors never bill by statement.
+  account('bridge', { type: 'credit', balance: -9_000, statementClosingDay: 20, paymentDueDay: 5, mirror: { workspaceId: 'partner' } })
+  const movement = (key, data) => set('transactions', id(key), {
+    workspaceId, userId: owner, description: key, categoryId: id('food'), toAccountId: null, installments: 1, currency: 'COP', ...data
+  })
+  movement('sep', { type: 'expense', amount: -100_000, accountId: id('visa'), date: local(8, 10) })
+  // Legacy date-only string: the October cycle, statement due Nov 5.
+  movement('legacy', { type: 'expense', amount: -70_000, accountId: id('visa'), date: '2026-10-03' })
+  // Oct 8: pays the statement due Oct 5 (100,000) and 20,000 of the one due Nov 5.
+  movement('pay', { type: 'transfer', amount: 120_000, accountId: id('bank'), toAccountId: id('visa'), categoryId: '', date: local(9, 8) })
+  movement('shared', { type: 'expense', amount: -9_000, accountId: id('bridge'), date: local(9, 7) })
+  await batch.commit()
+
+  const log = []
+  const legacyTools = buildAgentTools(recordingQueries(db, log), { workspaceId, userId: owner, timeZone: TIME_ZONE, primaryCurrency: 'COP', now: () => FIXED_NOW })
+  const settings = await runTool(legacyTools, 'getWorkspaceSettings')
+  // Consumo: the date-only purchase counts in its October cycle, plus the bridge expense.
+  assert.equal(settings.currentMonth.expenseLimit.spent, 79_000)
+  // Cash flow: the statement paid on Oct 8, the 20,000 paid early of the next one and the bridge expense.
+  assert.equal(settings.currentMonth.totals.expenses, 129_000)
+  assert.equal((await runTool(legacyTools, 'getFinancialSummary', { preset: 'this_month' })).totals.expenses, 129_000)
+
+  // A summary of the bridge never needs the card ledger: same figures as before, no card history read.
+  log.length = 0
+  const bridge = await runTool(legacyTools, 'getFinancialSummary', { preset: 'this_month', accountId: id('bridge') })
+  assert.deepEqual(bridge.totals, { income: 0, expenses: 9_000, net: -9_000, savingsRate: 0, upcomingInstallments: 0 })
+  assert.deepEqual(bridge.topExpenses.map(row => [row.id, row.amount, row.date]), [[id('shared'), 9_000, '2026-10-07']])
+  assert.deepEqual(bridge.notes, ['Excluye transferencias, préstamos (loan) y pagos de préstamos recibidos (loan_payment): no son gasto ni ingreso.'])
+  assert.ok(log.length > 0)
+  assert.ok(!log.some(entry => entry.endsWith(' in')), log.join(', '))
 })
 
 test('destructive tools without confirmed return needsConfirmation and write nothing', async () => {

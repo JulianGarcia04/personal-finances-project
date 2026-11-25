@@ -2,7 +2,8 @@ import * as admin from "firebase-admin";
 import { FieldPath, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { z } from "zod";
 import { createWorkspaceAccount, mutateWorkspaceTransaction } from "./pockets";
-import { cardBillingOf, storedDateValue, workspaceCardBasis, zonedDateKey, zonedYearMonth } from "./http";
+import { cardBillingOf, storedDateValue, zonedDateKey, zonedYearMonth } from "./http";
+import type { CardLedgerTransaction } from "./cardStatements";
 import {
   AgentToolError,
   localDayRange,
@@ -28,8 +29,7 @@ import {
   summarize,
   SummaryBudget,
   SummaryOptions,
-  SummaryTransaction,
-  wholeMonths
+  SummaryTransaction
 } from "./agentQueries";
 import { roundMoney } from "./money";
 import { buildLegacyCategoryBudgetsPatch, parseLegacyCategoryBudgetCurrency } from "./legacyCategoryBudgets";
@@ -84,15 +84,13 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
   };
 
   // Workspace accounts (names, card billing days and balances), loaded once per request and
-  // invalidated by createAccount and by transaction writes (balances feed the Pagos card ledger).
+  // invalidated by createAccount and by transaction writes (balances feed the card ledger).
   let accountsPromise: Promise<admin.firestore.QueryDocumentSnapshot[]> | null = null;
   const loadAccounts = (): Promise<admin.firestore.QueryDocumentSnapshot[]> => {
     accountsPromise ??= db.collection('accounts').where('workspaceId', '==', workspaceId).get()
       .then(snapshot => snapshot.docs);
     return accountsPromise;
   };
-  const loadCardBilling = async () =>
-    cardBillingByAccount((await loadAccounts()).map(docSnap => ({ ...docSnap.data(), id: docSnap.id })));
 
   // Account and category names, loaded once per request (invalidated by createAccount).
   let namesPromise: Promise<NameMaps> | null = null;
@@ -492,9 +490,12 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
     }
   );
 
-  // One range query plus older installment purchases whose later shares may fall
-  // inside the range, and expenses of the two previous months whose card statements may
-  // be paid inside it; aggregation itself is pure (agentQueries.ts).
+  // One range query plus older installment purchases whose later shares may fall inside the
+  // range, and expenses of the two previous months. Card expenses of any month come with the card
+  // history (loadCards); the two-month rows are kept because byBudget's missing-rate note lists the
+  // currency of every loaded row, so without billing cards that note stays as it was. With billing
+  // cards it also lists the currencies of the card history, which feeds the cash flow.
+  // Aggregation itself is pure (agentQueries.ts).
   const loadSummaryRows = async (start: Date, endExclusive: Date): Promise<SummaryTransaction[]> => {
     const transactions = db.collection('transactions').where('workspaceId', '==', workspaceId);
     const [inRange, installmentPurchases, recentExpenses] = await Promise.all([
@@ -527,23 +528,25 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
     });
     return [...rows.values()];
   };
+  /** Period rows plus the card expenses of the whole history, each row once. */
+  const withCardExpenses = (rows: SummaryTransaction[], cardExpenses: SummaryTransaction[]) =>
+    cardExpenses.length === 0 ? rows : [...new Map([...rows, ...cardExpenses].map(row => [row.id, row])).values()];
 
   const chunksOf = (ids: string[]) =>
     Array.from({ length: Math.ceil(ids.length / 30) }, (_, index) => ids.slice(index * 30, index * 30 + 30));
 
-  // Card billing of the budget figures (getWorkspaceSettings budgets, byBudget) by the basis the
-  // workspace owner chose (budgetCardBasis), with the alerts' alertCardBilling; cash flow keeps the
-  // payment month (loadCardBilling). Only Pagos with a billing card reads more: every movement on
-  // those cards over their whole history (two queries per 30 cards) for the statement ledger. Their
-  // expenses join the budget rows, since an early or late payment can move an older purchase into
-  // the month. `withHistory` false skips that read when no budget figure will be computed.
-  const loadBudgetCards = async (workspace: Promise<admin.firestore.DocumentData>, withHistory = true) => {
-    const [ws, accountDocs] = await Promise.all([workspace, loadAccounts()]);
-    const accounts = accountDocs.map(docSnap => ({ ...docSnap.data(), id: docSnap.id }));
+  // The workspace's billing cards, read once per tool call for every figure that needs them. Cash
+  // flow counts their expenses like the Dashboard: when the statement is paid, with the payments
+  // already made to each card (statement ledger), whatever the budget basis. That needs every
+  // movement on those cards over their whole history (two `in` queries per 30 cards), whose
+  // expenses join the summary rows because an early or late payment can move a purchase into any
+  // month. Nothing more is read without billing cards, or for a summary of another account.
+  const loadCards = async (onlyAccountId?: string) => {
+    const accounts: (admin.firestore.DocumentData & { id: string })[] =
+      (await loadAccounts()).map(docSnap => ({ ...docSnap.data(), id: docSnap.id }));
     const cards = new Set(accounts.filter(account => cardBillingOf(account) !== null).map(account => account.id));
-    const basis = workspaceCardBasis(ws);
     let history: admin.firestore.QueryDocumentSnapshot[] = [];
-    if (basis === 'payment' && withHistory && cards.size > 0) {
+    if (cards.size > 0 && (!onlyAccountId || cards.has(onlyAccountId))) {
       const transactions = db.collection('transactions').where('workspaceId', '==', workspaceId);
       const snapshots = await Promise.all(chunksOf([...cards]).flatMap(chunk => [
         transactions.where('accountId', 'in', chunk).get(),
@@ -551,50 +554,57 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
       ]));
       history = [...new Map(snapshots.flatMap(result => result.docs).map(docSnap => [docSnap.id, docSnap])).values()];
     }
-    const ledgerInput = history.length > 0 ? { transactions: history.map(docSnap => docSnap.data()), timeZone } : undefined;
-    const { billingFor } = alertCardBilling(ws, accounts, ledgerInput);
-    const expenses = toSummaryRows(history).filter(row => row.type === 'expense' && cards.has(String(row.accountId)));
-    return { basis, billingFor, hasCards: cards.size > 0, expenses };
+    const ledgerInput = history.length > 0
+      ? { transactions: history.map(docSnap => docSnap.data() as CardLedgerTransaction), timeZone }
+      : undefined;
+    return {
+      accounts,
+      hasCards: cards.size > 0,
+      ledgerInput,
+      cashFlowBilling: cardBillingByAccount(accounts, 'payment', ledgerInput),
+      expenses: toSummaryRows(history).filter(row => row.type === 'expense' && cards.has(String(row.accountId)))
+    };
   };
+  type CardData = Awaited<ReturnType<typeof loadCards>>;
+  // Card billing of the budget figures (getWorkspaceSettings budgets, byBudget) by the basis the
+  // workspace owner chose (budgetCardBasis), with the alerts' alertCardBilling and the same ledger.
+  const budgetCardsOf = (ws: admin.firestore.DocumentData, cards: CardData) =>
+    alertCardBilling(ws, cards.accounts, cards.ledgerInput);
 
   // Budgets for summarize's byBudget: one budgets query; then only what budgetBreakdownQueries asks
   // for: all-time transactions of active event budgets and assigned income of archived ones
   // (budgetId in, chunks of 30), and the workspace's transfers when an active event budget links
-  // accounts. Card expenses count by the workspace basis (loadBudgetCards).
+  // accounts. Card expenses count by the workspace basis (budgetCardsOf).
   const loadBudgetBreakdown = async (
     workspace: Promise<admin.firestore.DocumentData>,
-    cardHistory: boolean
+    cardData: Promise<CardData>
   ): Promise<NonNullable<SummaryOptions['budgetBreakdown']>> => {
-    const [snapshot, accounts, cards] = await Promise.all([
+    const [snapshot, ws, cards] = await Promise.all([
       db.collection('budgets').where('workspaceId', '==', workspaceId).get(),
-      loadAccounts(),
-      loadBudgetCards(workspace, cardHistory)
+      workspace,
+      cardData
     ]);
-    const creditAccountIds = new Set(
-      accounts.filter(docSnap => docSnap.data().type === 'credit').map(docSnap => docSnap.id)
-    );
+    const creditAccountIds = new Set(cards.accounts.filter(account => account.type === 'credit').map(account => account.id));
     const budgets: SummaryBudget[] = snapshot.docs.map(docSnap => ({ ...docSnap.data(), id: docSnap.id }));
     const breakdown = {
       budgets,
       creditAccountIds,
-      ...(cards.hasCards ? { cards: { basis: cards.basis, billingFor: cards.billingFor } } : {})
+      ...(cards.hasCards ? { cards: budgetCardsOf(ws, cards) } : {})
     };
     const plan = budgetBreakdownQueries(budgets);
-    if (plan.eventIds.length === 0 && plan.archivedEventIds.length === 0) {
-      return cards.expenses.length > 0 ? { ...breakdown, extraRows: cards.expenses } : breakdown;
-    }
+    if (plan.eventIds.length === 0 && plan.archivedEventIds.length === 0) return breakdown;
     const transactions = db.collection('transactions').where('workspaceId', '==', workspaceId);
     const snapshots = await Promise.all([
       ...chunksOf(plan.eventIds).map(chunk => transactions.where('budgetId', 'in', chunk).get()),
       ...chunksOf(plan.archivedEventIds).map(chunk => transactions.where('type', '==', 'income').where('budgetId', 'in', chunk).get()),
       ...(plan.transfers ? [transactions.where('type', '==', 'transfer').get()] : [])
     ]);
-    return { ...breakdown, extraRows: [...toSummaryRows(snapshots.flatMap(result => result.docs)), ...cards.expenses] };
+    return { ...breakdown, extraRows: toSummaryRows(snapshots.flatMap(result => result.docs)) };
   };
 
   define(
     'getFinancialSummary',
-    `Resumen financiero de un periodo con la misma lógica del panel de control: ingresos, gastos, neto y tasa de ahorro en la moneda principal (${primaryCurrency}), convertidos con las tasas del workspace, cuotas repartidas por mes (las compras con tarjeta de crédito con día de corte y de pago cuentan en el mes en que se paga su extracto) y sin transferencias ni préstamos. Úsalo SIEMPRE para totales, resúmenes, "¿cuánto gasté…?", gastos por categoría/cuenta/mes/día, comparaciones con el periodo anterior y promedios mensuales (lastCompleteMonths). Define el periodo con preset, con startDate/endDate o con lastCompleteMonths (solo una forma; por defecto el mes en curso). La salida trae period {start, end, label}, totals, groups, topExpenses, comparison y notes. totals es TODO el dinero que entró y salió, sin importar el presupuesto. byBudget (solo para meses calendario completos y sin filtro de cuenta/categoría) separa por presupuesto: monthlyIncome es el ingreso sin el asignado a otros presupuestos (fondos de ese presupuesto), monthlyExpense es el gasto sin el de presupuestos que se pagan con sus propios fondos, y budgets trae por presupuesto funds (fondos), spent (gastado) y available (disponible); byBudget cuenta las compras con tarjeta según la base Consumo/Pagos del workspace (ver sus notes), por eso puede diferir de totals; funds y available en null sin incomplete significan que el presupuesto no recibió fondos en el periodo (solo tiene gasto); con incomplete, un null significa que falta una tasa de cambio. Fondos negativos significan que salió más plata de la que entró a ese presupuesto.`,
+    `Resumen financiero de un periodo con la misma lógica del flujo de caja del panel de control (vista «Todo»): ingresos, gastos, neto y tasa de ahorro en la moneda principal (${primaryCurrency}), convertidos con las tasas del workspace, cuotas repartidas por mes (las compras con tarjeta de crédito con día de corte y de pago cuentan cuando se paga su extracto: lo abonado a la tarjeta en el mes del abono y lo que falta por pagar en el mes de pago) y sin transferencias ni préstamos. Úsalo SIEMPRE para totales, resúmenes, "¿cuánto gasté…?", gastos por categoría/cuenta/mes/día, comparaciones con el periodo anterior y promedios mensuales (lastCompleteMonths). Define el periodo con preset, con startDate/endDate o con lastCompleteMonths (solo una forma; por defecto el mes en curso). La salida trae period {start, end, label}, totals, groups, topExpenses, comparison y notes. totals es TODO el dinero que entró y salió, sin importar el presupuesto. comparison compara el periodo completo con el anterior completo; el porcentaje del panel de control compara el mes en curso solo hasta hoy con los mismos días del mes anterior, así que puede ser distinto. byBudget (solo para meses calendario completos y sin filtro de cuenta/categoría) separa por presupuesto: monthlyIncome es el ingreso sin el asignado a otros presupuestos (fondos de ese presupuesto), monthlyExpense es el gasto sin el de presupuestos que se pagan con sus propios fondos, y budgets trae por presupuesto funds (fondos), spent (gastado) y available (disponible); byBudget cuenta las compras con tarjeta según la base Consumo/Pagos del workspace, como los presupuestos del panel de control (ver sus notes), por eso puede diferir de totals y, con la base Consumo, de la vista «Por presupuesto» del panel de control, que cuenta las tarjetas como totals; funds y available en null sin incomplete significan que el presupuesto no recibió fondos en el periodo (solo tiene gasto); con incomplete, un null significa que falta una tasa de cambio. Fondos negativos significan que salió más plata de la que entró a ese presupuesto.`,
     z.object({
       preset: z.enum(['today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month', 'this_year', 'last_year']).optional()
         .describe('Periodo relativo en la zona horaria del usuario (semanas de lunes a domingo; meses y años calendario completos).'),
@@ -614,17 +624,17 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
       const period = resolvePeriod(input, now, timeZone);
       const start = input.compareWithPrevious ? previousPeriod(period, timeZone).startInstant : period.startInstant;
       const workspace = loadWorkspace();
-      const [rows, names, ws, cardBilling, budgetBreakdown] = await Promise.all([
+      const cardData = loadCards(input.accountId);
+      const [rows, names, ws, cards, budgetBreakdown] = await Promise.all([
         loadSummaryRows(start, period.endExclusive),
         loadNames(),
         workspace,
-        loadCardBilling(),
-        // byBudget is workspace-wide, so it is skipped for account/category filters; it needs the
-        // card history only for whole calendar months, the only periods it is computed for.
-        input.accountId || input.categoryId ? undefined : loadBudgetBreakdown(workspace, wholeMonths(period) !== null)
+        cardData,
+        // byBudget is workspace-wide, so it is skipped for account/category filters.
+        input.accountId || input.categoryId ? undefined : loadBudgetBreakdown(workspace, cardData)
       ]);
       const { rates, mismatchedBase } = ratesInfoOf(ws);
-      const summary = summarize(rows, {
+      const summary = summarize(withCardExpenses(rows, cards.expenses), {
         ...input,
         period,
         now,
@@ -632,7 +642,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
         primaryCurrency,
         exchangeRates: rates,
         names,
-        cardBilling,
+        cardBilling: cards.cashFlowBilling,
         budgetBreakdown
       });
       const fxNote = mismatchedFxNote(mismatchedBase);
@@ -642,35 +652,34 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
 
   define(
     'getWorkspaceSettings',
-    'Configuración financiera del workspace: moneda principal, tasas de cambio, tope total del presupuesto mensual base, ingreso declarado y reparto 50/30/20, asignaciones a metas y presupuestos por categoría con el gasto real del mes en curso (gastado, restante y % usado). currentMonth.expenseLimit incluye los gastos sin presupuesto asignado y excluye los de otros presupuestos; currentMonth.totals sigue incluyendo todos los presupuestos. expenseLimit y categoryBudgets cuentan las compras con tarjeta según la base Consumo/Pagos del workspace; totals, en el mes en que se paga el extracto. El tope se configura en Presupuestos. Úsalo para preguntas de presupuestos, límites, tasas o "¿cómo voy este mes?".',
+    'Configuración financiera del workspace: moneda principal, tasas de cambio, tope total del presupuesto mensual base, ingreso declarado y reparto 50/30/20, asignaciones a metas y presupuestos por categoría con el gasto real del mes en curso (gastado, restante y % usado). currentMonth.expenseLimit incluye los gastos sin presupuesto asignado y excluye los de otros presupuestos; currentMonth.totals sigue incluyendo todos los presupuestos. expenseLimit y categoryBudgets cuentan las compras con tarjeta según la base Consumo/Pagos del workspace; totals, como el flujo de caja del panel de control (vista «Todo»): cuando se paga el extracto, con lo abonado a la tarjeta en el mes del abono. El tope se configura en Presupuestos. Úsalo para preguntas de presupuestos, límites, tasas o "¿cómo voy este mes?".',
     z.object({}),
     async () => {
       const now = clock();
       const period = resolvePeriod({ preset: 'this_month' }, now, timeZone);
-      const workspace = loadWorkspace();
-      const [ws, goalsSnap, rows, names, cardBilling, cards] = await Promise.all([
-        workspace,
+      const [ws, goalsSnap, rows, names, cards] = await Promise.all([
+        loadWorkspace(),
         db.collection('goals').where('workspaceId', '==', workspaceId).get(),
         loadSummaryRows(period.startInstant, period.endExclusive),
         loadNames(),
-        loadCardBilling(),
-        loadBudgetCards(workspace)
+        loadCards()
       ]);
       const categoryBudgetCurrency = parseLegacyCategoryBudgetCurrency(ws);
       const { rates, mismatchedBase } = ratesInfoOf(ws);
-      // Cash flow: card statements in the month they are due.
-      const month = summarize(rows, {
-        period, now, timeZone, primaryCurrency, exchangeRates: rates, names, cardBilling,
+      const monthRows = withCardExpenses(rows, cards.expenses);
+      // Cash flow, like the Dashboard: card statements when paid, with the card payments made.
+      const month = summarize(monthRows, {
+        period, now, timeZone, primaryCurrency, exchangeRates: rates, names, cardBilling: cards.cashFlowBilling,
         groupBy: 'category', topN: 0
       });
       // Budgets: the base monthly budget's expenses, card expenses by the workspace basis.
-      const budgetRows = new Map([...rows, ...cards.expenses].map(row => [row.id, row]));
-      const defaultBudgetRows = [...budgetRows.values()].filter(row =>
+      const budgetCards = budgetCardsOf(ws, cards);
+      const defaultBudgetRows = monthRows.filter(row =>
         row.type !== 'expense' || !row.budgetId || row.budgetId === 'default-monthly'
       );
       const defaultBudgetMonth = budgetMonthSpend(defaultBudgetRows, {
         month: zonedYearMonth(period.startInstant, timeZone), timeZone, primaryCurrency, exchangeRates: rates,
-        billingFor: cards.billingFor
+        billingFor: budgetCards.billingFor
       });
       const budgets = buildBudgetStatus({
         categoryBudgets: (ws.categoryBudgets ?? {}) as Record<string, number>,
@@ -693,7 +702,7 @@ export function buildAgentTools(db: admin.firestore.Firestore, ctx: AgentToolCon
       for (const code of defaultBudgetMonth.missingRates) {
         if (!notes.includes(missingRateNote(code))) notes.push(missingRateNote(code));
       }
-      if (cards.hasCards) notes.push(budgetCardBasisNote('currentMonth.expenseLimit y categoryBudgets', cards.basis));
+      if (cards.hasCards) notes.push(budgetCardBasisNote('currentMonth.expenseLimit y categoryBudgets', budgetCards.basis));
       const fxNote = mismatchedFxNote(mismatchedBase);
       if (fxNote) notes.push(fxNote);
       if (budgets.categories.length > 0) {

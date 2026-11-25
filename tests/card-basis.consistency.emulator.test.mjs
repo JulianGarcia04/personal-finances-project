@@ -2,7 +2,9 @@
 // Dashboard.vue <script setup> computeds with the app's src/lib helpers), the budget alerts
 // (functions/lib/budgetAlerts.js helpers, loaded like notifyBudgetThreshold) and the Asesor (the real
 // buildAgentTools tool bodies) report the same budget figures under Consumo, Pagos and an unset basis
-// (= Consumo), and the same cash flow under both bases.
+// (= Consumo), and the same cash flow under both bases. The Asesor's cash flow (summary totals and
+// category groups) equals the Dashboard's «Todo» view: card statements count when paid, with the
+// payments already made to each card (P1 S8.4).
 // Dates are relative to the current month in Bogotá and "now" is its 24th (Date is mocked while the
 // Dashboard computeds run), so no figure depends on the day the suite runs.
 // Requires `pnpm --filter functions build`. Run (demo project only):
@@ -171,7 +173,9 @@ function dashboardFigures(fx, prefix) {
       activeWorkspace: fx.workspace,
       activeWorkspaceProfiles: fx.users.map(user => ({ uid: user.id, displayName: user.displayName, email: user.email }))
     },
-    authStore: { activeWorkspaceId: fx.workspaceId, user: { uid: fx.owner } }
+    authStore: { activeWorkspaceId: fx.workspaceId, user: { uid: fx.owner } },
+    // The month the Dashboard shows (useSelectedMonth): the current one.
+    selectedMonth: { value: { year: current.year, month: current.month } }
   })
   const cache = new Map()
   const env = new Proxy({}, {
@@ -197,6 +201,10 @@ function dashboardFigures(fx, prefix) {
   })
   const categoriesOf = scopeReport =>
     Object.fromEntries(Object.entries(scopeReport.categories).map(([key, row]) => [short(key), round(row.monthlyAllocation?.amount)]))
+  // The 6-month chart's expenses of one month (Dashboard bar chart: cash-flow billing, ledger included).
+  const monthExpenses = ({ year, month }) => round(transactions.reduce((sum, t) =>
+    sum + provided.expenseAmountForMonth(t, year, month, env.cardBillingFor.value(t.accountId)), 0))
+  const previous = new Date(current.year, current.month - 1, 1)
 
   mock.timers.enable({ apis: ['Date'], now: NOW.getTime() })
   try {
@@ -214,6 +222,20 @@ function dashboardFigures(fx, prefix) {
         travelCategories: categoriesOf(travelReport),
         budgets: deep(value('budgetBreakdown').map(b => ({ id: short(b.id), spent: b.spent, funds: b.fundsAmount, available: b.available?.amount ?? b.available }))),
         allBudgetsMonthly: round(value('allBudgetsEstimatedMonthly')?.amount)
+      },
+      // Headline figures of the «Todo» view (full month), its donut and last month's bar.
+      monthTotals: {
+        flowView: value('flowView'),
+        income: round(value('monthlyIncome')),
+        expenses: round(value('monthlyExpenses')),
+        savingsRate: Math.round(value('savingsRate') * 10) / 10,
+        byCategory: deep(value('expensesByCategory')),
+        previousMonthExpenses: monthExpenses({ year: previous.getFullYear(), month: previous.getMonth() })
+      },
+      // The «Por presupuesto» view: month figures without the budgets paid by their own funds.
+      budgetView: {
+        income: round(env.getMoMData('income', 'budget').current),
+        expenses: round(env.getMoMData('expense', 'budget').current)
       },
       cashFlow: deep({
         monthEndProjection: value('monthEndProjection'),
@@ -260,7 +282,8 @@ async function serverFigures(fx, prefix) {
   const tools = buildAgentTools(db, { workspaceId: fx.workspaceId, userId: fx.owner, timeZone: TIME_ZONE, primaryCurrency: 'COP', now: () => NOW })
   const run = (name, input = {}) => tools.find(tool => tool.name === name).run(input)
   const settings = await run('getWorkspaceSettings')
-  const summary = await run('getFinancialSummary', { preset: 'this_month' })
+  const summary = await run('getFinancialSummary', { preset: 'this_month', groupBy: 'category' })
+  const lastMonth = await run('getFinancialSummary', { preset: 'last_month' })
   const asesor = {
     categoryBudgets: Object.fromEntries(settings.currentMonth.categoryBudgets.map(row => [short(row.categoryId), row.spent])),
     expenseLimitSpent: settings.currentMonth.expenseLimit.spent,
@@ -269,7 +292,16 @@ async function serverFigures(fx, prefix) {
     summaryTotals: summary.totals,
     monthlyExpense: summary.byBudget.monthlyExpense,
     monthlyIncome: summary.byBudget.monthlyIncome,
-    budgets: summary.byBudget.budgets.map(b => ({ id: short(b.budgetId ?? b.id), spent: b.spent, funds: b.funds, available: b.available }))
+    budgets: summary.byBudget.budgets.map(b => ({ id: short(b.budgetId ?? b.id), spent: b.spent, funds: b.funds, available: b.available })),
+    // Same shape as the Dashboard's monthTotals.
+    monthTotals: {
+      flowView: 'all',
+      income: summary.totals.income,
+      expenses: summary.totals.expenses,
+      savingsRate: summary.totals.savingsRate,
+      byCategory: Object.fromEntries(summary.groups.filter(group => group.expenses > 0).map(group => [group.name, group.expenses])),
+      previousMonthExpenses: lastMonth.totals.expenses
+    }
   }
 
   // Loaded like notifyBudgetThreshold: the workspace basis decides the card billing.
@@ -387,4 +419,38 @@ test('cash flow is identical under both card bases on the Dashboard and in the A
     [{ id: 'master', amount: 140_000, debt: 230_000 }, { id: 'visa', amount: 690_000, debt: 690_000 }]
   )
   assert.equal(payment.dashboard.cashFlow.committedCards, 140_000)
+})
+
+test('P1 S8.4: the Asesor cash flow equals the Dashboard «Todo» view under both bases, card payments included', async () => {
+  const [consumption, payment] = await Promise.all([figuresFor('consumption'), figuresFor('payment')])
+  for (const { dashboard, asesor } of [consumption, payment]) {
+    // Every card statement counts when it is paid: early, on-time and late payments in the month
+    // they were made, the unpaid rest in its payment month.
+    assert.deepEqual(dashboard.monthTotals, {
+      flowView: 'all',
+      income: 3_420_000,
+      expenses: 715_000,
+      savingsRate: 79.1,
+      byCategory: { Comida: 381_582.28, Ocio: 158_417.72, Tecnologia: 175_000 },
+      previousMonthExpenses: 160_000
+    })
+    assert.deepEqual(asesor.monthTotals, dashboard.monthTotals)
+    // getWorkspaceSettings reports the same month.
+    assert.deepEqual(
+      { income: asesor.totals.income, expenses: asesor.totals.expenses, savingsRate: asesor.totals.savingsRate },
+      { income: 3_420_000, expenses: 715_000, savingsRate: 79.1 }
+    )
+  }
+})
+
+test('P1 S8.4: byBudget follows the workspace basis: equal to the Dashboard «Por presupuesto» view under Pagos, not under Consumo', async () => {
+  const [consumption, payment] = await Promise.all([figuresFor('consumption'), figuresFor('payment')])
+  // That view counts cards like the cash flow (when paid), whatever the basis.
+  assert.deepEqual(consumption.dashboard.budgetView, payment.dashboard.budgetView)
+  assert.equal(payment.asesor.monthlyIncome, payment.dashboard.budgetView.income)
+  assert.equal(payment.asesor.monthlyExpense, payment.dashboard.budgetView.expenses)
+  assert.equal(consumption.asesor.monthlyIncome, consumption.dashboard.budgetView.income)
+  // Under Consumo the Asesor's budget figures count each card purchase in its cycle month, like the
+  // Dashboard's budget widgets, so they differ from that cash-flow view by design.
+  assert.notEqual(consumption.asesor.monthlyExpense, consumption.dashboard.budgetView.expenses)
 })

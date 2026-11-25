@@ -277,7 +277,8 @@ test("P1 S3: getWorkspaceSettings reports the base monthly cap separately from a
   const collections = {
     transactions: snapshots([...rows, ...assigns].map(row => [row.id, row])),
     categories: snapshots([...NAMES.categories].map(([id, name]) => [id, { name }])),
-    accounts: snapshots([["card", { type: "credit", name: "Visa", statementClosingDay: 25, paymentDueDay: 5 }]])
+    // Balance as its movements leave it (300,000 charged, 60,000 received): cash flow reads it for the card ledger.
+    accounts: snapshots([["card", { type: "credit", name: "Visa", statementClosingDay: 25, paymentDueDay: 5, balance: -240_000 }]])
   };
   // Stub the queries with local snapshots. Dates and duplicate rows are still handled by the real tool.
   const db = { collection(name: keyof typeof collections) {
@@ -717,7 +718,7 @@ test("P1 S6: under Consumo (no basis set) the Asesor counts a card purchase in i
   ]);
   assert.deepEqual(settings.currentMonth.categoryBudgetTotals, { budget: 200_000, spent: 150_000, percentUsed: 75 });
   assert.deepEqual(settings.currentMonth.expenseLimit, { limit: 500_000, spent: 150_000, remaining: 350_000, percentUsed: 30, exceeded: false });
-  // Cash flow keeps the payment month: the statement paid on Oct 5 plus the bank expense.
+  // Cash flow counts each statement when it is paid: the one due on Oct 5 plus the bank expense.
   assert.equal(settings.currentMonth.totals.expenses, 80_000);
   assert.ok(settings.notes.some((note: string) => note.includes("base Consumo")));
 
@@ -725,8 +726,8 @@ test("P1 S6: under Consumo (no basis set) the Asesor counts a card purchase in i
   assert.equal(summary.totals.expenses, 80_000);
   assert.equal(summary.byBudget.monthlyExpense, 150_000);
   assert.ok(summary.byBudget.notes.some((note: string) => note.includes("base Consumo")));
-  // Consumo never reads the card history.
-  assert.ok(!queries.includes(CARD_HISTORY));
+  // Cash flow reads the card history under every basis (the payments made to each card, like the Dashboard).
+  assert.ok(queries.includes(CARD_HISTORY));
 });
 
 test("P1 S6: under Pagos a statement paid early counts in the month paid, and its unpaid rest in its payment month", async () => {
@@ -742,7 +743,8 @@ test("P1 S6: under Pagos a statement paid early counts in the month paid, and it
     { categoryId: "food", categoryName: "Comida", limit: 200_000, spent: 110_000, remaining: 90_000, percentUsed: 55, exceeded: false }
   ]);
   assert.deepEqual(settings.currentMonth.expenseLimit, { limit: 500_000, spent: 110_000, remaining: 390_000, percentUsed: 22, exceeded: false });
-  assert.equal(settings.currentMonth.totals.expenses, 80_000);
+  // Cash flow counts the card the same way, like the Dashboard.
+  assert.equal(settings.currentMonth.totals.expenses, 110_000);
   assert.ok(settings.notes.some((note: string) => note.includes("base Pagos")));
   assert.equal((await october.call("getFinancialSummary", { preset: "this_month" })).byBudget.monthlyExpense, 110_000);
   assert.ok(october.queries.includes(CARD_HISTORY));
@@ -752,13 +754,17 @@ test("P1 S6: under Pagos a statement paid early counts in the month paid, and it
   const novemberSettings = await november.call("getWorkspaceSettings");
   assert.equal(novemberSettings.currentMonth.categoryBudgets[0].spent, 70_000);
   assert.equal(novemberSettings.currentMonth.expenseLimit.spent, 70_000);
-  assert.equal(novemberSettings.currentMonth.totals.expenses, 100_000);
+  assert.equal(novemberSettings.currentMonth.totals.expenses, 70_000);
   assert.equal((await november.call("getFinancialSummary", { preset: "this_month" })).byBudget.monthlyExpense, 70_000);
 
-  // Periods without byBudget (not whole months) never read the card history.
+  // Periods without byBudget (not whole months) still read the card history for cash flow.
   const week = stubAgentTools(data);
   await week.call("getFinancialSummary", { preset: "this_week" });
-  assert.ok(!week.queries.includes(CARD_HISTORY));
+  assert.ok(week.queries.includes(CARD_HISTORY));
+  // A summary of another account never uses the cards, so it reads no card history.
+  const bank = stubAgentTools(data);
+  await bank.call("getFinancialSummary", { preset: "this_month", accountId: "bank" });
+  assert.ok(!bank.queries.includes(CARD_HISTORY));
 });
 
 test("P1 S6: the Asesor cash-flow summary is identical under both card bases", async () => {
@@ -783,14 +789,15 @@ test("P1 S6: the Asesor cash-flow summary is identical under both card bases", a
     assert.deepEqual(explicit, base, JSON.stringify(input));
     assert.deepEqual(payment, base, JSON.stringify(input));
   }
-  assert.equal((await consumo("getFinancialSummary", { preset: "this_month" })).totals.expenses, 80_000);
+  // The early payment counts in October under both bases, like the Dashboard.
+  assert.equal((await consumo("getFinancialSummary", { preset: "this_month" })).totals.expenses, 110_000);
   const months = await Promise.all([consumo, explicitConsumo, pagos].map(async call => {
     const { period, totals } = (await call("getWorkspaceSettings")).currentMonth;
     return { period, totals };
   }));
   assert.deepEqual(months[1], months[0]);
   assert.deepEqual(months[2], months[0]);
-  assert.deepEqual(months[0].totals, { income: 0, expenses: 80_000, net: -80_000, savingsRate: 0, upcomingInstallments: 0 });
+  assert.deepEqual(months[0].totals, { income: 0, expenses: 110_000, net: -110_000, savingsRate: 0, upcomingInstallments: 0 });
 });
 
 test("P1 S6: without billing cards the Asesor budget figures are the same under both bases, as before", async () => {
@@ -825,4 +832,152 @@ test("P1 S6: without billing cards the Asesor budget figures are the same under 
   });
   assert.ok(!consumo.settings.notes.some((note: string) => /base (Consumo|Pagos)/.test(note)));
   assert.ok(!consumo.summary.byBudget.notes.some((note: string) => /base (Consumo|Pagos)/.test(note)));
+});
+
+// --- P1 S8.4: Asesor cash flow counts card payments like the Dashboard ------------
+
+const LEDGER_ROWS = [...CYCLE_ROWS, EARLY_PAYMENT];
+// The Dashboard's cash-flow billing: payment basis with each card's statement ledger.
+const LEDGER_BILLING = cardBillingByAccount(
+  [{ id: "visa", ...VISA, balance: -70_000 }, { id: "bank", type: "checking" }],
+  "payment",
+  { transactions: LEDGER_ROWS, timeZone: TZ }
+);
+const runLedger = (input: Parameters<typeof resolvePeriod>[0], extra: Partial<Parameters<typeof summarize>[1]> = {}) =>
+  summarize(LEDGER_ROWS, {
+    period: resolvePeriod(input, NOW, TZ),
+    now: NOW,
+    timeZone: TZ,
+    primaryCurrency: "COP",
+    exchangeRates: RATES,
+    names: NAMES,
+    cardBilling: LEDGER_BILLING,
+    ...extra
+  });
+/** The Dashboard's expenses of a local month: each expense's share with the ledger (http.ts port of the app helper). */
+const dashboardMonthExpenses = (year: number, month: number) => LEDGER_ROWS.reduce(
+  (sum, row) => sum + expenseAmountForMonth(row, year, month, TZ, LEDGER_BILLING.get(String(row.accountId)) ?? null),
+  0
+);
+
+test("P1 S8.4: an early card payment moves spend into the month paid in the cash-flow summary", () => {
+  const october = runLedger({ preset: "this_month" });
+  // The Oct 5 statement (30,000, paid on Oct 8), 30,000 paid early of the Nov 5 statement and 50,000 at the bank.
+  assert.deepEqual(october.totals, { income: 0, expenses: 110_000, net: -110_000, savingsRate: 0, upcomingInstallments: 0 });
+  assert.equal(october.totals.expenses, dashboardMonthExpenses(2026, 9));
+  assert.equal(october.topExpenses.find(row => row.id === "octCard")?.amount, 30_000);
+  assert.ok(october.notes.some(note => note.includes("en el mes del abono")));
+  // The card's 60,000 sits on the day it was paid (Oct 8); the bank expense on Oct 5.
+  assert.deepEqual(runLedger({ preset: "this_month" }, { groupBy: "day" }).groups.map(g => [g.key, g.expenses]), [["2026-10-05", 50_000], ["2026-10-08", 60_000]]);
+
+  // November keeps only the 70,000 still unpaid of the Nov 5 statement; nothing counts twice.
+  const months = runLedger({ startDate: "2026-09-01", endDate: "2026-12-31" }, { groupBy: "month" });
+  assert.deepEqual(months.groups.map(g => [g.key, g.expenses]), [["2026-10", 110_000], ["2026-11", 70_000]]);
+  assert.equal(dashboardMonthExpenses(2026, 10), 70_000);
+  const november = summarize(LEDGER_ROWS, {
+    period: resolvePeriod({ preset: "this_month" }, new Date("2026-11-11T15:00:00-05:00"), TZ),
+    now: new Date("2026-11-11T15:00:00-05:00"), timeZone: TZ, primaryCurrency: "COP", exchangeRates: RATES, names: NAMES,
+    cardBilling: LEDGER_BILLING, compareWithPrevious: true
+  });
+  assert.equal(november.totals.expenses, 70_000);
+  assert.equal(november.comparison?.totals.expenses, 110_000);
+});
+
+test("P1 S8.4: card installments paid early split by month, with their share labels", () => {
+  // 90,000 in 3 installments on Oct 3: statements due Nov 5, Dec 5 and Jan 5 (30,000 each). The
+  // card already owed nothing; 45,000 paid on Oct 20 settles the first and half of the second.
+  const rows = [
+    tx("tv", "expense", -90_000, "2026-10-03T17:00:00Z", { accountId: "visa", categoryId: "tech", installments: 3 }),
+    tx("tvPay", "transfer", 45_000, "2026-10-20T17:00:00Z", { accountId: "bank", toAccountId: "visa" })
+  ];
+  const billing = cardBillingByAccount([{ id: "visa", ...VISA, balance: -45_000 }], "payment", { transactions: rows, timeZone: TZ });
+  const s = summarize(rows, {
+    period: resolvePeriod({ startDate: "2026-10-01", endDate: "2027-01-31" }, NOW, TZ),
+    now: NOW, timeZone: TZ, primaryCurrency: "COP", exchangeRates: RATES, names: NAMES, cardBilling: billing, groupBy: "month"
+  });
+  assert.deepEqual(s.groups.map(g => [g.key, g.expenses]), [["2026-10", 45_000], ["2026-12", 15_000], ["2027-01", 30_000]]);
+  assert.equal(s.totals.expenses, 90_000);
+  // Shares due after today stay flagged as upcoming: half of the Dec 5 statement and the Jan 5 one.
+  assert.equal(s.totals.upcomingInstallments, 45_000);
+  assert.equal(s.topExpenses[0].installmentsInfo, "cuotas 1 a 3 de 3 (compra total 90000 COP)");
+  const october = summarize(rows, {
+    period: resolvePeriod({ preset: "this_month" }, NOW, TZ),
+    now: NOW, timeZone: TZ, primaryCurrency: "COP", exchangeRates: RATES, names: NAMES, cardBilling: billing
+  });
+  assert.equal(october.topExpenses[0].amount, 45_000);
+  assert.equal(october.topExpenses[0].installmentsInfo, "cuotas 1 a 2 de 3 (compra total 90000 COP)");
+});
+
+test("P1 S8.4: per-month cash flow equals the server expenseAmountForMonth sum on billing cards with payments", () => {
+  // Months June to October 2026 (NOW is Oct 11).
+  const rows = [
+    // Master closes on the 10th and is due on the 25th (same month).
+    tx("m1", "expense", -120_000, "2026-08-12T17:00:00Z", { accountId: "master", categoryId: "tech" }),
+    tx("m2", "expense", -240_000, "2026-09-05T17:00:00Z", { accountId: "master", categoryId: "food", installments: 6 }),
+    tx("m3", "expense", -75_000, "2026-10-08T17:00:00Z", { accountId: "master", categoryId: "fun" }),
+    tx("mp1", "transfer", 120_000, "2026-09-24T17:00:00Z", { accountId: "bank", toAccountId: "master" }),
+    tx("mp2", "transfer", 100_000, "2026-10-09T17:00:00Z", { accountId: "bank", toAccountId: "master" }),
+    // Diners closes on the 31st and is due on the 15th (next month): 12 installments, partial payments.
+    tx("d1", "expense", -500_000, "2026-07-28T17:00:00Z", { accountId: "diners", categoryId: "tech", installments: 12 }),
+    tx("d2", "expense", -45_000, "2026-10-01T17:00:00Z", { accountId: "diners", categoryId: "fun" }),
+    tx("dp1", "transfer", 41_667, "2026-08-14T17:00:00Z", { accountId: "bank", toAccountId: "diners" }),
+    tx("dp2", "transfer", 100_000, "2026-09-25T17:00:00Z", { accountId: "bank", toAccountId: "diners" }),
+    // Closes on the 20th, due on the 5th; it had 50,000 of credit before its first movement.
+    tx("p1", "expense", -60_000, "2026-06-25T17:00:00Z", { accountId: "pre", categoryId: "food" }),
+    tx("p2", "expense", -30_000, "2026-08-03T17:00:00Z", { accountId: "pre", categoryId: "food", installments: 2 }),
+    tx("pp", "transfer", 20_000, "2026-09-02T17:00:00Z", { accountId: "bank", toAccountId: "pre" }),
+    tx("cash", "expense", -10_000, "2026-06-03T17:00:00Z", { categoryId: "food" })
+  ];
+  const billing = cardBillingByAccount([
+    { id: "master", type: "credit", statementClosingDay: 10, paymentDueDay: 25, balance: -215_000 },
+    { id: "diners", type: "credit", statementClosingDay: 31, paymentDueDay: 15, balance: -403_333 },
+    { id: "pre", type: "credit", statementClosingDay: 20, paymentDueDay: 5, balance: -20_000 },
+    { id: "bank", type: "checking", balance: 0 }
+  ], "payment", { transactions: rows, timeZone: TZ });
+  const options = { now: NOW, timeZone: TZ, primaryCurrency: "COP", exchangeRates: RATES, names: NAMES, cardBilling: billing };
+  const months = [5, 6, 7, 8, 9].map(month => {
+    const end = new Date(Date.UTC(2026, month + 1, 0)).getUTCDate();
+    const key = `2026-${String(month + 1).padStart(2, "0")}`;
+    const server = rows.reduce((sum, row) =>
+      sum + expenseAmountForMonth(row, 2026, month, TZ, billing.get(String(row.accountId)) ?? null), 0);
+    const summary = summarize(rows, { ...options, period: resolvePeriod({ startDate: `${key}-01`, endDate: `${key}-${end}` }, NOW, TZ) });
+    return { key, summary: summary.totals.expenses, server: Math.round(server * 100) / 100 };
+  });
+  for (const { key, summary, server } of months) assert.equal(summary, server, key);
+  assert.ok(months.every(({ server }) => server > 0));
+  // One summary over the five months splits the same way.
+  const grouped = summarize(rows, { ...options, groupBy: "month", period: resolvePeriod({ startDate: "2026-06-01", endDate: "2026-10-31" }, NOW, TZ) });
+  assert.deepEqual(grouped.groups.map(g => [g.key, g.expenses]), months.map(({ key, server }) => [key, server]));
+  // By day, paid parts sit on their payment days and add up to each month to the cent.
+  const byDay = summarize(rows, { ...options, groupBy: "day", period: resolvePeriod({ startDate: "2026-06-01", endDate: "2026-10-31" }, NOW, TZ) });
+  for (const { key, server } of months) {
+    const days = byDay.groups.filter(g => g.key.startsWith(key)).reduce((sum, g) => sum + Math.round(g.expenses * 100), 0);
+    assert.equal(days, Math.round(server * 100), key);
+  }
+  assert.ok(byDay.groups.some(g => g.key === "2026-09-24"), "the Sep 24 Master payment is a day of its own");
+});
+
+test("P1 S8.4: money already paid to a card never counts as upcoming and sits on the day it was paid", () => {
+  // Master closes on the 10th and is due on the 25th. Today is Nov 20.
+  const now = new Date("2026-11-20T12:00:00-05:00");
+  // The card's balance is what its movements leave (no debt or credit from before).
+  const run = (rows: SummaryTransaction[], balance: number) => summarize(rows, {
+    period: resolvePeriod({ preset: "this_month" }, now, TZ), now, timeZone: TZ, primaryCurrency: "COP", exchangeRates: RATES, names: NAMES,
+    groupBy: "day",
+    cardBilling: cardBillingByAccount([{ id: "master", type: "credit", statementClosingDay: 10, paymentDueDay: 25, balance }], "payment", { transactions: rows, timeZone: TZ })
+  });
+  const pay = (amount: number) => tx("pay", "transfer", amount, "2026-11-15T17:00:00Z", { accountId: "bank", toAccountId: "master" });
+
+  // Bought on Nov 12 (statement due Dec 25) and paid in full on Nov 15: nothing is still due.
+  const paid = run([tx("buy", "expense", -100_000, "2026-11-12T17:00:00Z", { accountId: "master", categoryId: "food" }), pay(100_000)], 0);
+  assert.equal(paid.totals.expenses, 100_000);
+  assert.equal(paid.totals.upcomingInstallments, 0);
+  assert.ok(!paid.notes.some(note => note.includes("vencen después de hoy")));
+  assert.deepEqual(paid.groups.map(g => [g.key, g.expenses]), [["2026-11-15", 100_000]]);
+
+  // Bought on Nov 2 (statement due Nov 25), 40,000 paid on Nov 15: only the unpaid 60,000 is still due.
+  const partial = run([tx("buy", "expense", -100_000, "2026-11-02T17:00:00Z", { accountId: "master", categoryId: "food" }), pay(40_000)], -60_000);
+  assert.equal(partial.totals.expenses, 100_000);
+  assert.equal(partial.totals.upcomingInstallments, 60_000);
+  assert.deepEqual(partial.groups.map(g => [g.key, g.expenses]), [["2026-11-15", 40_000], ["2026-11-25", 60_000]]);
 });
