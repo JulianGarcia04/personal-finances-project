@@ -165,6 +165,55 @@ test('S9: a category change keeps a row whose budget no longer exists only if th
   ])
 })
 
+test('S9: one mixed selection skips each row for its own reason and changes every other row', () => {
+  const rows = [
+    row('ok'), row('elsewhere', { workspaceId: 'ws-0' }),
+    row('settlement', { type: 'transfer', amount: 40, toAccountId: 'card', categoryId: '', mirrorOf: 'twin-1', settlementType: 'settlement' }),
+    row('reversed', { type: 'transfer', amount: 40, toAccountId: 'card', categoryId: '', reversedBy: 'rev' }),
+    row('orphan', { accountId: 'deleted' }),
+    row('twin', { type: 'transfer', amount: 30, accountId: 'card', toAccountId: 'bank', categoryId: '', mirrorOf: 'leg' }),
+    row('loan', { type: 'loan', categoryId: '' }), row('transfer', { type: 'transfer', amount: 10, toAccountId: 'card', categoryId: '' }),
+    row('linked-in-casa', { accountId: 'linked', budgetId: 'casa' }), row('linked-legacy', { accountId: 'linked' }),
+    row('stale', { budgetId: 'deleted-budget' }), row('archived', { budgetId: 'viejo' }),
+    row('same', { budgetId: 'viaje', categoryId: 'transport' }), row('literal', { budgetId: DEFAULT_MONTHLY_BUDGET_ID }),
+    row('null', { budgetId: null }), row('income', { type: 'income', amount: 100, categoryId: 'salary' }),
+    row('in-archived-link', { accountId: 'pocket' })
+  ]
+  // An archived budget no longer holds the accounts it linked.
+  const withArchivedLink = {
+    budgets: [...context().budgets, { id: 'cerrado', name: 'Cerrado', archived: true, linkedAccountIds: ['pocket'] }]
+  }
+  const ids = [...rows.map(tx => tx.id), 'missing']
+
+  const intoTrip = plan(rows, { budgetId: 'viaje' }, withArchivedLink, ids)
+  assert.deepEqual(reasons(intoTrip), {
+    elsewhere: 'unavailable', missing: 'unavailable', settlement: 'locked-settlement', reversed: 'locked-settlement',
+    orphan: 'deleted-account', twin: 'mirror-transfer', loan: 'no-budget-type', transfer: 'no-budget-type',
+    'linked-in-casa': 'linked-account', 'linked-legacy': 'linked-account', same: 'unchanged'
+  })
+  assert.deepEqual(intoTrip.updates.map(update => [update.id, update.patch]), [
+    'ok', 'stale', 'archived', 'literal', 'null', 'income', 'in-archived-link'
+  ].map(id => [id, { budgetId: 'viaje' }]))
+
+  // Back to the base: absent, null and the literal default are already there; the order of the selection is kept.
+  const intoBase = plan(rows, { budgetId: DEFAULT_MONTHLY_BUDGET_ID }, withArchivedLink, ['ok', 'literal', 'null', 'same', 'archived', 'stale', 'linked-in-casa'])
+  assert.deepEqual(intoBase.updates.map(update => [update.id, update.patch]), [
+    ['same', { budgetId: null }], ['archived', { budgetId: null }], ['stale', { budgetId: null }]
+  ])
+  assert.deepEqual(intoBase.skipped, [
+    { id: 'ok', reason: 'unchanged' }, { id: 'literal', reason: 'unchanged' }, { id: 'null', reason: 'unchanged' },
+    { id: 'linked-in-casa', reason: 'linked-account' }
+  ])
+
+  // A category alone: the stale budget blocks its row, while archived references and linked accounts do not.
+  const recategorized = plan(rows, { categoryId: 'transport' }, withArchivedLink,
+    ['ok', 'stale', 'archived', 'linked-in-casa', 'linked-legacy', 'same', 'orphan', 'in-archived-link'])
+  assert.deepEqual(reasons(recategorized), { stale: 'stale-budget', same: 'unchanged', orphan: 'deleted-account' })
+  assert.deepEqual(recategorized.updates.map(update => [update.id, update.patch]), [
+    'ok', 'archived', 'linked-in-casa', 'linked-legacy', 'in-archived-link'
+  ].map(id => [id, { categoryId: 'transport' }]))
+})
+
 test('S9: a category change needs a selection of a single type, expense or income', () => {
   const expense = row('expense')
   const income = row('income', { type: 'income', amount: 100, categoryId: 'salary' })
@@ -178,6 +227,9 @@ test('S9: a category change needs a selection of a single type, expense or incom
 
   assert.throws(() => plan([expense, income], { categoryId: 'other' }), /selecciona solo gastos o solo ingresos/)
   assert.throws(() => plan([expense, transfer], { categoryId: 'food' }), /selecciona solo gastos o solo ingresos/)
+  // Rows that are gone or belong to another workspace give the selection no type.
+  assert.throws(() => plan([row('elsewhere', { workspaceId: 'ws-0' })], { categoryId: 'food' }), /selecciona solo gastos o solo ingresos/)
+  assert.throws(() => plan([expense], { categoryId: 'food' }, {}, ['missing']), /selecciona solo gastos o solo ingresos/)
   // A budget change does not need a single type.
   assert.equal(plan([expense, income, transfer], { budgetId: 'viaje' }).updates.length, 2)
 })

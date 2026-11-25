@@ -1497,3 +1497,106 @@ test('S9 T7b: a past month says which month is shown and keeps every budget edit
   assert.doesNotMatch(view.root.content, new RegExp(PAST_MONTH_NOTICE))
   assert.equal(view.pickerLabel(), 'marzo de 2026')
 })
+
+// Hand-computed budgets of the month before "today" (mocked); every date is relative to "today".
+// Visa closes on the 20th and is paid on the 5th; a 900,000 purchase in three installments puts
+// 300,000 in the shown month. Rows of "today's" month must not count.
+const LAST_MONTH_TODAY = new Date(2026, 10, 25, 12)
+const lastMonthMovements = (today: Date): Transaction[] => {
+  const at = (monthOffset: number, day: number, hours = 12, minutes = 0) =>
+    new Date(today.getFullYear(), today.getMonth() + monthOffset, day, hours, minutes)
+  const lastDayOf = (monthOffset: number, hours: number) => at(monthOffset + 1, 0, hours)
+  const [shown, previous, earlier, current] = [-1, -2, -3, 0]
+  const movement = (id: string, type: string, amount: number, date: Date, extra: Record<string, unknown> = {}) => ({
+    id, workspaceId: 'workspace-a', type, amount, date, currency: 'COP', description: id, installments: 1,
+    accountId: 'cash', userId: 'user-a', categoryId: '', createdAt: date, ...extra
+  }) as unknown as Transaction
+  return [
+    movement('I1', 'income', 4_000_000, at(shown, 3)),
+    movement('I2', 'income', 500_000, at(shown, 15), { budgetId: 'viaje' }),
+    movement('I3', 'income', 3_000_000, lastDayOf(previous, 23)),
+    movement('I4', 'income', 9_999_999, at(current, 2)),
+    movement('E1', 'expense', -200_000, at(shown, 1, 0, 30), { categoryId: 'food' }),
+    movement('E2', 'expense', -100_000, lastDayOf(shown, 22), { categoryId: 'transport' }),
+    movement('E3', 'expense', -150_000, at(shown, 12), { categoryId: 'travel', budgetId: 'viaje' }),
+    movement('E4', 'expense', -80_000, at(previous, 10), { categoryId: 'food' }),
+    movement('E5', 'expense', -7_777_777, at(current, 3), { categoryId: 'food' }),
+    movement('E6', 'expense', -600_000, at(shown, 20), { categoryId: 'gifts', budgetId: 'boda' }),
+    movement('C1', 'expense', -300_000, at(previous, 10), { categoryId: 'food', accountId: 'visa' }),
+    movement('C2', 'expense', -120_000, at(previous, 25), { categoryId: 'food', accountId: 'visa' }),
+    movement('C3', 'expense', -900_000, at(earlier, 5), { categoryId: 'tech', accountId: 'visa', installments: 3 }),
+    movement('C4', 'expense', -50_000, at(shown, 18), { categoryId: 'food', accountId: 'visa', budgetId: 'viaje' }),
+    movement('C5', 'expense', -40_000, at(shown, 25), { categoryId: 'food', accountId: 'visa' }),
+    movement('P0', 'transfer', 300_000, at(previous, 5), { toAccountId: 'visa' }),
+    movement('P1', 'transfer', 500_000, at(shown, 5), { toAccountId: 'visa' }),
+    movement('P2', 'transfer', 300_000, at(shown, 28), { toAccountId: 'visa' })
+  ]
+}
+const monthKeyFrom = (today: Date, offset: number) => {
+  const month = new Date(today.getFullYear(), today.getMonth() + offset, 1)
+  return `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, '0')}`
+}
+
+const mountLastMonthBudgets = async (t: import('node:test').TestContext, path: string, basis: 'consumption' | 'payment') => {
+  t.mock.timers.enable({ apis: ['Date'], now: LAST_MONTH_TODAY.getTime() })
+  const view = await mountNavigation(t, path)
+  const { stores } = view
+  ;(stores.accountsStore.accounts as unknown[]).push(
+    { id: 'visa', name: 'Visa', type: 'credit', currency: 'COP', balance: -310_000, limit: 5_000_000, statementClosingDay: 20, paymentDueDay: 5 })
+  ;(stores.workspacesStore.workspaces[0] as Record<string, unknown>).budgetCardBasis = basis
+  stores.goalsStore.categoryBudgets = { food: 300_000 }
+  stores.transactionsStore.categories = ['food', 'transport', 'travel', 'gifts', 'tech'].map(id =>
+    ({ id, name: id, type: 'expense', icon: 'Utensils', color: '#f97316', workspaceId: null })) as never
+  stores.goalsStore.operatingBudgets = [
+    { budget: { id: 'viaje', name: 'Viaje', kind: 'monthly', capCurrency: 'COP', totalLimit: 400_000, archived: false }, categoryCaps: { travel: 100_000 } },
+    { budget: { id: 'boda', name: 'Boda', kind: 'event', capCurrency: 'COP', totalLimit: 2_000_000, archived: false }, categoryCaps: {} },
+    { budget: { id: 'old', name: 'Viejo', kind: 'monthly', capCurrency: 'COP', totalLimit: 100, archived: true }, categoryCaps: {} }
+  ] as never
+  stores.transactionsStore.transactions.push(...lastMonthMovements(LAST_MONTH_TODAY))
+  const settle = async () => {
+    await new Promise(setImmediate)
+    await Vue.nextTick()
+  }
+  await settle()
+  await settle()
+  const card = (name: string) => {
+    let node: ViewNode | null = view.root.find('h4', name)
+    while (node && node.tag !== 'article') node = node.parent
+    assert.ok(node, `expected the ${name} budget card`)
+    return node.content
+  }
+  const baseRows = (): Record<string, string> => Object.fromEntries(view.root.descendants
+    .filter(node => node.tag === 'input' && String(node.props.id ?? '').startsWith('base-cap-'))
+    .map(input => [String(input.props.id).slice('base-cap-'.length), input.parent!.parent!.content]))
+  return { ...view, settle, card, baseRows }
+}
+
+test('S9: Presupuestos of a past month match the hand computation under "Consumo del mes" and "Pagos del mes"', async t => {
+  const shownMonth = monthKeyFrom(LAST_MONTH_TODAY, -1)
+  const consumption = await mountLastMonthBudgets(t, `/goals?mes=${shownMonth}`, 'consumption')
+  const trip = consumption.card('Viaje')
+  assert.ok(trip.includes(`Gastado ${copMoney(200_000)} de ${copMoney(500_000)} en fondos · 40 %`), trip)
+  assert.ok(trip.includes(`${copMoney(200_000)} / ${copMoney(400_000)}`), trip)
+  const rows = consumption.baseRows()
+  assert.deepEqual(Object.keys(rows).sort(), ['food', 'tech', 'transport'])
+  // Food: 200,000 cash + 120,000 on the statement closing in the shown month.
+  assert.ok(rows.food.includes(`Gastado en COP: ${copMoney(320_000)}`), rows.food)
+  assert.ok(rows.tech.includes(`Gastado en COP: ${copMoney(300_000)}`), rows.tech)
+  assert.ok(rows.transport.includes(`Gastado en COP: ${copMoney(100_000)}`), rows.transport)
+  const wedding = consumption.card('Boda')
+  assert.ok(wedding.includes(copMoney(600_000)), wedding)
+  for (const path of ['/goals', `/goals?mes=${monthKeyFrom(LAST_MONTH_TODAY, -2)}`, `/goals?mes=${monthKeyFrom(LAST_MONTH_TODAY, -22)}`]) {
+    await consumption.router.push(path)
+    await consumption.settle()
+    assert.equal(consumption.card('Boda'), wedding, `the event budget is the same at ${path}`)
+  }
+
+  t.mock.timers.reset()
+  const payments = await mountLastMonthBudgets(t, `/goals?mes=${shownMonth}`, 'payment')
+  const paidRows = payments.baseRows()
+  assert.deepEqual(Object.keys(paidRows).sort(), ['food', 'tech', 'transport'])
+  // The card payments of the shown month are spread over the purchases of the statements they pay.
+  assert.ok(paidRows.food.includes(`Gastado en COP: ${copMoney(551_063.83)}`), paidRows.food)
+  assert.ok(paidRows.tech.includes(`Gastado en COP: ${copMoney(427_659.57)}`), paidRows.tech)
+  assert.ok(payments.card('Viaje').includes(`Gastado ${copMoney(171_276.6)} de ${copMoney(500_000)}`), payments.card('Viaje'))
+})

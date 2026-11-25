@@ -766,3 +766,64 @@ test('S9: nothing is written for an invalid request, and nothing local changes a
   assert.equal(stopped.failed.length, 1)
   assert.equal(stopped.failed[0].ids.length, 1)
 })
+
+test('S9: 1,001 rows commit in chunks of 500, 500 and 1; a failed middle chunk is reported with exactly its rows, which stay as they were', async t => {
+  const { store, batches } = loadStore(t, Object.fromEntries([
+    ['accounts/bank', bank],
+    ...Array.from({ length: 1001 }, (_, index) => [`transactions/bulk-${index}`, expense(index % 2 ? { budgetId: 'viaje' } : {})])
+  ]))
+  store.categories = bulkCategories
+  const ids = store.transactions.map(tx => tx.id)
+
+  const running = store.bulkEditTransactions({ categoryId: 'transport', budgetId: 'default-monthly' }, ids, bulkBudgets)
+  await settleBatches(batches, ['ok', new Error('permission-denied'), 'ok'])
+  const outcome = await running
+
+  assert.deepEqual(batches.map(batch => batch.writes.length), [500, 500, 1])
+  assert.deepEqual(outcome.written, [...ids.slice(0, 500), ids[1000]])
+  assert.deepEqual(outcome.failed.map(failure => failure.ids), [ids.slice(500, 1000)])
+  for (const write of batches.flatMap(batch => batch.writes)) {
+    const index = Number(write.path.slice('transactions/bulk-'.length))
+    assert.equal(write.kind, 'update')
+    // Rows already in the base monthly budget change only their category.
+    assert.deepEqual(write.data, index % 2 ? { categoryId: 'transport', budgetId: null } : { categoryId: 'transport' }, write.path)
+  }
+  store.transactions.forEach((tx, index) => {
+    if (index >= 500 && index < 1000) {
+      assert.equal(tx.categoryId, 'food', `${tx.id} of the failed chunk keeps its category`)
+      if (index % 2) assert.equal(tx.budgetId, 'viaje', `${tx.id} of the failed chunk keeps its budget`)
+      else assert.equal('budgetId' in tx, false, `${tx.id} of the failed chunk gets no budget`)
+    } else {
+      assert.equal(tx.categoryId, 'transport', tx.id)
+      if (index % 2) assert.equal(tx.budgetId, null, tx.id)
+      else assert.equal('budgetId' in tx, false, tx.id)
+    }
+  })
+})
+
+test('S9: after the commit only rows of the same type are patched locally, a removed row stays removed, and signed out nothing is sent', async t => {
+  const documents = { 'accounts/bank': bank, 'transactions/a': expense(), 'transactions/b': expense(), 'transactions/c': expense() }
+  const { store, batches } = loadStore(t, documents)
+  store.categories = bulkCategories
+
+  const running = store.bulkEditTransactions({ categoryId: 'transport' }, ['a', 'b', 'c'], bulkBudgets)
+  await flush()
+  // While the commit is in flight, b becomes an income and c leaves the list.
+  const b = store.transactions.find(tx => tx.id === 'b')!
+  b.type = 'income'
+  store.transactions = store.transactions.filter(tx => tx.id !== 'c')
+  await settleBatches(batches, ['ok'])
+  const outcome = await running
+
+  assert.deepEqual(batches[0].writes.map(write => [write.path, write.data]), ['a', 'b', 'c'].map(id => [`transactions/${id}`, { categoryId: 'transport' }]))
+  assert.deepEqual(outcome.written, ['a', 'b', 'c'])
+  assert.deepEqual(outcome.failed, [])
+  assert.deepEqual(store.transactions.map(tx => [tx.id, tx.type, tx.categoryId]), [['a', 'expense', 'transport'], ['b', 'income', 'food']])
+
+  const signedOut = loadStore(t, documents)
+  signedOut.store.categories = bulkCategories
+  signedOut.auth.currentUser = null
+  await assert.rejects(signedOut.store.bulkEditTransactions({ categoryId: 'transport' }, ['a'], bulkBudgets), /no inicializado/)
+  assert.equal(signedOut.batches.length, 0)
+  assert.equal(signedOut.store.transactions.find(tx => tx.id === 'a')?.categoryId, 'food')
+})

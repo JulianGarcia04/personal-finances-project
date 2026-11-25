@@ -899,34 +899,52 @@ const renderer = Vue.createRenderer<ViewNode, ViewNode>({
 const requireModule = createRequire(import.meta.url)
 const noOp = async () => undefined
 
-const mountDashboard = async (t: TestContext, path: string) => {
-  t.mock.timers.enable({ apis: ['Date'], now: PAST_MONTH_NOW.getTime() })
-  const accounts = [
+// What a mounted Dashboard test may replace in the default fixture below.
+type DashboardSetup = {
+  now: Date
+  accounts: Array<{ id: string; balance: number } & Record<string, unknown>>
+  transactions: unknown[]
+  categories: unknown[]
+  profiles: unknown[]
+  operatingBudgets: unknown[]
+  categoryBudgets: Record<string, number>
+  expenseLimit: number
+}
+type ChartConfig = { type: string; data: { labels: string[]; datasets: Array<{ data: number[] }> } }
+
+const mountDashboard = async (t: TestContext, path: string, setup: Partial<DashboardSetup> = {}) => {
+  t.mock.timers.enable({ apis: ['Date'], now: (setup.now ?? PAST_MONTH_NOW).getTime() })
+  const accounts = setup.accounts ?? [
     { id: 'cash', name: 'Efectivo', type: 'cash', currency: 'COP', balance: 5000 },
     { id: 'visa', name: 'Visa', type: 'credit', currency: 'COP', balance: -300, limit: 1000, statementClosingDay: 31, paymentDueDay: 10 }
   ]
+  const charts: ChartConfig[] = []
   const stores: Record<string, unknown> = {
     authStore: { user: { uid: 'ana', displayName: 'Ana' }, activeWorkspaceId: 'w' },
     accountsStore: {
       accounts,
-      netWorthByCurrency: { COP: 4700 },
+      netWorthByCurrency: { COP: accounts.reduce((sum, account) => sum + account.balance, 0) },
       getAccountById: (id: string) => accounts.find(account => account.id === id),
       fetchAccounts: noOp
     },
     transactionsStore: Vue.reactive({
-      transactions: pastMonthTransactions(),
-      categories: [{ id: 'food', name: 'Comida', color: '#fff', icon: 'Utensils' }],
+      transactions: setup.transactions ?? pastMonthTransactions(),
+      categories: setup.categories ?? [{ id: 'food', name: 'Comida', color: '#fff', icon: 'Utensils' }],
       fetchCategories: noOp,
       fetchTransactions: noOp
     }),
     settingsStore: { currency: 'COP', aiEnabled: false, loading: false, loadSettings: noOp },
-    workspacesStore: { activeBudgetCardBasis: 'consumption', workspaces: [{ id: 'w', expenseLimit: 1000 }], activeWorkspaceProfiles: [] },
+    workspacesStore: {
+      activeBudgetCardBasis: 'consumption',
+      workspaces: [{ id: 'w', expenseLimit: setup.expenseLimit ?? 1000 }],
+      activeWorkspaceProfiles: setup.profiles ?? []
+    },
     goalsStore: Vue.reactive({
       goals: [{ id: 'trip', name: 'Viaje a la playa', targetAmount: 100, currentAmount: 25, currency: 'COP', targetDate: new Date(2030, 0, 1) }],
       exchangeRates: {},
       exchangeRatesBaseCurrency: 'COP',
-      operatingBudgets: [],
-      categoryBudgets: { food: 400 },
+      operatingBudgets: setup.operatingBudgets ?? [],
+      categoryBudgets: setup.categoryBudgets ?? { food: 400 },
       categoryBudgetCurrency: { status: 'confirmed', code: 'COP' },
       budgetSettingsLoading: false,
       budgetSettingsContextKey: 'k',
@@ -946,7 +964,12 @@ const mountDashboard = async (t: TestContext, path: string) => {
     new Function('exports', 'require', javascript)(exports, (id: string) => {
       if (id === 'vue') return Vue
       if (id === 'vue-router') return Router
-      if (id === 'chart.js') return { Chart: class { static register = () => undefined; destroy = () => undefined }, registerables: [] }
+      if (id === 'chart.js') {
+        return {
+          Chart: class { static register = () => undefined; constructor(_canvas: unknown, config: ChartConfig) { charts.push(config) } destroy = () => undefined },
+          registerables: []
+        }
+      }
       if (id === '@/components/MonthPicker.vue') return { default: loadComponent('../components/MonthPicker.vue') }
       if (id.endsWith('.vue')) return { default: () => null }
       if (id.startsWith('@/stores/')) {
@@ -981,7 +1004,7 @@ const mountDashboard = async (t: TestContext, path: string) => {
     return node
   }
   const pickerValue = () => byTestId('month-picker')[0]?.descendants.find(node => node.props['aria-live'] === 'polite')?.content
-  return { root, router, settle, byTestId, button, pickerValue, fullPath: () => router.currentRoute.value.fullPath }
+  return { root, router, settle, byTestId, button, pickerValue, charts, fullPath: () => router.currentRoute.value.fullPath }
 }
 
 // Today's figures and forward-looking widgets; none of them belongs to another month.
@@ -1060,4 +1083,126 @@ test('S9 T7b: the links to Presupuestos carry the shown month only when it is a 
   await view.button('Volver al mes actual').props.onClick()
   await view.settle()
   assert.deepEqual(budgetLinks(), ['/goals', '/goals'])
+})
+
+// Hand-computed month: every date is relative to "today" (mocked), and the Dashboard shows the
+// month before it. Visa closes on the 20th and is paid on the 5th. Shown month: cash income
+// 4,500,000 vs 3,000,000; expenses 1,050,000 cash + 800,000 of card payments = 1,850,000 vs
+// 80,000 + 300,000 = 380,000; card purchases are spread over members and categories by the
+// statements those payments cover. Rows of "today's" month must not count.
+const LAST_MONTH_TODAY = new Date(2026, 10, 25, 12)
+const lastMonthSetup = (today: Date): Partial<DashboardSetup> => {
+  const at = (monthOffset: number, day: number, hours = 12, minutes = 0) =>
+    new Date(today.getFullYear(), today.getMonth() + monthOffset, day, hours, minutes)
+  const lastDayOf = (monthOffset: number, hours: number) => at(monthOffset + 1, 0, hours)
+  const [shown, previous, earlier, current] = [-1, -2, -3, 0]
+  const movement = (id: string, type: string, amount: number, date: Date, extra: Record<string, unknown> = {}) => ({
+    id, workspaceId: 'w', type, amount, date, currency: 'COP', description: id, installments: 1, accountId: 'cash', userId: 'ana', categoryId: '', ...extra
+  })
+  return {
+    now: today,
+    expenseLimit: 1_000_000,
+    categoryBudgets: { food: 300_000 },
+    profiles: [{ uid: 'ana', displayName: 'Ana' }, { uid: 'bo', displayName: 'Bo' }],
+    categories: [
+      { id: 'food', name: 'Comida', color: '#1', type: 'expense' }, { id: 'transport', name: 'Transporte', color: '#2', type: 'expense' },
+      { id: 'travel', name: 'Viajes', color: '#3', type: 'expense' }, { id: 'gifts', name: 'Regalos', color: '#4', type: 'expense' },
+      { id: 'tech', name: 'Tecnología', color: '#5', type: 'expense' }
+    ],
+    operatingBudgets: [
+      { budget: { id: 'viaje', name: 'Viaje', kind: 'monthly', capCurrency: 'COP', archived: false }, categoryCaps: {} },
+      { budget: { id: 'boda', name: 'Boda', kind: 'event', capCurrency: 'COP', archived: false }, categoryCaps: {} }
+    ],
+    accounts: [
+      { id: 'cash', name: 'Efectivo', type: 'cash', currency: 'COP', balance: 5_000_000 },
+      { id: 'visa', name: 'Visa', type: 'credit', currency: 'COP', balance: -310_000, limit: 5_000_000, statementClosingDay: 20, paymentDueDay: 5 }
+    ],
+    transactions: [
+      movement('I1', 'income', 4_000_000, at(shown, 3)),
+      movement('I2', 'income', 500_000, at(shown, 15), { userId: 'bo', budgetId: 'viaje' }),
+      movement('I3', 'income', 3_000_000, lastDayOf(previous, 23)),
+      movement('I4', 'income', 9_999_999, at(current, 2)),
+      movement('E1', 'expense', -200_000, at(shown, 1, 0, 30), { categoryId: 'food' }),
+      movement('E2', 'expense', -100_000, lastDayOf(shown, 22), { userId: 'bo', categoryId: 'transport' }),
+      movement('E3', 'expense', -150_000, at(shown, 12), { userId: 'bo', categoryId: 'travel', budgetId: 'viaje' }),
+      movement('E4', 'expense', -80_000, at(previous, 10), { categoryId: 'food' }),
+      movement('E5', 'expense', -7_777_777, at(current, 3), { categoryId: 'food' }),
+      movement('E6', 'expense', -600_000, at(shown, 20), { categoryId: 'gifts', budgetId: 'boda' }),
+      movement('C1', 'expense', -300_000, at(previous, 10), { categoryId: 'food', accountId: 'visa' }),
+      movement('C2', 'expense', -120_000, at(previous, 25), { userId: 'bo', categoryId: 'food', accountId: 'visa' }),
+      movement('C3', 'expense', -900_000, at(earlier, 5), { categoryId: 'tech', accountId: 'visa', installments: 3 }),
+      movement('C4', 'expense', -50_000, at(shown, 18), { categoryId: 'food', accountId: 'visa', budgetId: 'viaje' }),
+      movement('C5', 'expense', -40_000, at(shown, 25), { categoryId: 'food', accountId: 'visa' }),
+      movement('P0', 'transfer', 300_000, at(previous, 5), { toAccountId: 'visa' }),
+      movement('P1', 'transfer', 500_000, at(shown, 5), { toAccountId: 'visa' }),
+      movement('P2', 'transfer', 300_000, at(shown, 28), { toAccountId: 'visa' })
+    ]
+  }
+}
+
+test('S9: a past month\'s figures, charts and budget panels match the hand computation', async t => {
+  const today = LAST_MONTH_TODAY
+  const monthStart = (offset: number) => new Date(today.getFullYear(), today.getMonth() + offset, 1)
+  const shown = monthStart(-1)
+  const key = `${shown.getFullYear()}-${String(shown.getMonth() + 1).padStart(2, '0')}`
+  const view = await mountDashboard(t, `/?mes=${key}`, lastMonthSetup(today))
+  const money = (amount: number) => new Intl.NumberFormat('es-CO', {
+    style: 'currency', currency: 'COP', minimumFractionDigits: 0, maximumFractionDigits: 2
+  }).format(amount)
+  // The test renderer trims each text node, so compare without spaces.
+  const flat = (text: string) => text.replace(/\s/g, '')
+  const card = (title: string) => {
+    let node: ViewNode | null | undefined = view.root.descendants.find(child => ['span', 'h4'].includes(child.tag) && child.content === title)
+    while (node && !String(node.props.class ?? '').includes('glass-panel')) node = node.parent
+    assert.ok(node, `expected the "${title}" card`)
+    return node.content
+  }
+
+  const income = card('Ingresos del Mes')
+  assert.ok(flat(income).includes(flat(`+${money(4_500_000)}`)), income)
+  assert.match(income, /\+50%/)
+  assert.ok(income.includes(`vs el mes anterior completo (${money(3_000_000)})`), income)
+
+  const expenses = card('Gastos imputados del Mes')
+  assert.ok(flat(expenses).includes(flat(money(1_850_000))), expenses)
+  assert.match(expenses, /\+387%/)
+  assert.ok(expenses.includes(`vs el mes anterior completo (${money(380_000)})`), expenses)
+  assert.ok(expenses.includes(`Compras registradas: ${money(1_140_000)} total`), expenses)
+  assert.match(expenses, /Mayor fuga: Regalos/)
+  assert.ok(flat(expenses).includes(flat(`Ana${money(1_548_936.17)}`)), `Ana's share: ${expenses}`)
+  assert.ok(flat(expenses).includes(flat(`Bo${money(301_063.83)}`)), `Bo's share: ${expenses}`)
+  assert.ok(expenses.includes(`Tope del presupuesto mensual base: ${money(1_000_000)}`), expenses)
+  assert.match(expenses, /72%/)
+  assert.match(card('Tasa de Ahorro'), /58\.9%/)
+
+  const rounded = (values: number[]) => values.map(value => Math.round(value * 100) / 100)
+  const donut = view.charts.filter(chart => chart.type === 'doughnut').at(-1)
+  assert.ok(donut, 'expected the spending distribution chart')
+  assert.deepEqual(
+    Object.fromEntries(donut.data.labels.map((label, index) => [label, rounded(donut.data.datasets[0].data)[index]])),
+    { Comida: 572_340.43, Transporte: 100_000, Viajes: 150_000, Regalos: 600_000, 'Tecnología': 427_659.57 }
+  )
+  const flow = view.charts.filter(chart => chart.type === 'bar').at(-1)
+  assert.ok(flow, 'expected the cash-flow chart')
+  assert.deepEqual(flow.data.labels, [-6, -5, -4, -3, -2, -1].map(offset => monthStart(offset).toLocaleString('es-CO', { month: 'short' })))
+  assert.deepEqual(flow.data.datasets[0].data, [0, 0, 0, 0, 3_000_000, 4_500_000])
+  assert.deepEqual(rounded(flow.data.datasets[1].data), [0, 0, 0, 0, 380_000, 1_850_000])
+
+  // Base category limits by consumption: food 200,000 cash + 120,000 on the statement closing in the shown month.
+  const basePanel = card('Presupuesto del Mes')
+  assert.ok(flat(basePanel).includes(flat(money(320_000))), basePanel)
+  assert.match(basePanel, /107%/)
+
+  const content = view.root.content
+  for (const title of TODAY_WIDGETS) assert.doesNotMatch(content, new RegExp(title), `${title} is hidden in a past month`)
+  const label = shown.toLocaleString('es-CO', { month: 'long', year: 'numeric' })
+  assert.match(view.byTestId('dashboard-past-month-notice')[0]?.content ?? '', new RegExp(`^Estás viendo\\s*${label}`))
+  assert.ok(content.includes('Volver al mes actual'))
+
+  // "Por presupuesto": Viaje has 500,000 of funds and spent 150,000 cash + 50,000 on the card.
+  view.button('Por presupuesto').props.onClick()
+  await view.settle()
+  const [breakdown] = view.byTestId('dashboard-budget-breakdown')
+  assert.ok(breakdown, 'expected the per-budget panel')
+  for (const amount of [500_000, 200_000, 300_000]) assert.ok(flat(breakdown.content).includes(flat(money(amount))), `${amount} in ${breakdown.content}`)
 })

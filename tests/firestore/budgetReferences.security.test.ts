@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { deleteApp, initializeApp } from 'firebase/app'
 import { after, before, test } from 'node:test'
+import * as firestoreSdk from 'firebase/firestore'
 import {
   collection, connectFirestoreEmulator, deleteDoc, deleteField, doc, getDoc, getDocs,
   getFirestore, query, serverTimestamp, setDoc, setLogLevel, terminate, updateDoc, where, writeBatch
 } from 'firebase/firestore'
+import { createPinia, disposePinia } from 'pinia'
+import ts from 'typescript'
 
 setLogLevel('silent')
 const projectId = 'demo-vault-b2'
@@ -838,4 +843,162 @@ test('S9: a bulk edit changes a pocket movement and the expense leg of a shared 
     [legs.expenseLeg, { budgetId: null }],
     [legs.transferLeg, { budgetId: activeBudget.id }]
   ]))
+})
+
+// S9: the real store's bulkEditTransactions, writing through this emulator as the dual member.
+const storeScript = ts.transpile(readFileSync(new URL('../../src/stores/transactionsStore.ts', import.meta.url), 'utf8'), {
+  target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS
+})
+const requireFromStores = createRequire(new URL('../../src/stores/transactionsStore.ts', import.meta.url))
+const loadRealStore = (t, accounts) => {
+  const accountsStore = { accounts, loadedWorkspaceId: wsA, getAccountById: accountId => accounts.find(account => account.id === accountId), fetchAccounts: async () => true }
+  const storeModule = {}
+  new Function('exports', 'require', storeScript)(storeModule, moduleId => {
+    if (moduleId === '@/lib/firebase') return { db: dual, auth: { currentUser: { uid: dualId } }, storage: {}, functions: {} }
+    if (moduleId === './authStore') return { useAuthStore: () => ({ activeWorkspaceId: wsA }) }
+    if (moduleId === './accountsStore') return { useAccountsStore: () => accountsStore }
+    if (moduleId === 'firebase/firestore') return firestoreSdk
+    if (moduleId === 'firebase/functions' || moduleId === 'firebase/storage') return {}
+    return requireFromStores(moduleId.startsWith('@/') ? `../${moduleId.slice(2)}.ts` : moduleId)
+  })
+  const pinia = createPinia()
+  t.after(() => disposePinia(pinia))
+  return storeModule.useTransactionsStore(pinia)
+}
+// The rows as the store keeps them after a load.
+const loadRows = refs => Promise.all(refs.map(async ref => {
+  const data = await dataOf(ref)
+  return { ...data, id: ref.id, date: data.date.toDate() }
+}))
+
+test('S9: the store\'s bulk edits commit mixed selections and leave skipped rows, the shared-expense twin and pocket balances untouched', async t => {
+  const parentId = id('bulk-store-parent')
+  const pocketId = id('bulk-store-pocket')
+  await privilegedDocument(`accounts/${parentId}`, {
+    workspaceId: wsA, userId: dualId, name: 'Parent', type: 'savings', balance: 100, limit: 0, currency: 'USD',
+    childAccountIds: [pocketId], createdAt: new Date('2026-10-01T00:00:00Z')
+  })
+  await privilegedDocument(`accounts/${pocketId}`, {
+    workspaceId: wsA, userId: dualId, name: 'Pocket', type: 'savings', balance: 50, limit: 0, currency: 'USD',
+    parentAccountId: parentId, childAccountIds: [], pocketActivity: true, openingAllocationId: null,
+    createdAt: new Date('2026-10-01T00:00:00Z')
+  })
+  // Rows only a privileged writer can leave behind: pocket movements and stale or archived references.
+  const privilegedRow = async extra => {
+    const ref = transactionRef(id('bulk-store-row'))
+    await privilegedDocument(`transactions/${ref.id}`, {
+      workspaceId: wsA, userId: dualId, accountId: `${runId}-account-a`, amount: -17, currency: 'USD',
+      type: 'expense', categoryId: `${runId}-category`, description: 'Privileged row',
+      date: new Date('2026-10-01T00:00:00Z'), createdAt: new Date('2026-10-01T00:00:00Z'), ...extra
+    })
+    return ref
+  }
+  const linkedAccount = await createAccount()
+  const linkedBudget = await createLinkedBudget([linkedAccount.id])
+  const archived = await createBudget()
+  await updateDoc(archived, { archived: true, updatedAt: serverTimestamp() })
+  const deletedId = await createDeletedBudget()
+  const legs = await createSharedExpense()
+  const rows = {
+    base: await createTransaction(),
+    income: await createTransaction({ type: 'income', amount: 17 }),
+    active: await createTransaction({ budgetId: activeBudget.id }),
+    literal: await createTransaction({ budgetId: 'default-monthly' }),
+    archivedRow: await privilegedRow({ budgetId: archived.id }),
+    stale: await privilegedRow({ budgetId: deletedId }),
+    foreign: await privilegedRow({ budgetId: foreignBudget.id }),
+    pocketExpense: await privilegedRow({ accountId: pocketId, toAccountId: null, amount: -10 }),
+    pocketIncome: await privilegedRow({ accountId: pocketId, toAccountId: null, amount: 10, type: 'income' }),
+    shared: legs.expenseLeg,
+    transfer: await createTransaction({ type: 'transfer', amount: 17, toAccountId: `${runId}-account-a`, categoryId: '' }),
+    loan: await createTransaction({ type: 'loan', amount: -17, categoryId: '' }),
+    linked: await createTransaction({ accountId: linkedAccount.id, budgetId: linkedBudget.id }),
+    linkedLegacy: await privilegedRow({ accountId: linkedAccount.id })
+  }
+  const nameOf = Object.fromEntries(Object.entries(rows).map(([name, ref]) => [ref.id, name]))
+  const accounts = [`${runId}-account-a`, linkedAccount.id, parentId, pocketId, (await dataOf(legs.expenseLeg)).accountId].map(accountId => ({ id: accountId }))
+  const budgets = [
+    { id: activeBudget.id, name: 'Active', archived: false },
+    { id: archived.id, name: 'Archived', archived: true },
+    { id: linkedBudget.id, name: 'Linked', archived: false, linkedAccountIds: [linkedAccount.id] }
+  ]
+  const pocketAccountsBefore = await Promise.all([parentId, pocketId].map(accountId => dataOf(accountRef(accountId))))
+  const twinBefore = await dataOf(legs.transferLeg)
+
+  // Runs one request through a freshly loaded store; every row must end as before plus its planned patch.
+  const run = async (request, names) => {
+    const before = Object.fromEntries(await Promise.all(Object.entries(rows).map(async ([name, ref]) => [name, await dataOf(ref)])))
+    const store = loadRealStore(t, accounts)
+    store.transactions = await loadRows(Object.values(rows))
+    store.categories = [{ id: 'bulk-a', type: 'expense' }, { id: 'bulk-b', type: 'expense' }, { id: 'bulk-i', type: 'income' }]
+    const outcome = await store.bulkEditTransactions(request, names.map(name => rows[name].id), budgets)
+    assert.deepEqual(outcome.failed, [], `${JSON.stringify(request)} commits`)
+    const patches = new Map(outcome.plan.updates.map(update => [update.id, update.patch]))
+    for (const [name, ref] of Object.entries(rows)) {
+      assert.deepEqual(await dataOf(ref), { ...before[name], ...patches.get(ref.id) }, `${name} after ${JSON.stringify(request)}`)
+    }
+    assert.deepEqual(await dataOf(legs.transferLeg), twinBefore, 'the shared-expense twin is untouched')
+    return Object.fromEntries([
+      ...outcome.plan.skipped.map(skip => [nameOf[skip.id], skip.reason]),
+      ...outcome.plan.updates.map(update => [nameOf[update.id], update.patch])
+    ])
+  }
+  const all = Object.keys(rows)
+  const expenses = ['base', 'active', 'literal', 'archivedRow', 'stale', 'foreign', 'pocketExpense', 'shared', 'linked', 'linkedLegacy']
+  const intoActive = { budgetId: activeBudget.id }
+  const skippedByBudget = { transfer: 'no-budget-type', loan: 'no-budget-type', linked: 'linked-account', linkedLegacy: 'linked-account' }
+
+  assert.deepEqual(await run(intoActive, all), {
+    ...Object.fromEntries(['base', 'income', 'literal', 'archivedRow', 'stale', 'foreign', 'pocketExpense', 'pocketIncome', 'shared']
+      .map(name => [name, intoActive])),
+    active: 'unchanged', ...skippedByBudget
+  })
+  assert.deepEqual(await run({ budgetId: 'default-monthly' }, all), {
+    ...Object.fromEntries(['base', 'income', 'active', 'literal', 'archivedRow', 'stale', 'foreign', 'pocketExpense', 'pocketIncome', 'shared']
+      .map(name => [name, { budgetId: null }])),
+    ...skippedByBudget
+  })
+
+  // Put back the archived, deleted and foreign references for the category requests.
+  for (const [name, budgetId] of [['archivedRow', archived.id], ['stale', deletedId], ['foreign', foreignBudget.id]]) {
+    await privilegedDocument(`transactions/${rows[name].id}?updateMask.fieldPaths=budgetId`, { budgetId })
+  }
+  assert.deepEqual(await run({ categoryId: 'bulk-a' }, expenses), {
+    ...Object.fromEntries(['base', 'active', 'literal', 'archivedRow', 'pocketExpense', 'shared', 'linked', 'linkedLegacy']
+      .map(name => [name, { categoryId: 'bulk-a' }])),
+    stale: 'stale-budget', foreign: 'stale-budget'
+  })
+  assert.deepEqual(await run({ categoryId: 'bulk-b', budgetId: activeBudget.id }, expenses), {
+    ...Object.fromEntries(['base', 'active', 'literal', 'archivedRow', 'stale', 'foreign', 'pocketExpense', 'shared']
+      .map(name => [name, { categoryId: 'bulk-b', budgetId: activeBudget.id }])),
+    linked: 'linked-account', linkedLegacy: 'linked-account'
+  })
+  assert.deepEqual(await run({ categoryId: 'bulk-i', budgetId: activeBudget.id }, ['income', 'pocketIncome']), {
+    income: { categoryId: 'bulk-i', budgetId: activeBudget.id }, pocketIncome: { categoryId: 'bulk-i', budgetId: activeBudget.id }
+  })
+  assert.deepEqual(await Promise.all([parentId, pocketId].map(accountId => dataOf(accountRef(accountId)))), pocketAccountsBefore, 'pocket balances and markers never change')
+})
+
+test('S9: a store chunk the server refuses for a stale row changes nothing and is reported whole, while the full chunk before it commits', async t => {
+  const deletedId = await createDeletedBudget()
+  // 502 rows: a full chunk of 500, then a chunk of two whose second row turns stale on the server.
+  const refs = Array.from({ length: 502 }, (_, index) => transactionRef(id(`bulk-chunk-${index}`)))
+  for (let start = 0; start < refs.length; start += 251) {
+    const batch = writeBatch(dual)
+    for (const ref of refs.slice(start, start + 251)) batch.set(ref, rawTransaction())
+    await batch.commit()
+  }
+  const store = loadRealStore(t, [{ id: `${runId}-account-a` }])
+  store.transactions = await loadRows(refs)
+  store.categories = [{ id: 'bulk-c', type: 'expense' }]
+  // After this client loaded it, another member's edit leaves the last row pointing at a deleted budget.
+  await privilegedDocument(`transactions/${refs[501].id}?updateMask.fieldPaths=budgetId`, { budgetId: deletedId })
+
+  const outcome = await store.bulkEditTransactions({ categoryId: 'bulk-c' }, refs.map(ref => ref.id), [{ id: activeBudget.id, name: 'Active', archived: false }])
+
+  assert.deepEqual(outcome.written, refs.slice(0, 500).map(ref => ref.id))
+  assert.deepEqual(outcome.failed.map(failure => [failure.ids, failure.error.code]), [[[refs[500].id, refs[501].id], 'permission-denied']])
+  const expected = [...Array(500).fill('bulk-c'), `${runId}-category`, `${runId}-category`]
+  assert.deepEqual((await Promise.all(refs.map(dataOf))).map(data => data.categoryId), expected)
+  assert.deepEqual(store.transactions.map(tx => tx.categoryId), expected, 'only the committed chunk changes local rows')
 })

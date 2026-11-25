@@ -48,6 +48,19 @@ test('S9: an invalid ?mes falls back to the current month', () => {
 test('S9: a future ?mes falls back to the current month', () => {
   assert.deepEqual(parseSelectedMonth('2026-12', NOW), NOVEMBER_2026)
   assert.deepEqual(parseSelectedMonth('2031-01', NOW), NOVEMBER_2026)
+  assert.deepEqual(parseSelectedMonth('9999-12', NOW), NOVEMBER_2026)
+})
+
+test('S9: ?mes must be exactly YYYY-MM from 1900-01 on', () => {
+  assert.deepEqual(parseSelectedMonth('1900-01', NOW), { year: 1900, month: 0 })
+  for (const raw of [' 2026-10', '2026-10 ', '2026-10\n', '２０２６-10', '0099-01', '0000-00', 'abcd-ef', ['2026-10', '2026-09']]) {
+    assert.deepEqual(parseSelectedMonth(raw, NOW), NOVEMBER_2026, `${JSON.stringify(raw)} falls back`)
+  }
+})
+
+test('S9: the current month is the month of the given day at both ends of a year', () => {
+  assert.deepEqual(parseSelectedMonth('2025-12', new Date(2026, 0, 1, 0, 5)), { year: 2025, month: 11 })
+  assert.deepEqual(parseSelectedMonth('2026-01', new Date(2026, 0, 31, 23, 59)), { year: 2026, month: 0 })
 })
 
 test('S9: month keys, labels and shifts cross year boundaries', () => {
@@ -117,4 +130,27 @@ test('S9: back to the current month drops ?mes, keeps other keys and replaces th
     router.back()
   })
   assert.equal(fullPath(), '/')
+})
+
+test('S9: month changes keep the hash and every other query key, and never push a history entry', async () => {
+  const { router, state, fullPath } = await withRoute('/goals?tab=savings&x=1&mes=2026-02#top')
+  const pushes: unknown[] = []
+  const push = router.push.bind(router)
+  router.push = ((to: Parameters<typeof push>[0]) => { pushes.push(to); return push(to) }) as typeof router.push
+  assert.equal(state.label.value, 'febrero de 2026')
+
+  await state.goToPreviousMonth()
+  assert.equal(fullPath(), '/goals?tab=savings&x=1&mes=2026-01#top')
+  await state.goToMonth({ year: 2025, month: 11 })
+  assert.equal(fullPath(), '/goals?tab=savings&x=1&mes=2025-12#top')
+  await state.goToNextMonth()
+  assert.equal(fullPath(), '/goals?tab=savings&x=1&mes=2026-01#top')
+  await state.goToMonth({ year: 2027, month: 3 })
+  assert.equal(fullPath(), '/goals?tab=savings&x=1#top', 'a future month leaves ?mes out')
+  await state.goToMonth({ year: 2026, month: 9 })
+  await state.goToCurrentMonth()
+  assert.equal(fullPath(), '/goals?tab=savings&x=1#top')
+  await state.goToNextMonth()
+  assert.equal(fullPath(), '/goals?tab=savings&x=1#top', 'next at the current month does nothing')
+  assert.deepEqual(pushes, [], 'month changes replace the entry')
 })
