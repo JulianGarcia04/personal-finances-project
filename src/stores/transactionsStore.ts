@@ -366,6 +366,9 @@ interface TransactionsState {
   categories: Category[];
   reversibleSettlementIds: string[];
   loading: boolean;
+  // Newest fetchTransactions / fetchCategories request; an older one is superseded and changes nothing.
+  transactionsLoadVersion: number;
+  categoriesLoadVersion: number;
 }
 
 export const useTransactionsStore = defineStore('transactions', {
@@ -374,6 +377,8 @@ export const useTransactionsStore = defineStore('transactions', {
     categories: [],
     reversibleSettlementIds: [],
     loading: false,
+    transactionsLoadVersion: 0,
+    categoriesLoadVersion: 0,
   }),
   getters: {
     // Filtrar transacciones locales
@@ -446,6 +451,10 @@ export const useTransactionsStore = defineStore('transactions', {
       const workspaceId = authStore.activeWorkspaceId
       if (!user || !workspaceId) return
 
+      // Results apply only while this is the newest load and its workspace is still the active one.
+      const requestVersion = ++this.categoriesLoadVersion
+      const isCurrent = () => requestVersion === this.categoriesLoadVersion &&
+        authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === user.uid
       this.loading = true
       try {
         const q = query(
@@ -453,6 +462,7 @@ export const useTransactionsStore = defineStore('transactions', {
           where('workspaceId', '==', workspaceId)
         )
         const snapshot = await getDocs(q)
+        if (!isCurrent()) return
         const categoriesList: Category[] = []
         snapshot.forEach(docSnap => {
           categoriesList.push({ id: docSnap.id, ...docSnap.data() } as Category)
@@ -461,22 +471,28 @@ export const useTransactionsStore = defineStore('transactions', {
         // Si no existen categorías personalizadas ni globales asociadas al workspace, inicializamos las por defecto
         const workspaceHasCategories = categoriesList.some(cat => cat.workspaceId === workspaceId)
         if (categoriesList.length === 0 || !workspaceHasCategories) {
-          await this.initDefaultCategories()
+          await this.initDefaultCategories(workspaceId, isCurrent)
         } else {
           this.categories = categoriesList
         }
       } catch (error) {
         console.error('Error al cargar categorías:', error)
       } finally {
-        this.loading = false
+        if (requestVersion === this.categoriesLoadVersion) this.loading = false
       }
     },
 
     // Guardar las categorías iniciales en la base de datos
-    async initDefaultCategories(): Promise<void> {
+    // They are written to `workspaceId` (the active workspace by default) and shown only if `isCurrent`
+    // still holds when the write ends; by default, if that workspace and user are still the active ones.
+    async initDefaultCategories(
+      workspaceId: string | null = useAuthStore().activeWorkspaceId,
+      isCurrent?: () => boolean
+    ): Promise<void> {
       const authStore = useAuthStore()
-      const workspaceId = authStore.activeWorkspaceId
+      const userId = auth.currentUser?.uid
       if (!workspaceId) return
+      const stillCurrent = isCurrent ?? (() => authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === userId)
 
       const batch = writeBatch(db)
       const newCats: Category[] = []
@@ -493,7 +509,7 @@ export const useTransactionsStore = defineStore('transactions', {
       })
 
       await batch.commit()
-      this.categories = newCats
+      if (stillCurrent()) this.categories = newCats
     },
 
     // 2. Cargar Transacciones
@@ -503,6 +519,10 @@ export const useTransactionsStore = defineStore('transactions', {
       const workspaceId = authStore.activeWorkspaceId
       if (!user || !workspaceId) return
 
+      // Results apply only while this is the newest load and its workspace is still the active one.
+      const requestVersion = ++this.transactionsLoadVersion
+      const isCurrent = () => requestVersion === this.transactionsLoadVersion &&
+        authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === user.uid
       this.loading = true
       try {
         const q = query(
@@ -511,6 +531,7 @@ export const useTransactionsStore = defineStore('transactions', {
           orderBy('date', 'desc')
         )
         const snapshot = await getDocs(q)
+        if (!isCurrent()) return
         const transactionsList: Transaction[] = []
         snapshot.forEach(docSnap => {
           const data = docSnap.data()
@@ -527,11 +548,12 @@ export const useTransactionsStore = defineStore('transactions', {
         const reversibleIds = await Promise.all(
           transactionsList.map(async tx => await this.canReverseSettlement(tx) ? tx.id : null)
         )
+        if (!isCurrent()) return
         this.reversibleSettlementIds = reversibleIds.filter((id): id is string => id !== null)
       } catch (error) {
         console.error('Error fetching transactions:', error)
       } finally {
-        this.loading = false
+        if (requestVersion === this.transactionsLoadVersion) this.loading = false
       }
     },
 

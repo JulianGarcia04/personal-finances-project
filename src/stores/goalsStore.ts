@@ -55,6 +55,8 @@ interface GoalsState {
   // Workspace-wide budget alerts (notifyBudgetThreshold email + push). Absent means enabled.
   budgetAlertsEnabled: boolean;
   loading: boolean;
+  // Newest fetchGoals request; an older one is superseded and changes nothing.
+  goalsLoadVersion: number;
 }
 
 export interface GoalsBudgetSettingsDocument extends Partial<BudgetSettings> {
@@ -411,6 +413,7 @@ export const useGoalsStore = defineStore('goals', {
     budgetSettingsLoadVersion: 0,
     budgetAlertsEnabled: true,
     loading: false,
+    goalsLoadVersion: 0,
   }),
   getters: {
     getGoalById: (state) => (id: string): Goal | undefined => state.goals.find(g => g.id === id),
@@ -421,14 +424,20 @@ export const useGoalsStore = defineStore('goals', {
   actions: {
     // 1. Cargar Objetivos de Ahorro
     async fetchGoals(): Promise<void> {
-      const { db, authStore } = await loadGoalsRuntime()
+      const { db, auth, authStore } = await loadGoalsRuntime()
       const workspaceId = authStore.activeWorkspaceId
+      const userId = auth.currentUser?.uid
       if (!workspaceId) return
 
+      // Results apply only while this is the newest load and its workspace is still the active one.
+      const requestVersion = ++this.goalsLoadVersion
+      const isCurrent = () => requestVersion === this.goalsLoadVersion &&
+        authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === userId
       this.loading = true
       try {
         const q = query(collection(db, 'goals'), where('workspaceId', '==', workspaceId))
         const querySnapshot = await getDocs(q)
+        if (!isCurrent()) return
         const goalsList: Goal[] = []
         querySnapshot.forEach((docSnap) => {
           const data = docSnap.data()
@@ -448,7 +457,7 @@ export const useGoalsStore = defineStore('goals', {
       } catch (error) {
         console.error('Error al cargar metas de ahorro:', error)
       } finally {
-        this.loading = false
+        if (requestVersion === this.goalsLoadVersion) this.loading = false
       }
     },
 
