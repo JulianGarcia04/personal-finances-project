@@ -750,3 +750,92 @@ test('S7: a type change may set a new active budget in the same write, never an 
   await updateDoc(fromTransfer, { ...toExpense, budgetId: activeBudget.id })
   assert.deepEqual([(await dataOf(expense)).budgetId, (await dataOf(fromTransfer)).budgetId], [activeBudget.id, activeBudget.id])
 })
+
+// S9: the Transactions bulk edit writes only categoryId and/or budgetId, in one writeBatch per chunk.
+const commitBulkEdit = rows => {
+  const batch = writeBatch(dual)
+  for (const [ref, patch] of rows) batch.update(ref, patch)
+  return batch.commit()
+}
+
+test('S9: a bulk edit batch of category and budget updates applies together, and one invalid row rejects the whole batch', async () => {
+  const expense = await createTransaction()
+  const income = await createTransaction({ type: 'income', amount: 17, budgetId: activeBudget.id })
+  const categoryOnly = await createTransaction({ budgetId: activeBudget.id })
+  const before = await Promise.all([expense, income, categoryOnly].map(dataOf))
+  await commitBulkEdit([
+    [expense, { categoryId: 'bulk-category', budgetId: activeBudget.id }],
+    [income, { budgetId: null }],
+    [categoryOnly, { categoryId: 'bulk-category' }]
+  ])
+  assert.deepEqual(await dataOf(expense), { ...before[0], categoryId: 'bulk-category', budgetId: activeBudget.id })
+  assert.deepEqual(await dataOf(income), { ...before[1], budgetId: null })
+  assert.deepEqual(await dataOf(categoryOnly), { ...before[2], categoryId: 'bulk-category' })
+
+  const archived = await createBudget()
+  await updateDoc(archived, { archived: true, updatedAt: serverTimestamp() })
+  const transfer = await createTransaction({ type: 'transfer', amount: 17, toAccountId: `${runId}-account-a`, categoryId: '' })
+  const account = await createAccount()
+  const linked = await createLinkedBudget([account.id])
+  const linkedRow = await createTransaction({ accountId: account.id, budgetId: linked.id })
+  const stale = transactionRef(id('bulk-stale'))
+  await privilegedDocument(`transactions/${stale.id}`, {
+    workspaceId: wsA, userId: dualId, accountId: `${runId}-account-a`, amount: -17, currency: 'USD', type: 'expense',
+    categoryId: `${runId}-category`, description: 'Stale reference', budgetId: await createDeletedBudget(),
+    date: new Date('2026-10-01T00:00:00Z'), createdAt: new Date('2026-10-01T00:00:00Z')
+  })
+  const valid = await createTransaction()
+  const target = await createTransaction()
+  for (const [label, invalid] of [
+    ['transfer with a budget', [transfer, { budgetId: activeBudget.id }]],
+    ['linked account leaving its budget', [linkedRow, { categoryId: 'bulk-category', budgetId: activeBudget.id }]],
+    ['archived budget', [target, { categoryId: 'bulk-category', budgetId: archived.id }]],
+    ['foreign budget', [target, { categoryId: 'bulk-category', budgetId: foreignBudget.id }]],
+    ['category next to a deleted budget', [stale, { categoryId: 'bulk-category' }]]
+  ]) {
+    await deniedUnchanged(() => commitBulkEdit([[valid, { categoryId: 'bulk-category', budgetId: activeBudget.id }], invalid]))
+    assert.equal((await dataOf(valid)).categoryId, `${runId}-category`, label)
+  }
+  // The same row alone moves to its linked budget, and the stale one takes a category with a new budget.
+  await commitBulkEdit([[stale, { categoryId: 'bulk-category', budgetId: activeBudget.id }], [valid, { budgetId: activeBudget.id }]])
+  assert.deepEqual([(await dataOf(stale)).budgetId, (await dataOf(valid)).budgetId], [activeBudget.id, activeBudget.id])
+})
+
+test('S9: a bulk edit changes a pocket movement and the expense leg of a shared expense alone, never the twin', async () => {
+  const parentId = id('bulk-pocket-parent')
+  const pocketId = id('bulk-pocket')
+  const movementId = id('bulk-pocket-movement')
+  await privilegedDocument(`accounts/${parentId}`, {
+    workspaceId: wsA, userId: dualId, name: 'Parent', type: 'savings', balance: 100, limit: 0, currency: 'USD',
+    childAccountIds: [pocketId], createdAt: new Date('2026-10-01T00:00:00Z')
+  })
+  await privilegedDocument(`accounts/${pocketId}`, {
+    workspaceId: wsA, userId: dualId, name: 'Pocket', type: 'savings', balance: 50, limit: 0, currency: 'USD',
+    parentAccountId: parentId, childAccountIds: [], pocketActivity: true, openingAllocationId: null,
+    createdAt: new Date('2026-10-01T00:00:00Z')
+  })
+  await privilegedDocument(`transactions/${movementId}`, {
+    workspaceId: wsA, userId: dualId, accountId: pocketId, toAccountId: null, amount: -10, type: 'expense',
+    categoryId: `${runId}-category`, description: 'Pocket purchase', currency: 'USD',
+    date: new Date('2026-10-02T12:00:00Z'), createdAt: new Date('2026-10-02T12:00:00Z')
+  })
+  const legs = await createSharedExpense()
+  const pocketBefore = await dataOf(accountRef(pocketId))
+  const transferBefore = await dataOf(legs.transferLeg)
+
+  await commitBulkEdit([
+    [transactionRef(movementId), { categoryId: 'bulk-category', budgetId: activeBudget.id }],
+    [legs.expenseLeg, { categoryId: 'bulk-category', budgetId: activeBudget.id }]
+  ])
+  const [movement, expenseLeg] = [await dataOf(transactionRef(movementId)), await dataOf(legs.expenseLeg)]
+  assert.deepEqual([movement.categoryId, movement.budgetId, movement.amount], ['bulk-category', activeBudget.id, -10])
+  assert.deepEqual([expenseLeg.categoryId, expenseLeg.budgetId, expenseLeg.amount], ['bulk-category', activeBudget.id, -30])
+  assert.deepEqual(await dataOf(accountRef(pocketId)), pocketBefore, 'no balance or marker changes')
+  assert.deepEqual(await dataOf(legs.transferLeg), transferBefore, 'the twin is untouched')
+
+  // The transfer twin never takes a budget, so a batch that includes it is refused whole.
+  await deniedUnchanged(() => commitBulkEdit([
+    [legs.expenseLeg, { budgetId: null }],
+    [legs.transferLeg, { budgetId: activeBudget.id }]
+  ]))
+})

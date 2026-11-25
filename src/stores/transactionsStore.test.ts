@@ -17,8 +17,8 @@ type StoredDoc = Record<string, unknown>
 type Write = { kind: 'update' | 'set' | 'delete'; path: string; data?: StoredDoc }
 // A collection read that waits until the test answers it with rows keyed by document id, or fails it.
 type PendingRead = { collection: string; workspaceId: unknown; answer(rows: Record<string, StoredDoc>): void; fail(): void }
-// A batch commit that waits until the test calls done().
-type PendingBatch = { writes: Write[]; done(): void }
+// A batch commit that waits until the test calls done(), or fail() to reject it.
+type PendingBatch = { writes: Write[]; done(): void; fail(error: Error): void }
 
 const timestamp = (date: Date) => ({ toDate: () => date, toMillis: () => date.getTime() })
 // A Firestore Timestamp instance, for reads that check `instanceof Timestamp`.
@@ -78,7 +78,8 @@ const loadStore = (t: TestContext, documents: Record<string, StoredDoc>) => {
       const writes: Write[] = []
       return {
         set: (ref: { path: string }, data: StoredDoc) => { writes.push({ kind: 'set', path: ref.path, data }) },
-        commit: () => new Promise<void>(done => { batches.push({ writes, done }) })
+        update: (ref: { path: string }, data: StoredDoc) => { writes.push({ kind: 'update', path: ref.path, data }) },
+        commit: () => new Promise<void>((done, fail) => { batches.push({ writes, done, fail }) })
       }
     },
     deleteField: () => DELETE_FIELD,
@@ -630,4 +631,138 @@ test('S8.2: switching while movements and categories load ends with the new work
     assert.deepEqual(store.categories.map(category => category.workspaceId), ['ws-2'], label)
     assert.equal(store.loading, false, label)
   }
+})
+
+// S9: budget filter and bulk category/budget edits.
+const budgetRows = (): Record<string, StoredDoc> => ({
+  'accounts/bank': bank,
+  'accounts/bank2': { ...bank, name: 'Banco 2' },
+  'transactions/absent': expense(),
+  'transactions/null': expense({ budgetId: null }),
+  'transactions/literal': expense({ budgetId: 'default-monthly' }),
+  'transactions/income-base': expense({ type: 'income', amount: 100, categoryId: 'salary' }),
+  'transactions/trip': expense({ budgetId: 'viaje' }),
+  'transactions/income-trip': expense({ type: 'income', amount: 100, categoryId: 'salary', budgetId: 'viaje' }),
+  'transactions/transfer': expense({ type: 'transfer', amount: 100, toAccountId: 'bank2', categoryId: '' }),
+  'transactions/stray-transfer': expense({ type: 'transfer', amount: 100, toAccountId: 'bank2', categoryId: '', budgetId: 'viaje' }),
+  'transactions/loan': expense({ type: 'loan', categoryId: '' })
+})
+const idsOf = (rows: Array<{ id: string }>) => rows.map(row => row.id).sort()
+
+test('S9: the base monthly budget filter covers absent, null and the literal default, for expenses and income', t => {
+  const { store } = loadStore(t, budgetRows())
+  assert.deepEqual(idsOf(store.filteredTransactions({ budgetId: 'default-monthly' })), ['absent', 'income-base', 'literal', 'null'])
+  assert.deepEqual(idsOf(store.filteredTransactions({ budgetId: 'viaje' })), ['income-trip', 'trip'])
+  // Transfers and loans never match a budget filter, even with a stray stored reference.
+  assert.deepEqual(idsOf(store.filteredTransactions({ budgetId: 'viaje', type: 'transfer' })), [])
+  // No budget filter keeps every movement, as before.
+  assert.equal(store.filteredTransactions({ budgetId: '' }).length, 9)
+  assert.equal(store.filteredTransactions({}).length, 9)
+})
+
+const bulkBudgets = [{ id: 'viaje', name: 'Viaje', archived: false }]
+const bulkCategories = [
+  { id: 'food', workspaceId: 'ws-1', name: 'Comida', icon: 'Utensils', color: '#10b981', type: 'expense' as const },
+  { id: 'transport', workspaceId: 'ws-1', name: 'Transporte', icon: 'Car', color: '#3b82f6', type: 'expense' as const }
+]
+const manyExpenses = (count: number): Record<string, StoredDoc> => Object.fromEntries([
+  ['accounts/bank', bank],
+  ...Array.from({ length: count }, (_, index) => [`transactions/bulk-${index}`, expense()])
+])
+// Lets every pending batch commit (or fail) in order, waiting for the store to send the next one.
+const settleBatches = async (batches: PendingBatch[], outcomes: Array<'ok' | Error>) => {
+  for (let index = 0; index < outcomes.length; index++) {
+    for (let tries = 0; tries < 20 && batches.length <= index; tries++) await flush()
+    const outcome = outcomes[index]
+    if (outcome === 'ok') batches[index].done()
+    else batches[index].fail(outcome)
+  }
+}
+
+test('S9: a bulk edit commits one writeBatch per 500 rows that writes only categoryId and budgetId', async t => {
+  const { store, batches, commits } = loadStore(t, manyExpenses(501))
+  store.categories = bulkCategories
+  const ids = store.transactions.map(tx => tx.id)
+
+  const running = store.bulkEditTransactions({ categoryId: 'transport', budgetId: 'viaje' }, ids, bulkBudgets)
+  await settleBatches(batches, ['ok', 'ok'])
+  const outcome = await running
+
+  assert.deepEqual(batches.map(batch => batch.writes.length), [500, 1])
+  assert.equal(commits.length, 0, 'no runTransaction')
+  for (const write of batches.flatMap(batch => batch.writes)) {
+    assert.equal(write.kind, 'update')
+    assert.match(write.path, /^transactions\/bulk-/)
+    assert.deepEqual(write.data, { categoryId: 'transport', budgetId: 'viaje' })
+  }
+  assert.equal(outcome.written.length, 501)
+  assert.deepEqual(outcome.failed, [])
+  assert.ok(store.transactions.every(tx => tx.categoryId === 'transport' && tx.budgetId === 'viaje'))
+  assert.ok(store.transactions.every(tx => tx.amount === -100 && tx.accountId === 'bank'), 'financial fields untouched')
+})
+
+test('S9: a bulk edit writes the base budget as null, skips rows that cannot take the change and leaves them as they were', async t => {
+  const { store, batches } = loadStore(t, budgetRows())
+  store.categories = bulkCategories
+
+  const running = store.bulkEditTransactions({ budgetId: 'default-monthly' }, ['trip', 'income-trip', 'transfer', 'absent', 'loan'], bulkBudgets)
+  await settleBatches(batches, ['ok'])
+  const outcome = await running
+
+  assert.deepEqual(batches[0].writes, [
+    { kind: 'update', path: 'transactions/trip', data: { budgetId: null } },
+    { kind: 'update', path: 'transactions/income-trip', data: { budgetId: null } }
+  ])
+  assert.deepEqual(outcome.plan.skipped, [
+    { id: 'transfer', reason: 'no-budget-type' }, { id: 'absent', reason: 'unchanged' }, { id: 'loan', reason: 'no-budget-type' }
+  ])
+  assert.equal(store.transactions.find(tx => tx.id === 'trip')?.budgetId, null)
+  assert.equal('budgetId' in (store.transactions.find(tx => tx.id === 'transfer') ?? {}), false)
+})
+
+test('S9: a failed chunk is reported with its rows while the other chunks still apply', async t => {
+  const { store, batches } = loadStore(t, manyExpenses(501))
+  store.categories = bulkCategories
+  const ids = store.transactions.map(tx => tx.id)
+
+  const running = store.bulkEditTransactions({ budgetId: 'viaje' }, ids, bulkBudgets)
+  await settleBatches(batches, [new Error('permission-denied'), 'ok'])
+  const outcome = await running
+
+  assert.equal(outcome.written.length, 1)
+  assert.equal(outcome.failed.length, 1)
+  assert.equal(outcome.failed[0].ids.length, 500)
+  assert.deepEqual(outcome.failed[0].ids, ids.slice(0, 500))
+  assert.equal(store.transactions.filter(tx => tx.budgetId === 'viaje').length, 1, 'only the committed chunk changes local rows')
+})
+
+test('S9: nothing is written for an invalid request, and nothing local changes after a switch during the commit', async t => {
+  const invalid = loadStore(t, budgetRows())
+  invalid.store.categories = bulkCategories
+  await assert.rejects(invalid.store.bulkEditTransactions({ categoryId: 'transport' }, ['absent', 'income-base'], bulkBudgets), /selecciona solo gastos o solo ingresos/)
+  await assert.rejects(invalid.store.bulkEditTransactions({ budgetId: 'archivado' }, ['absent'], bulkBudgets), /ya no está disponible/)
+  assert.equal(invalid.batches.length, 0)
+
+  const switched = loadStore(t, budgetRows())
+  switched.store.categories = bulkCategories
+  const running = switched.store.bulkEditTransactions({ budgetId: 'viaje' }, ['absent'], bulkBudgets)
+  await flush()
+  switched.authStore.activeWorkspaceId = 'ws-2'
+  await settleBatches(switched.batches, ['ok'])
+  const outcome = await running
+  assert.deepEqual(outcome.written, ['absent'])
+  assert.equal('budgetId' in (switched.store.transactions.find(tx => tx.id === 'absent') ?? {}), false)
+
+  // Another user signing in stops the remaining chunks; they are reported as failed, never sent.
+  const relogged = loadStore(t, manyExpenses(501))
+  relogged.store.categories = bulkCategories
+  const pending = relogged.store.bulkEditTransactions({ budgetId: 'viaje' }, relogged.store.transactions.map(tx => tx.id), bulkBudgets)
+  await flush()
+  relogged.auth.currentUser = { uid: 'user-2' }
+  await settleBatches(relogged.batches, ['ok'])
+  const stopped = await pending
+  assert.equal(relogged.batches.length, 1)
+  assert.equal(stopped.written.length, 500)
+  assert.equal(stopped.failed.length, 1)
+  assert.equal(stopped.failed[0].ids.length, 1)
 })

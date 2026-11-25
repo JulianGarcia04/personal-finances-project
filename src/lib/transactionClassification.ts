@@ -1,6 +1,17 @@
 import type { Transaction } from '../types.ts'
 import { budgetIdToPersist, canCarryBudget, resolveBudgetId } from './budgets.ts'
 
+/** How the base monthly budget (no explicit budget) is named in lists, filters and pickers. */
+export const BASE_MONTHLY_BUDGET_LABEL = 'Presupuesto mensual base'
+
+/**
+ * Budget a movement belongs to: an expense or income resolves to its budget, where an absent,
+ * null or literal default reference is the base monthly budget; transfers and loans belong to
+ * none (null), even with a stray stored reference.
+ */
+export const budgetOfTransaction = (transaction: Pick<Transaction, 'type' | 'budgetId'>): string | null =>
+  canCarryBudget(transaction.type) ? resolveBudgetId(transaction.budgetId) : null
+
 export interface ExpenseBudgetAssignmentContext {
   getUserId(): string | null
   getWorkspaceId(): string | null

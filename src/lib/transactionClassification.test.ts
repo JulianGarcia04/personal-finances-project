@@ -5,7 +5,7 @@ import {
   DEFAULT_MONTHLY_BUDGET_ID, allBudgetsEstimatedMonthlyTotal,
   eventBudgetCommittedAllocation, monthlyBudgetAllocation,
 } from './budgets.ts'
-import { createExpenseBudgetAssigner, selectBudgetExpenses } from './transactionClassification.ts'
+import { budgetOfTransaction, createExpenseBudgetAssigner, selectBudgetExpenses } from './transactionClassification.ts'
 
 const expense = (extra: Partial<Transaction> = {}): Transaction => ({
   id: 'expense', workspaceId: 'workspace', userId: 'creator', accountId: 'credit',
@@ -218,4 +218,18 @@ test('moving a movement back to the default budget stores no budget reference', 
   await h.assign('expense', 'default-monthly')
   assert.deepEqual(h.writes, [{ id: 'expense', patch: { budgetId: null } }])
   assert.equal(h.rows()[0].budgetId, null)
+})
+
+test('S9: expenses and income belong to a budget; absent, null and the literal default are the base monthly budget', () => {
+  for (const type of ['expense', 'income'] as const) {
+    assert.equal(budgetOfTransaction(expense({ type })), DEFAULT_MONTHLY_BUDGET_ID, `${type} without budgetId`)
+    assert.equal(budgetOfTransaction(expense({ type, budgetId: null })), DEFAULT_MONTHLY_BUDGET_ID, `${type} with null`)
+    assert.equal(budgetOfTransaction(expense({ type, budgetId: DEFAULT_MONTHLY_BUDGET_ID })), DEFAULT_MONTHLY_BUDGET_ID, `${type} with the literal`)
+    assert.equal(budgetOfTransaction(expense({ type, budgetId: 'event' })), 'event', `${type} with a budget`)
+  }
+  // Transfers and loans never belong to a budget, even with a stray stored reference.
+  for (const type of ['transfer', 'loan', 'loan_payment'] as const) {
+    assert.equal(budgetOfTransaction(expense({ type })), null, type)
+    assert.equal(budgetOfTransaction(expense({ type, budgetId: 'event' })), null, `${type} with a stray budgetId`)
+  }
 })

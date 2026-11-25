@@ -23,8 +23,9 @@ import { parseDateOnly, toDateValue } from '@/lib/dates'
 import { roundMoney } from '@/lib/money'
 import { planTransferDirection, resolveStatementImportId, type StatementImportType } from '@/lib/statementImport'
 import { DELETED_ACCOUNT_HISTORY_MESSAGE, referencesDeletedAccount } from '@/lib/deletedAccountHistory'
-import { createExpenseBudgetAssigner, selectBudgetExpenses } from '@/lib/transactionClassification'
-import { budgetChangeForEdit, budgetIdToPersist, type EditBudgetChange } from '@/lib/budgets'
+import { budgetOfTransaction, createExpenseBudgetAssigner, selectBudgetExpenses } from '@/lib/transactionClassification'
+import { budgetChangeForEdit, budgetIdToPersist, type EditBudgetChange, type LinkableBudget } from '@/lib/budgets'
+import { chunkBulkEditUpdates, planBulkTransactionEdit, type BulkEditPlan, type BulkEditRequest } from '@/lib/bulkTransactionEdit'
 import { 
   collection, 
   query, 
@@ -389,6 +390,8 @@ export const useTransactionsStore = defineStore('transactions', {
       search?: string;
       dateFrom?: string;
       dateTo?: string;
+      // Budget id; the base monthly budget also matches movements without one. Transfers and loans never match.
+      budgetId?: string;
     } = {}) => {
       let list = [...state.transactions]
 
@@ -402,6 +405,9 @@ export const useTransactionsStore = defineStore('transactions', {
       }
       if (filters.type) {
         list = list.filter(t => t.type === filters.type)
+      }
+      if (filters.budgetId) {
+        list = list.filter(t => budgetOfTransaction(t) === filters.budgetId)
       }
       if (filters.search) {
         const term = filters.search.toLowerCase()
@@ -1769,6 +1775,58 @@ export const useTransactionsStore = defineStore('transactions', {
         },
       })
       await assign(transactionId, budgetId)
+    },
+
+    // S9: category and/or budget of several movements at once. The plan is made again here from the
+    // live local rows, and only `categoryId`/`budgetId` are written, in writeBatch chunks of up to
+    // 500 that each apply all-or-nothing. Pocket movements and the expense leg of a shared expense
+    // take these fields alone (the rules accept them without balances or the twin, which carries
+    // neither). A failed chunk is reported with its rows and the next chunks still run, unless the
+    // signed-in user changed, which stops the rest.
+    async bulkEditTransactions(
+      request: BulkEditRequest,
+      transactionIds: readonly string[],
+      budgets: readonly LinkableBudget[]
+    ): Promise<{ plan: BulkEditPlan; written: string[]; failed: Array<{ ids: string[]; error: unknown }> }> {
+      const user = auth.currentUser
+      const authStore = useAuthStore()
+      const workspaceId = authStore.activeWorkspaceId
+      if (!user || !workspaceId) throw new Error('Usuario o Workspace no inicializado')
+      const accountsStore = useAccountsStore()
+      const plan = planBulkTransactionEdit(request, transactionIds, this.transactions, {
+        workspaceId,
+        accounts: accountsStore.accounts,
+        loadedAccountsWorkspaceId: accountsStore.loadedWorkspaceId === workspaceId ? workspaceId : null,
+        budgets,
+        categories: this.categories
+      })
+
+      const written: string[] = []
+      const failed: Array<{ ids: string[]; error: unknown }> = []
+      for (const chunk of chunkBulkEditUpdates(plan.updates)) {
+        const ids = chunk.map(update => update.id)
+        if (auth.currentUser?.uid !== user.uid) {
+          failed.push({ ids, error: new Error('La sesión cambió antes de guardar los cambios.') })
+          continue
+        }
+        const batch = writeBatch(db)
+        for (const { id, patch } of chunk) batch.update(doc(db, 'transactions', id), { ...patch })
+        try {
+          await batch.commit()
+        } catch (error) {
+          console.error('Error al editar movimientos en lote:', error)
+          failed.push({ ids, error })
+          continue
+        }
+        written.push(...ids)
+        // A completed write must not leak into another user's or workspace's list.
+        if (auth.currentUser?.uid !== user.uid || authStore.activeWorkspaceId !== workspaceId) continue
+        for (const { id, type, patch } of chunk) {
+          const current = this.transactions.find(transaction => transaction.id === id)
+          if (current?.workspaceId === workspaceId && current.type === type) Object.assign(current, patch)
+        }
+      }
+      return { plan, written, failed }
     },
 
     // 6. Editar / Actualizar Transacción

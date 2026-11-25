@@ -2,8 +2,10 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import ts from 'typescript'
-import { computed, effectScope, reactive, ref, watch } from 'vue'
+import { computed, effectScope, nextTick, reactive, ref, watch } from 'vue'
 import { DEFAULT_MONTHLY_BUDGET_ID, budgetChangeForEdit, canAssignBudget, canCarryBudget, linkedBudgetForAccount, resolveBudgetId } from '../lib/budgets.ts'
+import { BASE_MONTHLY_BUDGET_LABEL, budgetOfTransaction } from '../lib/transactionClassification.ts'
+import { BULK_CATEGORY_SINGLE_TYPE_MESSAGE, describeBulkEditOutcome, describeBulkEditPlan, planBulkTransactionEdit } from '../lib/bulkTransactionEdit.ts'
 import { toDateValue, toLocalDateKey } from '../lib/dates.ts'
 import { DELETED_ACCOUNT_HISTORY_MESSAGE, referencesDeletedAccount } from '../lib/deletedAccountHistory.ts'
 import { canDeleteMirrorTransaction } from '../lib/mirror.ts'
@@ -39,7 +41,8 @@ const evaluateComponentFunction = <Result>(name: string, dependencies: Record<st
   return evaluate(...dependencyValues)
 }
 
-test('runs Transactions setup when there are already movements to display', () => {
+// Runs the actual setup script (declaration order and Vue watchers included) and returns the named bindings.
+const runTransactionsSetup = <Bindings>(exposed: string[] = []) => {
   const dependencies = {
     computed, reactive, ref, watch, DEFAULT_MONTHLY_BUDGET_ID, canDeleteMirrorTransaction, toLocalDateKey,
     onMounted: () => {}, // Do not fetch data; exercise the synchronous setup path in isolation.
@@ -52,16 +55,47 @@ test('runs Transactions setup when there are already movements to display', () =
     useWorkspacesStore: () => ({}),
     useNotificationsStore: () => ({})
   }
-  // Keep the actual declaration order and Vue's watcher behavior rather than testing functions in isolation.
   const setupBody = sourceFile.statements.filter(statement => !ts.isImportDeclaration(statement))
     .map(statement => statement.getText(sourceFile)).join('\n')
-  const javascript = ts.transpile(setupBody, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None })
+  const javascript = ts.transpile(setupBody, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }) +
+    `\nreturn { ${exposed.join(', ')} }`
   const runSetup = new Function(...Object.keys(dependencies), javascript)
   const scope = effectScope()
+  const bindings = scope.run(() => runSetup(...Object.values(dependencies))) as Bindings
+  return { bindings, stop: () => scope.stop() }
+}
+
+test('runs Transactions setup when there are already movements to display', () => {
+  let stop = () => {}
   try {
-    assert.doesNotThrow(() => scope.run(() => runSetup(...Object.values(dependencies))))
+    assert.doesNotThrow(() => { stop = runTransactionsSetup().stop })
   } finally {
-    scope.stop()
+    stop()
+  }
+})
+
+test('S9: changing any filter clears the selection', async () => {
+  const { bindings, stop } = runTransactionsSetup<{
+    filters: Record<string, string>
+    selectedTxIds: { value: string[] }
+  }>(['filters', 'selectedTxIds'])
+  try {
+    const { filters, selectedTxIds } = bindings
+    assert.deepEqual(Object.keys(filters).sort(), ['accountId', 'budgetId', 'categoryId', 'dateFrom', 'dateTo', 'search', 'type'])
+    selectedTxIds.value = ['movement']
+    await nextTick()
+    assert.deepEqual(selectedTxIds.value, ['movement'], 'a selection survives while filters stay the same')
+    for (const [key, value] of [
+      ['search', 'mercado'], ['accountId', 'bank'], ['categoryId', 'food'], ['type', 'expense'],
+      ['dateFrom', '2026-11-01'], ['dateTo', '2026-11-30'], ['budgetId', DEFAULT_MONTHLY_BUDGET_ID]
+    ]) {
+      selectedTxIds.value = ['movement']
+      filters[key] = value
+      await nextTick()
+      assert.deepEqual(selectedTxIds.value, [], key)
+    }
+  } finally {
+    stop()
   }
 })
 
@@ -82,7 +116,14 @@ const assignmentOptions = (
   }
 )(currentBudgetId, accountId)
 
-test('reassigns a budget only from the edit modal, never inline on list rows or cards', () => {
+// S7 kept one movement's budget in the edit modal; S9 adds the bulk path for a selection, never inline controls.
+test('reassigns one movement\'s budget only from the edit modal and a selection only from the bulk edit sheet', () => {
+  const bulkSheetStart = template.indexOf('<!-- Bulk Edit Sheet -->')
+  assert.ok(bulkSheetStart >= 0, 'the selection has its own bulk edit sheet')
+  const bulkSheet = template.slice(bulkSheetStart, template.indexOf('</BaseSheet>', bulkSheetStart))
+  assert.match(bulkSheet, /data-testid="bulk-edit-budget"/)
+  assert.match(bulkSheet, /data-testid="bulk-edit-category"/)
+  assert.match(script, /await transactionsStore\.bulkEditTransactions\(/, 'the bulk path commits through the store in batches')
   const markers = [...template.matchAll(/data-testid="budget-assignment-(row|card|edit)"/g)]
     .map(match => match[1])
     .sort()
@@ -598,4 +639,183 @@ test('locked budget selectors expose the lock reason to assistive technology', (
   assert.match(template, /:aria-describedby="newTxLinkedBudget \? 'new-tx-budget-lock' : undefined"/)
   assert.match(template, /id="new-tx-budget-lock"/)
   assert.match(template, /:aria-describedby="editingLinkedBudget \? 'edit-budget-lock' : undefined"/)
+})
+
+test('S9: the budget column shows the budget of expenses and income and "—" for the rest', () => {
+  const label = (ready: boolean) => evaluateComponentFunction<(tx: Record<string, unknown>) => string>('budgetLabelOf', {
+    budgetOfTransaction, DEFAULT_MONTHLY_BUDGET_ID, BASE_MONTHLY_BUDGET_LABEL,
+    budgetSettingsReady: { value: ready },
+    linkableBudgets: { value: [{ id: 'viaje', name: 'Viaje', archived: false }, { id: 'viejo', name: 'Viejo', archived: true }] }
+  })
+  const labelOf = label(true)
+  assert.equal(BASE_MONTHLY_BUDGET_LABEL, 'Presupuesto mensual base')
+  for (const budgetId of [undefined, null, DEFAULT_MONTHLY_BUDGET_ID]) {
+    assert.equal(labelOf({ type: 'expense', budgetId }), 'Presupuesto mensual base', String(budgetId))
+  }
+  assert.equal(labelOf({ type: 'income', budgetId: 'viaje' }), 'Viaje')
+  assert.equal(labelOf({ type: 'expense', budgetId: 'viejo' }), 'Viejo · Archivado')
+  assert.equal(labelOf({ type: 'expense', budgetId: 'borrado' }), 'Presupuesto no disponible')
+  for (const type of ['transfer', 'loan', 'loan_payment']) assert.equal(labelOf({ type, budgetId: 'viaje' }), '—', type)
+  // Until budgets load only the base budget, which needs no lookup, is named.
+  assert.equal(label(false)({ type: 'expense', budgetId: 'viaje' }), '…')
+  assert.equal(label(false)({ type: 'expense' }), 'Presupuesto mensual base')
+
+  assert.match(template, /<th[^>]*>Presupuesto<\/th>/)
+  assert.match(template, /data-testid="budget-cell"[\s\S]{0,300}budgetLabelOf\(tx\)/)
+  assert.match(template, /v-if="budgetOfTransaction\(tx\) !== null"\s+data-testid="budget-badge"[\s\S]{0,600}budgetLabelOf\(tx\)/)
+  assert.match(template, /colspan="8"/)
+})
+
+test('S9: the budget filter offers every budget, starting with the base monthly budget', () => {
+  assert.match(template, /id="tx-filter-budget"[\s\S]{0,200}v-model="filters\.budgetId"/)
+  assert.match(template, /<option value="">Todos los presupuestos<\/option>/)
+  assert.match(template, /:value="DEFAULT_MONTHLY_BUDGET_ID">\{\{ BASE_MONTHLY_BUDGET_LABEL \}\}<\/option>/)
+  assert.match(script, /\[filters\.accountId, filters\.categoryId, filters\.type, filters\.budgetId, filters\.dateFrom, filters\.dateTo\]/, 'the mobile filter count includes the budget')
+})
+
+test('S9: the category control asks for a single type and explains why it is disabled', () => {
+  assert.match(template, /data-testid="bulk-edit-category"[\s\S]{0,300}:disabled="!bulkCategoryKind \|\| bulkSaving"/)
+  assert.match(template, /:aria-describedby="bulkCategoryKind \? undefined : 'bulk-edit-category-hint'"/)
+  assert.match(template, /id="bulk-edit-category-hint"[\s\S]{0,200}\{\{ BULK_CATEGORY_SINGLE_TYPE_MESSAGE \}\}/)
+  assert.equal(BULK_CATEGORY_SINGLE_TYPE_MESSAGE, 'Para cambiar la categoría, selecciona solo gastos o solo ingresos.')
+  assert.match(script, /const bulkCategoryKind = computed\(\(\) => bulkCategoryType\(selectedTransactions\.value\)\)/)
+  // The picker offers the categories of that type and the ones valid for both.
+  const options = evaluateComponentFunction<() => Array<{ id: string }>>('bulkCategoryOptionsFor', {
+    transactionsStore: { categories: [
+      { id: 'food', type: 'expense' }, { id: 'salary', type: 'income' }, { id: 'other', type: 'both' }
+    ] }
+  }) as unknown as (kind: string | null) => Array<{ id: string }>
+  assert.deepEqual(options('expense').map(category => category.id), ['food', 'other'])
+  assert.deepEqual(options('income').map(category => category.id), ['salary', 'other'])
+  assert.deepEqual(options(null), [])
+  // The selection bar opens the sheet; budgets are chosen only among active ones.
+  assert.match(template, /@click="openBulkEdit"[\s\S]{0,300}aria-label="Editar categoría o presupuesto de la selección"/)
+  assert.match(template, /data-testid="bulk-edit-budget"[\s\S]{0,400}v-for="option in bulkBudgetOptions"/)
+})
+
+const bulkRow = (id: string, extra: Record<string, unknown> = {}) => ({
+  id, workspaceId: 'ws-1', accountId: 'bank', amount: -100, type: 'expense', categoryId: 'food', description: id,
+  date: new Date(2026, 10, 15), currency: 'COP', createdAt: new Date(2026, 10, 15), ...extra
+})
+
+// Runs the real applyBulkEdit with the real planning helpers and a recording store.
+const bulkEditHarness = (options: {
+  rows?: Array<Record<string, unknown>>
+  selected?: string[]
+  categoryId?: string
+  budgetId?: string
+  answer?: boolean
+  ready?: boolean
+  outcome?: (request: unknown, ids: string[]) => unknown
+} = {}) => {
+  const rows = options.rows ?? [bulkRow('a'), bulkRow('b'), bulkRow('transfer', { type: 'transfer', amount: 10, toAccountId: 'cash', categoryId: '' })]
+  const record = { errors: [] as string[], successes: [] as string[], infos: [] as string[], confirms: [] as Array<Record<string, unknown>> }
+  const notifications = {
+    error: (message: string) => { record.errors.push(message) },
+    success: (message: string) => { record.successes.push(message) },
+    info: (message: string) => { record.infos.push(message) },
+    confirm: async (confirmOptions: Record<string, unknown>) => { record.confirms.push(confirmOptions); return options.answer ?? true }
+  }
+  const calls: Array<[unknown, string[], unknown]> = []
+  const budgets = [{ id: 'viaje', name: 'Viaje', archived: false }]
+  const transactionsStore = {
+    transactions: rows,
+    categories: [{ id: 'food', type: 'expense' }, { id: 'transport', type: 'expense' }],
+    bulkEditTransactions: async (request: never, ids: string[], passedBudgets: unknown) => {
+      calls.push([request, [...ids], passedBudgets])
+      if (options.outcome) return options.outcome(request, ids)
+      const plan = planBulkTransactionEdit(request, ids, rows as never, bulkEditContext())
+      return { plan, written: plan.updates.map(update => update.id), failed: [] }
+    }
+  }
+  const accountsStore = { accounts: [{ id: 'bank' }, { id: 'cash' }], fetchAccounts: async () => true }
+  const selectedTxIds = { value: options.selected ?? rows.map(row => String(row.id)) }
+  const showBulkEdit = { value: true }
+  const bulkSaving = { value: false }
+  const linkableBudgets = { value: budgets }
+  const bulkEditContext = evaluateComponentFunction<() => Parameters<typeof planBulkTransactionEdit>[3]>('bulkEditContext', {
+    authStore: { activeWorkspaceId: 'ws-1' }, accountsStore, loadedAccountsWorkspaceId: () => 'ws-1', linkableBudgets, transactionsStore
+  })
+  const bulkEditRequest = evaluateComponentFunction('bulkEditRequest', {
+    bulkCategoryId: { value: options.categoryId ?? '' }, bulkBudgetId: { value: options.budgetId ?? '' }
+  })
+  const planSelection = evaluateComponentFunction('planSelection', {
+    planBulkTransactionEdit, selectedTxIds, transactionsStore, bulkEditContext
+  })
+  const applyBulkEdit = evaluateComponentFunction<() => Promise<void>>('applyBulkEdit', {
+    bulkSaving, budgetSettingsReady: { value: options.ready ?? true }, bulkEditRequest, planSelection, accountsStore, notifications, describeBulkEditPlan, describeBulkEditOutcome,
+    transactionsStore, selectedTxIds, linkableBudgets, showBulkEdit
+  })
+  return { applyBulkEdit, record, calls, selectedTxIds, showBulkEdit, bulkSaving }
+}
+
+test('S9: a bulk edit asks once, saying how many change and how many are skipped and why', async () => {
+  const declined = bulkEditHarness({ budgetId: 'viaje', answer: false })
+  await declined.applyBulkEdit()
+  assert.deepEqual(declined.calls, [], 'declining writes nothing')
+  assert.equal(declined.record.confirms.length, 1)
+  assert.equal(declined.record.confirms[0].message,
+    '2 movimientos cambiarán. 1 se omitirá: 1 es una transferencia o un préstamo, que no lleva presupuesto.')
+  assert.equal(declined.record.confirms[0].confirmLabel, 'Aplicar')
+  assert.deepEqual(declined.selectedTxIds.value, ['a', 'b', 'transfer'])
+  assert.equal(declined.showBulkEdit.value, true)
+})
+
+test('S9: a confirmed bulk edit commits through the store, reports success, clears the selection and closes the sheet', async () => {
+  const harness = bulkEditHarness({ categoryId: 'transport', budgetId: DEFAULT_MONTHLY_BUDGET_ID, rows: [bulkRow('a'), bulkRow('b', { budgetId: 'viaje' })] })
+  await harness.applyBulkEdit()
+  assert.equal(harness.calls.length, 1)
+  assert.deepEqual(harness.calls[0][0], { categoryId: 'transport', budgetId: DEFAULT_MONTHLY_BUDGET_ID })
+  assert.deepEqual(harness.calls[0][1], ['a', 'b'])
+  assert.deepEqual(harness.record.successes, ['Se actualizaron 2 movimientos.'])
+  assert.deepEqual(harness.record.errors, [])
+  assert.deepEqual(harness.selectedTxIds.value, [])
+  assert.equal(harness.showBulkEdit.value, false)
+  assert.equal(harness.bulkSaving.value, false)
+})
+
+test('S9: when a chunk fails, its movements stay selected and an error says how many were saved', async () => {
+  const harness = bulkEditHarness({
+    budgetId: 'viaje',
+    outcome: (request, ids) => {
+      const plan = planBulkTransactionEdit(request as never, ids, [bulkRow('a'), bulkRow('b'), bulkRow('c')] as never, {
+        workspaceId: 'ws-1', accounts: [{ id: 'bank' }], loadedAccountsWorkspaceId: 'ws-1',
+        budgets: [{ id: 'viaje', name: 'Viaje', archived: false }], categories: []
+      })
+      return { plan, written: ['a'], failed: [{ ids: ['b', 'c'], error: new Error('permission-denied') }] }
+    },
+    rows: [bulkRow('a'), bulkRow('b'), bulkRow('c')]
+  })
+  await harness.applyBulkEdit()
+  assert.deepEqual(harness.selectedTxIds.value, ['b', 'c'])
+  assert.deepEqual(harness.record.errors, ['Se actualizaron 1 de 3 movimientos. No se pudieron guardar 2; siguen seleccionados para que lo intentes de nuevo.'])
+  assert.deepEqual(harness.record.successes, [])
+
+  const thrown = bulkEditHarness({ budgetId: 'viaje', outcome: () => { throw new Error('Sin conexión.') } })
+  await thrown.applyBulkEdit()
+  assert.deepEqual(thrown.record.errors, ['Sin conexión.'])
+  assert.deepEqual(thrown.selectedTxIds.value, ['a', 'b', 'transfer'])
+  assert.equal(thrown.bulkSaving.value, false)
+})
+
+test('S9: nothing is asked or written when no row can take the change or the request is invalid', async () => {
+  const none = bulkEditHarness({ budgetId: 'viaje', rows: [bulkRow('transfer', { type: 'transfer', amount: 10, toAccountId: 'cash', categoryId: '' })] })
+  await none.applyBulkEdit()
+  assert.deepEqual(none.record.confirms, [])
+  assert.deepEqual(none.calls, [])
+  assert.deepEqual(none.record.errors, ['Ningún movimiento cambiará. 1 se omitirá: 1 es una transferencia o un préstamo, que no lleva presupuesto.'])
+
+  const mixed = bulkEditHarness({ categoryId: 'transport', rows: [bulkRow('a'), bulkRow('income', { type: 'income', amount: 5 })] })
+  await mixed.applyBulkEdit()
+  assert.deepEqual(mixed.record.confirms, [])
+  assert.deepEqual(mixed.record.errors, ['Para cambiar la categoría, selecciona solo gastos o solo ingresos.'])
+
+  const empty = bulkEditHarness({})
+  await empty.applyBulkEdit()
+  assert.deepEqual(empty.record.errors, ['Elige una categoría o un presupuesto para cambiar.'])
+
+  // Links and existing references are judged against loaded budgets, so nothing runs before they load.
+  const loading = bulkEditHarness({ budgetId: 'viaje', ready: false })
+  await loading.applyBulkEdit()
+  assert.deepEqual([loading.record.confirms, loading.record.errors, loading.calls], [[], [], []])
 })
