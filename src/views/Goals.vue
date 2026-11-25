@@ -2,7 +2,7 @@
   <div class="max-w-6xl mx-auto space-y-8 pb-12">
     <div class="space-y-5">
       <nav aria-label="Presupuestos y metas de ahorro" class="grid grid-cols-2 sm:inline-grid gap-1.5 rounded-xl border border-border bg-slate-950/45 p-1.5">
-        <RouterLink v-for="section in sections" :key="section.id" :to="section.to" custom v-slot="{ href, navigate }">
+        <RouterLink v-for="section in sections" :key="section.id" :to="sectionLocation(section)" custom v-slot="{ href, navigate }">
           <a
             :href="href"
             @click="navigate"
@@ -47,6 +47,33 @@
           <PlusIcon class="w-4 h-4 shrink-0 text-accent-emerald" />
           <span>Nuevo presupuesto</span>
         </button>
+      </div>
+
+      <!-- Month shown (S9): monthly budgets and the base budget count it; settings stay editable -->
+      <div v-if="!isSavingsSection" class="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+        <MonthPicker
+          :label="selectedMonthLabel"
+          :can-go-next="canGoNextMonth"
+          @previous="goToPreviousMonth"
+          @next="goToNextMonth"
+        />
+        <div
+          v-if="!isCurrentMonth"
+          role="status"
+          data-testid="goals-past-month-notice"
+          class="min-w-0 rounded-2xl border border-accent-violet/30 bg-accent-violet/10 px-4 py-2 text-xs text-text-secondary"
+        >
+          <p>
+            Estás viendo <strong class="font-semibold text-text-primary">{{ selectedMonthLabel }}</strong>
+            <span aria-hidden="true"> · </span>
+            <button
+              type="button"
+              class="-my-3 inline-flex items-center min-h-11 font-semibold text-accent-emerald hover:underline"
+              @click="goToCurrentMonth"
+            >Volver al mes actual</button>
+          </p>
+          <p class="text-[11px] text-text-muted">Los topes, la configuración de tarjetas y las tasas de cambio son los actuales.</p>
+        </div>
       </div>
     </div>
 
@@ -432,7 +459,7 @@
         </p>
 
         <div v-if="baselineCategories.length === 0" class="text-center py-6 text-text-muted text-sm">
-          Todavía no hay categorías con límite o gasto este mes.
+          Todavía no hay categorías con límite o gasto {{ monthPhrase }}.
         </div>
 
         <div
@@ -872,6 +899,8 @@ import type { BudgetWorkspaceBudgetSnapshot } from '@/lib/budgetWorkspaceAdapter
 import { createCardBillingLookup } from '@/lib/installments'
 import { BUDGET_BASIS_LABELS } from '@/lib/budgetBasis'
 import BudgetBasisSwitch from '@/components/BudgetBasisSwitch.vue'
+import MonthPicker from '@/components/MonthPicker.vue'
+import { SELECTED_MONTH_QUERY_KEY, formatMonthKey, useSelectedMonth } from '@/composables/useSelectedMonth'
 import { parseDateOnly, toDateValue, toLocalDateKey } from '@/lib/dates'
 import { effectiveExchangeRates } from '@/lib/fx'
 import { canTransferBetweenAccounts, getAccountDisplayLabel, isPocketRelatedAccount } from '@/lib/pockets'
@@ -905,6 +934,30 @@ const activeSection = computed(() => route.query.tab === 'savings' ? sections[1]
 const isSavingsSection = computed(() => activeSection.value.id === 'savings')
 const sectionHeading = useTemplateRef<HTMLHeadingElement>('sectionHeading')
 const focusSectionHeading = () => sectionHeading.value?.focus()
+
+// Month the budget figures show (?mes=YYYY-MM, shared with the Dashboard). Monthly budgets and
+// the base budget count that month; event budgets keep their lifetime totals. Budget settings
+// are not per month, so every editor stays available. Savings goals have no month.
+const {
+  selectedMonth,
+  isCurrentMonth,
+  label: selectedMonthLabel,
+  canGoNext: canGoNextMonth,
+  goToPreviousMonth,
+  goToNextMonth,
+  goToCurrentMonth
+} = useSelectedMonth()
+const monthPhrase = computed(() => isCurrentMonth.value ? 'este mes' : `en ${selectedMonthLabel.value}`)
+// A past month stays in the section links, so visiting the savings goals and coming back keeps it.
+const sectionLocation = (section: (typeof sections)[number]) => isCurrentMonth.value
+  ? section.to
+  : {
+      path: '/goals',
+      query: {
+        ...(section.id === 'savings' ? { tab: 'savings' } : {}),
+        [SELECTED_MONTH_QUERY_KEY]: formatMonthKey(selectedMonth.value)
+      }
+    }
 
 // State
 const showCreateModal = ref(false)
@@ -1100,14 +1153,15 @@ const linkedBudgetOfAccount = (accountId: string) => {
 }
 
 // Card view of each active budget: spending vs its funds (assigned income and transfers into its
-// linked accounts) and vs its total cap.
+// linked accounts) and vs its total cap. Monthly budgets count the shown month; event budgets
+// report lifetime totals, which do not depend on the month.
 const budgetCards = computed(() => {
-  const now = new Date()
+  const { year, month } = selectedMonth.value
   return new Map(activeOperatingBudgets.value.map(entry => {
     const figures = budgetCardFigures(entry, {
       linkedBudgetOf: linkedBudgetOfAccount,
       transactions: transactionsStore.transactions,
-      period: { year: now.getFullYear(), month: now.getMonth() },
+      period: { year, month },
       reportingCurrency: userCurrency.value,
       exchangeRates: activeExchangeRates.value,
       cardBilling: cardBillingFor.value
@@ -1142,8 +1196,9 @@ const cardBillingFor = computed(() => createCardBillingLookup(accountsStore.acco
   transactions: transactionsStore.transactions
 }))
 
+// The base monthly budget and its category limits in the shown month.
 const baselineBudgetReport = computed(() => {
-  const now = new Date()
+  const { year, month } = selectedMonth.value
   return reportBudgetScope({
     scope: {
       id: DEFAULT_MONTHLY_BUDGET_ID,
@@ -1154,7 +1209,7 @@ const baselineBudgetReport = computed(() => {
     },
     categoryCaps: goalsStore.categoryBudgets,
     transactions: transactionsStore.transactions,
-    period: { year: now.getFullYear(), month: now.getMonth() },
+    period: { year, month },
     reportingCurrency: userCurrency.value,
     exchangeRates: activeExchangeRates.value,
     cardBilling: cardBillingFor.value
@@ -1197,12 +1252,12 @@ const baselineCategoryReport = (categoryId: string) =>
     : undefined
 const baselineCategoryAmount = (categoryId: string): number =>
   baselineCategoryReport(categoryId)?.monthlyAllocation.amount ?? 0
-// Spending this month, including amounts that cannot be converted yet for lack of a rate.
+// Spending in the shown month, including amounts that cannot be converted yet for lack of a rate.
 const baselineHasSpending = (categoryId: string): boolean => {
   const report = baselineCategoryReport(categoryId)
   return report?.monthlyAllocation.complete === false || baselineCategoryAmount(categoryId) > 0
 }
-// Only categories in use: a limit, spending this month, or just added from the picker.
+// Only categories in use: a limit, spending in the shown month, or just added from the picker.
 const baselineCategories = computed(() => visibleBaselineCategories({
   categories: expenseCategories.value,
   limits: categoryBudgetInputs,
@@ -1210,6 +1265,7 @@ const baselineCategories = computed(() => visibleBaselineCategories({
   addedIds: baselineAddedCategoryIds.value
 }))
 const baselineCategoryIds = computed(() => baselineCategories.value.map(category => category.id))
+// Suggestions guide setting up limits today, so they follow today's spending, not the shown month.
 const baselineSuggestedCategories = computed(() => suggestCategoriesBySpending({
   categories: expenseCategories.value,
   transactions: transactionsStore.transactions,

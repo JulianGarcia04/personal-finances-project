@@ -841,6 +841,7 @@ const mountNavigation = async (t: import('node:test').TestContext, path: string,
       if (id === '@/composables/useWorkspaceActivation') return { activateWorkspace: noOp }
       if (id.endsWith('/BaseSheet.vue')) return { default: MockSheet }
       if (id.endsWith('/BudgetBasisSwitch.vue')) return { default: () => Vue.h('div', 'Consumo del mes / Pagos del mes') }
+      if (id === '@/components/MonthPicker.vue') return { default: loadComponent('../components/MonthPicker.vue') }
       if (id.endsWith('.vue')) return { default: () => null }
       if (id.startsWith('@/stores/')) {
         const name = id.slice('@/stores/'.length) as keyof typeof stores
@@ -1326,4 +1327,173 @@ test('S7 T5b: a category limit that cannot be saved shows an error toast and kee
   assert.deepEqual(saved, [{ food: 150 }])
   assert.deepEqual(stores.notificationsStore.toasts, [['error', 'No se pudo guardar el límite de Comida. Inténtalo de nuevo.']])
   assert.equal(input.props.value, 150, 'the typed amount stays on screen, as before')
+})
+
+// --- S9 T7b: Presupuestos follows the selected month (?mes=YYYY-MM, shared with the Dashboard) ---
+
+// "Today" is 15 March 2026 and February 2026 is the past month. Vacaciones is a monthly budget
+// funded and spent in both months; Boda is an event budget funded in January and spent in both.
+// The base budget spends on food in both months, on travel only in February and on tech only in March.
+const T7B_NOW = new Date(2026, 2, 15, 12)
+const PAST_MONTH_NOTICE = 'Los topes, la configuración de tarjetas y las tasas de cambio son los actuales.'
+const copMoney = (amount: number) => new Intl.NumberFormat('es-CO', {
+  style: 'currency', currency: 'COP', minimumFractionDigits: 0, maximumFractionDigits: 2
+}).format(amount)
+
+const mountBudgetMonths = async (t: import('node:test').TestContext, path: string) => {
+  t.mock.timers.enable({ apis: ['Date'], now: T7B_NOW.getTime() })
+  const view = await mountNavigation(t, path)
+  const { stores } = view
+  const movement = (id: string, type: 'income' | 'expense', amount: number, date: Date, extra: Partial<Transaction> = {}): Transaction => ({
+    id, workspaceId: 'workspace-a', type, amount: type === 'expense' ? -amount : amount, date,
+    accountId: 'cash', currency: 'COP', description: id, createdAt: date, ...extra
+  } as Transaction)
+  stores.transactionsStore.categories = ['food', 'travel', 'tech'].map(id =>
+    ({ id, name: id, type: 'expense', icon: 'Utensils', color: '#f97316', workspaceId: null })) as never
+  stores.goalsStore.operatingBudgets = [
+    { budget: { id: 'vacaciones', name: 'Vacaciones', kind: 'monthly', capCurrency: 'COP', totalLimit: 200, archived: false }, categoryCaps: {} },
+    { budget: { id: 'boda', name: 'Boda', kind: 'event', capCurrency: 'COP', totalLimit: 2000, archived: false }, categoryCaps: {} }
+  ] as never
+  stores.transactionsStore.transactions.push(
+    movement('vacaciones-feb-in', 'income', 300, new Date(2026, 1, 12, 12), { budgetId: 'vacaciones' }),
+    movement('vacaciones-mar-in', 'income', 500, new Date(2026, 2, 5, 12), { budgetId: 'vacaciones' }),
+    movement('vacaciones-feb', 'expense', 120, new Date(2026, 1, 20, 12), { budgetId: 'vacaciones', categoryId: 'travel' }),
+    movement('vacaciones-mar', 'expense', 50, new Date(2026, 2, 3, 12), { budgetId: 'vacaciones', categoryId: 'travel' }),
+    movement('boda-in', 'income', 1000, new Date(2026, 0, 10, 12), { budgetId: 'boda' }),
+    movement('boda-feb', 'expense', 400, new Date(2026, 1, 14, 12), { budgetId: 'boda', categoryId: 'food' }),
+    movement('boda-mar', 'expense', 100, new Date(2026, 2, 1, 12), { budgetId: 'boda', categoryId: 'food' }),
+    movement('food-feb', 'expense', 200, new Date(2026, 1, 3, 12), { categoryId: 'food' }),
+    movement('food-mar', 'expense', 70, new Date(2026, 2, 2, 12), { categoryId: 'food' }),
+    movement('travel-feb', 'expense', 40, new Date(2026, 1, 28, 20), { categoryId: 'travel' }),
+    movement('tech-mar', 'expense', 30, new Date(2026, 2, 4, 12), { categoryId: 'tech' })
+  )
+  await Vue.nextTick()
+  const settle = async () => {
+    await new Promise(setImmediate)
+    await Vue.nextTick()
+  }
+  const goTo = async (to: string) => {
+    await view.router.push(to)
+    await settle()
+  }
+  const budgetCard = (name: string) => {
+    let node: ViewNode | null = view.root.find('h4', name)
+    while (node && node.tag !== 'article') node = node.parent
+    const progress = node?.descendants.find(child => child.props['data-testid'] === 'budget-card-progress')
+    assert.ok(progress, `expected the ${name} budget card`)
+    return progress
+  }
+  const baseRows = () => view.root.descendants
+    .filter(node => node.tag === 'input' && String(node.props.id ?? '').startsWith('base-cap-'))
+    .map(input => [String(input.props.id).slice('base-cap-'.length), input.parent!.parent!.content] as const)
+  const byTestId = (id: string) => view.root.descendants.filter(node => node.props['data-testid'] === id)
+  const pickerLabel = () => byTestId('month-picker')[0]?.descendants.find(node => node.props['aria-live'] === 'polite')?.content
+  const button = (label: string) => {
+    const node = view.root.descendants.find(node => node.tag === 'button' && (node.props['aria-label'] === label || node.content === label))
+    assert.ok(node, `expected a "${label}" button`)
+    return node
+  }
+  return { ...view, settle, goTo, budgetCard, baseRows, byTestId, pickerLabel, button, fullPath: () => view.router.currentRoute.value.fullPath }
+}
+
+test('S9 T7b: monthly budget cards count the selected month', async t => {
+  const view = await mountBudgetMonths(t, '/goals?mes=2026-02')
+  const assertCard = (spent: number, funds: number, percent: number, available: number) => {
+    const card = view.budgetCard('Vacaciones')
+    assert.ok(card.content.includes(`Gastado ${copMoney(spent)} de ${copMoney(funds)} en fondos · ${percent} %`), card.content)
+    assert.ok(card.content.includes(`${copMoney(spent)} / ${copMoney(200)}`), card.content)
+    assert.ok(card.descendants.some(node => node.props.title === copMoney(available)), `available ${available}: ${card.content}`)
+  }
+  assertCard(120, 300, 40, 180)
+  await view.goTo('/goals')
+  assertCard(50, 500, 10, 450)
+})
+
+test('S9 T7b: the base category limits and the categories listed follow the selected month', async t => {
+  const view = await mountBudgetMonths(t, '/goals?mes=2026-02')
+  const rows = () => Object.fromEntries(view.baseRows())
+  assert.deepEqual(Object.keys(rows()), ['food', 'travel'], 'February lists the limited category and the one spent in February')
+  assert.ok(rows().food.includes(`Gastado en COP: ${copMoney(200)}`), rows().food)
+  assert.match(rows().food, /200% · ¡Excedido!/)
+  assert.ok(rows().travel.includes(`Gastado en COP: ${copMoney(40)}`), rows().travel)
+
+  await view.goTo('/goals')
+  assert.deepEqual(Object.keys(rows()), ['food', 'tech'], 'March lists the limited category and the one spent in March')
+  assert.ok(rows().food.includes(`Gastado en COP: ${copMoney(70)}`), rows().food)
+  assert.match(rows().food, /70%/)
+  assert.ok(rows().tech.includes(`Gastado en COP: ${copMoney(30)}`), rows().tech)
+
+  // Suggestions for setting up limits guide today's setup, so they stay based on today's spending.
+  assert.match(goalsView, /const baselineSuggestedCategories = computed\(\(\) => suggestCategoriesBySpending\(\{[\s\S]*?now: new Date\(\),/)
+  assert.match(goalsView, /const budgetSuggestedCategories = computed\(\(\) => suggestCategoriesBySpending\(\{[\s\S]*?now: new Date\(\),/)
+})
+
+test('S9 T7b: event budgets keep their lifetime totals in every month', async t => {
+  const view = await mountBudgetMonths(t, '/goals')
+  const march = view.budgetCard('Boda').content
+  assert.ok(march.includes(`Gastado ${copMoney(500)} de ${copMoney(1000)} en fondos · 50 %`), march)
+  assert.ok(march.includes(`${copMoney(500)} / ${copMoney(2000)}`), march)
+  for (const month of ['2026-02', '2026-01']) {
+    await view.goTo(`/goals?mes=${month}`)
+    assert.equal(view.budgetCard('Boda').content, march, `${month} shows the same event totals`)
+  }
+})
+
+test('S9 T7b: the month picker is only in Presupuestos and the month survives switching sections', async t => {
+  const view = await mountBudgetMonths(t, '/goals')
+  const sectionHref = (label: string) => view.root.find('a', label).props.href
+  assert.equal(view.byTestId('month-picker').length, 1)
+  assert.equal(view.pickerLabel(), 'marzo de 2026')
+  assert.equal(view.button('Mes siguiente').props.disabled, true)
+  assert.equal(sectionHref('Metas de ahorro'), '/goals?tab=savings')
+  assert.equal(sectionHref('Presupuestos'), '/goals')
+
+  await view.button('Mes anterior').click()
+  await view.settle()
+  assert.equal(view.fullPath(), '/goals?mes=2026-02')
+  assert.equal(view.pickerLabel(), 'febrero de 2026')
+  assert.equal(sectionHref('Metas de ahorro'), '/goals?tab=savings&mes=2026-02')
+  assert.equal(sectionHref('Presupuestos'), '/goals?mes=2026-02')
+
+  await view.root.find('a', 'Metas de ahorro').click()
+  await view.settle()
+  assert.equal(view.fullPath(), '/goals?tab=savings&mes=2026-02')
+  view.root.find('h2', 'Metas de ahorro')
+  assert.deepEqual(view.byTestId('month-picker'), [], 'savings goals have no month')
+  assert.deepEqual(view.byTestId('goals-past-month-notice'), [])
+
+  await view.root.find('a', 'Presupuestos').click()
+  await view.settle()
+  assert.equal(view.fullPath(), '/goals?mes=2026-02')
+  assert.equal(view.pickerLabel(), 'febrero de 2026')
+  await view.button('Mes siguiente').click()
+  await view.settle()
+  assert.equal(view.fullPath(), '/goals')
+})
+
+test('S9 T7b: a past month says which month is shown and keeps every budget editor available', async t => {
+  const view = await mountBudgetMonths(t, '/goals?mes=2026-02')
+  const [notice] = view.byTestId('goals-past-month-notice')
+  assert.ok(notice, 'a past month shows the notice')
+  assert.equal(notice.props.role, 'status')
+  assert.match(notice.content, /^Estás viendo\s*febrero de 2026/)
+  assert.equal(notice.descendants.find(node => node.tag === 'strong')?.content, 'febrero de 2026')
+  assert.equal(view.root.content.split(PAST_MONTH_NOTICE).length - 1, 1, 'today\'s limits, card setting and rates are mentioned once')
+
+  // Budget settings are not per month: editing stays available in a past month.
+  const input = (id: string) => view.root.descendants.find(node => node.tag === 'input' && node.props.id === id)
+  for (const id of ['base-expense-limit', 'estimated-monthly-income', 'base-cap-food']) {
+    assert.ok(input(id), `${id} is shown`)
+    assert.ok(!input(id)!.props.disabled, `${id} stays editable`)
+  }
+  assert.ok(view.root.descendants.some(node => node.tag === 'button' && node.content === 'Nuevo presupuesto'))
+  assert.ok(view.root.descendants.some(node => node.tag === 'button' && node.content === 'Editar presupuesto'))
+  assert.ok(!view.button('Guardar tope').props.disabled)
+
+  await view.button('Volver al mes actual').click()
+  await view.settle()
+  assert.equal(view.fullPath(), '/goals')
+  assert.deepEqual(view.byTestId('goals-past-month-notice'), [])
+  assert.doesNotMatch(view.root.content, new RegExp(PAST_MONTH_NOTICE))
+  assert.equal(view.pickerLabel(), 'marzo de 2026')
 })

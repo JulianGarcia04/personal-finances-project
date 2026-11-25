@@ -451,7 +451,8 @@ test('S9: the per-budget panel lists active budgets with activity and their fund
     { id: 'ventas-casa', name: 'Ventas Casa', fundsAmount: 1000000, spent: 300000, available: 700000 }
   ])
   assert.match(componentSource, /v-if="flowView === 'budget'"[\s\S]{0,400}data-testid="dashboard-budget-breakdown"/)
-  assert.match(componentSource, /data-testid="dashboard-budget-breakdown"[\s\S]*?to="\/goals"/)
+  // The link opens Presupuestos on the shown month (S9 T7b); its targets are checked on the mounted view.
+  assert.match(componentSource, /data-testid="dashboard-budget-breakdown"[\s\S]*?:to="budgetsLink"/)
 })
 
 test('budget basis: Dashboard budget comparisons follow the basis while cash flow keeps the payment month', () => {
@@ -1042,4 +1043,21 @@ test('S9: the picker moves between months and "Volver al mes actual" returns to 
   assert.equal(view.pickerValue(), 'marzo de 2026')
   assert.match(view.root.content, /Disponible para gastar/)
   assert.deepEqual(view.byTestId('dashboard-past-month-notice'), [])
+})
+
+test('S9 T7b: the links to Presupuestos carry the shown month only when it is a past month', async t => {
+  const view = await mountDashboard(t, '/')
+  view.button('Por presupuesto').props.onClick()
+  await view.settle()
+  const budgetLinks = () => ['Ver presupuestos', 'Ajustar'].map(text =>
+    view.root.descendants.find(node => node.tag === 'a' && node.content === text)?.props.href)
+  assert.deepEqual(budgetLinks(), ['/goals', '/goals'], 'the current month links to the bare budgets page')
+
+  view.button('Mes anterior').props.onClick()
+  await view.settle()
+  assert.deepEqual(budgetLinks(), ['/goals?mes=2026-02', '/goals?mes=2026-02'])
+
+  await view.button('Volver al mes actual').props.onClick()
+  await view.settle()
+  assert.deepEqual(budgetLinks(), ['/goals', '/goals'])
 })

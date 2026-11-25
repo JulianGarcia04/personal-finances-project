@@ -297,7 +297,7 @@
       <section v-if="flowView === 'budget'" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-3" data-testid="dashboard-budget-breakdown" aria-labelledby="dashboard-budget-breakdown-title">
         <div class="flex items-center justify-between gap-2">
           <h4 id="dashboard-budget-breakdown-title" class="min-w-0 font-display font-bold text-base text-text-primary">Por presupuesto</h4>
-          <router-link to="/goals" class="-my-3 -mr-2 inline-flex items-center min-h-11 px-2 shrink-0 text-xs text-accent-emerald font-semibold hover:underline">
+          <router-link :to="budgetsLink" class="-my-3 -mr-2 inline-flex items-center min-h-11 px-2 shrink-0 text-xs text-accent-emerald font-semibold hover:underline">
             Ver presupuestos
           </router-link>
         </div>
@@ -387,7 +387,7 @@
         <div v-if="budgetSummary" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
           <div class="flex items-center justify-between">
             <h4 class="min-w-0 font-display font-bold text-base text-text-primary">Presupuesto del Mes</h4>
-            <router-link to="/goals" class="-my-3 -mr-2 inline-flex items-center min-h-11 px-2 shrink-0 text-xs text-accent-emerald font-semibold hover:underline">
+            <router-link :to="budgetsLink" class="-my-3 -mr-2 inline-flex items-center min-h-11 px-2 shrink-0 text-xs text-accent-emerald font-semibold hover:underline">
               Ajustar
             </router-link>
           </div>
@@ -646,7 +646,7 @@ import { buildCardStatementLedger } from '@/lib/cardStatements'
 import { DEFAULT_MONTHLY_BUDGET_ID, budgetScopedMonthFilter, linkedBudgetForAccount, resolveBudgetId } from '@/lib/budgets'
 import { detectFxWarnings, effectiveExchangeRates } from '@/lib/fx'
 import { reportAllBudgetsEstimatedMonthly, reportBudgetScope } from '@/lib/budgetReporting'
-import { useSelectedMonth } from '@/composables/useSelectedMonth'
+import { SELECTED_MONTH_QUERY_KEY, formatMonthKey, useSelectedMonth } from '@/composables/useSelectedMonth'
 import MonthPicker from '@/components/MonthPicker.vue'
 import { 
   Plus as PlusIcon, 
@@ -685,6 +685,10 @@ const {
 } = useSelectedMonth()
 const comparisonLabel = computed(() => isCurrentMonth.value ? 'vs mismo periodo del mes anterior' : 'vs el mes anterior completo')
 const monthPhrase = computed(() => isCurrentMonth.value ? 'este mes' : `en ${selectedMonthLabel.value}`)
+// Presupuestos opens on the shown month; the current month is its default and needs no ?mes.
+const budgetsLink = computed(() => isCurrentMonth.value
+  ? '/goals'
+  : { path: '/goals', query: { [SELECTED_MONTH_QUERY_KEY]: formatMonthKey(selectedMonth.value) } })
 
 const donutCanvas = ref<HTMLCanvasElement | null>(null)
 const barCanvas = ref<HTMLCanvasElement | null>(null)
