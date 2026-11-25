@@ -50,6 +50,33 @@
 
     <!-- Dashboard Content when accounts exist -->
     <div v-else class="space-y-8 animate-fade-in">
+      <!-- Month shown (S9): a past month shows only that month's figures -->
+      <div class="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+        <MonthPicker
+          :label="selectedMonthLabel"
+          :can-go-next="canGoNextMonth"
+          @previous="goToPreviousMonth"
+          @next="goToNextMonth"
+        />
+        <div
+          v-if="!isCurrentMonth"
+          role="status"
+          data-testid="dashboard-past-month-notice"
+          class="min-w-0 rounded-2xl border border-accent-violet/30 bg-accent-violet/10 px-4 py-2 text-xs text-text-secondary"
+        >
+          <p>
+            Estás viendo <strong class="font-semibold text-text-primary">{{ selectedMonthLabel }}</strong>
+            <span aria-hidden="true"> · </span>
+            <button
+              type="button"
+              class="-my-3 inline-flex items-center min-h-11 font-semibold text-accent-emerald hover:underline"
+              @click="goToCurrentMonth"
+            >Volver al mes actual</button>
+          </p>
+          <p class="text-[11px] text-text-muted">Los topes, la configuración de tarjetas y las tasas de cambio son los actuales.</p>
+        </div>
+      </div>
+
       <!-- FX rate mismatch / missing rate warning banner (S10) -->
       <div
         v-if="hasFxWarning"
@@ -75,8 +102,8 @@
         </router-link>
       </div>
 
-      <!-- 0. Forward-looking KPIs (compact 2-column grid on mobile; spendable is the hero) -->
-      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
+      <!-- 0. Forward-looking KPIs (compact 2-column grid on mobile; spendable is the hero). Today only. -->
+      <div v-if="isCurrentMonth" class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
         <!-- Disponible para gastar (hero) -->
         <div class="glass-panel rounded-2xl p-4 sm:p-6 relative overflow-hidden border border-white/5 glow-card-emerald col-span-2 flex flex-col justify-between">
           <div class="min-w-0">
@@ -176,9 +203,9 @@
       </div>
 
       <!-- Stats Cards Grid -->
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-        <!-- Patrimonio Neto (USD/COP default) -->
-        <div class="glass-panel rounded-2xl p-4 sm:p-6 relative overflow-hidden group border border-white/5 glow-card-emerald flex flex-col justify-between">
+      <div :class="['grid grid-cols-1 sm:grid-cols-2 gap-6', isCurrentMonth ? 'lg:grid-cols-4' : 'lg:grid-cols-3']">
+        <!-- Patrimonio Neto (USD/COP default). Today only. -->
+        <div v-if="isCurrentMonth" class="glass-panel rounded-2xl p-4 sm:p-6 relative overflow-hidden group border border-white/5 glow-card-emerald flex flex-col justify-between">
           <div>
             <div class="absolute top-0 right-0 w-24 h-24 bg-accent-emerald/5 rounded-full blur-xl pointer-events-none"></div>
             <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Patrimonio Neto</span>
@@ -206,7 +233,7 @@
                 {{ incomeData.percent > 0 ? '+' : '' }}{{ incomeData.percent }}%
               </span>
             </div>
-            <span class="text-[10px] text-text-muted mt-1 block">vs mismo periodo del mes anterior ({{ formatPrimaryCurrency(incomeData.previous) }})</span>
+            <span class="text-[10px] text-text-muted mt-1 block">{{ comparisonLabel }} ({{ formatPrimaryCurrency(incomeData.previous) }})</span>
           </div>
         </div>
 
@@ -223,7 +250,7 @@
                 {{ expensesData.percent > 0 ? '+' : '' }}{{ expensesData.percent }}%
               </span>
             </div>
-            <span class="text-[10px] text-text-muted mt-1 block">vs mismo periodo del mes anterior ({{ formatPrimaryCurrency(expensesData.previous) }})</span>
+            <span class="text-[10px] text-text-muted mt-1 block">{{ comparisonLabel }} ({{ formatPrimaryCurrency(expensesData.previous) }})</span>
             <span class="text-[10px] text-text-secondary mt-2 block">Compras registradas: {{ formatPrimaryCurrency(monthlyPurchaseTotal) }} total</span>
           </div>
           
@@ -276,7 +303,7 @@
         </div>
         <p class="text-[11px] text-text-muted" data-testid="dashboard-budget-basis-caption">{{ budgetBasisCaption }}</p>
         <p v-if="budgetBreakdown.length === 0" class="text-xs text-text-secondary">
-          Ningún presupuesto adicional tiene fondos ni gastos este mes.
+          Ningún presupuesto adicional tiene fondos ni gastos {{ monthPhrase }}.
         </p>
         <ul v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           <li v-for="budget in budgetBreakdown" :key="budget.id" class="min-w-0 rounded-xl border border-white/5 bg-white/[0.02] p-3 space-y-2">
@@ -324,7 +351,7 @@
           <div class="relative h-56 sm:h-auto sm:flex-1 flex items-center justify-center p-4">
             <canvas ref="donutCanvas" class="max-h-56"></canvas>
             <p v-if="Object.keys(expensesByCategory).length === 0" class="absolute text-center text-text-muted text-xs py-8">
-              No hay gastos registrados este mes.
+              No hay gastos registrados {{ monthPhrase }}.
             </p>
           </div>
 
@@ -442,8 +469,8 @@
           </div>
         </div>
 
-        <!-- Goals progress -->
-        <div v-if="goalProgress.length > 0" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
+        <!-- Goals progress (today's balances) -->
+        <div v-if="isCurrentMonth && goalProgress.length > 0" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
           <div class="flex items-center justify-between">
             <h4 class="font-display font-bold text-base text-text-primary">Tus Metas de Ahorro</h4>
             <router-link to="/goals?tab=savings" class="-my-3 -mr-2 inline-flex items-center min-h-11 px-2 shrink-0 text-xs text-accent-emerald font-semibold hover:underline">
@@ -474,8 +501,8 @@
         </div>
       </div>
 
-      <!-- 2.6 Upcoming card payments (ciclo de facturación, no mes calendario) -->
-      <div v-if="upcomingCardPayments.length > 0" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
+      <!-- 2.6 Upcoming card payments (ciclo de facturación, no mes calendario). Today only. -->
+      <div v-if="isCurrentMonth && upcomingCardPayments.length > 0" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
         <div class="flex items-center justify-between">
           <h4 class="font-display font-bold text-base text-text-primary">Próximos Pagos de Tarjeta</h4>
           <router-link to="/accounts" class="-my-3 -mr-2 inline-flex items-center min-h-11 px-2 shrink-0 text-xs text-accent-emerald font-semibold hover:underline">
@@ -503,8 +530,8 @@
         </div>
       </div>
 
-      <!-- 3. Recent Transactions & Quick Summary -->
-      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <!-- 3. Recent Transactions & Quick Summary. Today only. -->
+      <div v-if="isCurrentMonth" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- Recent Transactions (List) -->
         <div class="glass-panel rounded-2xl p-4 sm:p-6 lg:col-span-2 space-y-4">
           <div class="flex items-center justify-between">
@@ -593,7 +620,6 @@ import { getTransactionDisplay } from '@/lib/transactionDisplay'
 import { splitMoney } from '@/lib/money'
 import { getAccountDisplayLabel, groupAccountsByPocket } from '@/lib/pockets'
 import {
-  alignedMonthPeriods,
   isDateInPeriod,
   expenseAmountInPeriod,
   percentChange,
@@ -611,6 +637,8 @@ import {
   budgetCardFigures,
   hasBudgetActivity,
   parseFlowView,
+  monthComparisonPeriods,
+  monthReferenceDate,
   type FlowView
 } from '@/lib/dashboardMetrics'
 import { getNextOccurrence, daysUntil } from '@/lib/creditCycle'
@@ -618,6 +646,8 @@ import { buildCardStatementLedger } from '@/lib/cardStatements'
 import { DEFAULT_MONTHLY_BUDGET_ID, budgetScopedMonthFilter, linkedBudgetForAccount, resolveBudgetId } from '@/lib/budgets'
 import { detectFxWarnings, effectiveExchangeRates } from '@/lib/fx'
 import { reportAllBudgetsEstimatedMonthly, reportBudgetScope } from '@/lib/budgetReporting'
+import { useSelectedMonth } from '@/composables/useSelectedMonth'
+import MonthPicker from '@/components/MonthPicker.vue'
 import { 
   Plus as PlusIcon, 
   Sparkles as SparklesIcon,
@@ -641,6 +671,20 @@ const transactionsStore = useTransactionsStore()
 const settingsStore = useSettingsStore()
 const workspacesStore = useWorkspacesStore()
 const goalsStore = useGoalsStore()
+
+// Month the month figures show (?mes=YYYY-MM, shared with Presupuestos). A past month shows only
+// that month's figures: today's balances, debts, upcoming payments and projections are hidden.
+const {
+  selectedMonth,
+  isCurrentMonth,
+  label: selectedMonthLabel,
+  canGoNext: canGoNextMonth,
+  goToPreviousMonth,
+  goToNextMonth,
+  goToCurrentMonth
+} = useSelectedMonth()
+const comparisonLabel = computed(() => isCurrentMonth.value ? 'vs mismo periodo del mes anterior' : 'vs el mes anterior completo')
+const monthPhrase = computed(() => isCurrentMonth.value ? 'este mes' : `en ${selectedMonthLabel.value}`)
 
 const donutCanvas = ref<HTMLCanvasElement | null>(null)
 const barCanvas = ref<HTMLCanvasElement | null>(null)
@@ -675,9 +719,9 @@ onMounted(async () => {
   renderCharts()
 })
 
-// Volver a renderizar gráficos si los datos cambian
+// Volver a renderizar gráficos si los datos o el mes cambian
 watch(
-  () => [transactionsStore.transactions, accountsStore.accounts],
+  () => [transactionsStore.transactions, accountsStore.accounts, selectedMonth.value],
   () => {
     renderCharts()
   },
@@ -742,10 +786,10 @@ const budgetBasisCaption = computed(() => `Vista: ${BUDGET_BASIS_LABELS[budgetBa
 const capBasisNote = computed(() => `Tarjetas según «${BUDGET_BASIS_LABELS[budgetBasis.value]}», como en tus presupuestos.`)
 
 const allBudgetsEstimatedMonthly = computed(() => {
-  const now = new Date()
+  const { year, month } = selectedMonth.value
   return reportAllBudgetsEstimatedMonthly({
     transactions: transactionsStore.transactions,
-    period: { year: now.getFullYear(), month: now.getMonth() },
+    period: { year, month },
     reportingCurrency: primaryCurrency.value,
     exchangeRates: activeExchangeRates.value,
     cardBilling: budgetBillingFor.value
@@ -804,11 +848,12 @@ const budgetMonthFilter = (period: { year: number; month: number }) =>
     convert
   })
 
-// Ingresos del mes actual
-// MoM (Month-over-Month) aligned by elapsed days: day 1..N vs day 1..min(N, lastDay)
-// of the previous month. `current` stays the full imputed month for the headline amount.
+// Ingresos del mes mostrado
+// MoM (Month-over-Month): the current month is aligned by elapsed days (day 1..N vs day
+// 1..min(N, lastDay) of the previous month); a past month is compared in full with the full
+// previous month. `current` stays the full imputed month for the headline amount.
 const getMoMData = (type: 'income' | 'expense', view: FlowView) => {
-  const { current: currentPeriod, previous: previousPeriod } = alignedMonthPeriods(new Date())
+  const { current: currentPeriod, previous: previousPeriod } = monthComparisonPeriods(selectedMonth.value, new Date())
   // Each month is judged by its own funding; "Todo" filters nothing.
   const currentFilter = view === 'budget' ? budgetMonthFilter(currentPeriod) : null
   const previousFilter = view === 'budget' ? budgetMonthFilter(previousPeriod) : null
@@ -848,7 +893,7 @@ const monthlyExpenses = computed(() => expensesData.value.current)
 
 // Funds, spending and available of each active additional budget, as on the Goals budget cards.
 const budgetBreakdown = computed(() => {
-  const now = new Date()
+  const { year, month } = selectedMonth.value
   return goalsStore.operatingBudgets
     .filter(entry => !entry.budget.archived)
     .map(entry => ({
@@ -858,7 +903,7 @@ const budgetBreakdown = computed(() => {
       ...budgetCardFigures(entry, {
         linkedBudgetOf: linkedBudgetOfAccount,
         transactions: transactionsStore.transactions,
-        period: { year: now.getFullYear(), month: now.getMonth() },
+        period: { year, month },
         reportingCurrency: primaryCurrency.value,
         exchangeRates: activeExchangeRates.value,
         cardBilling: budgetBillingFor.value
@@ -868,9 +913,9 @@ const budgetBreakdown = computed(() => {
 })
 
 const monthlyPurchaseTotal = computed(() => {
-  const now = new Date()
+  const { year, month } = selectedMonth.value
   return transactionsStore.transactions.reduce((total, t) => {
-    if (t.type !== 'expense' || t.date.getMonth() !== now.getMonth() || t.date.getFullYear() !== now.getFullYear()) {
+    if (t.type !== 'expense' || t.date.getMonth() !== month || t.date.getFullYear() !== year) {
       return total
     }
     return total + convert(Math.abs(t.amount), t.currency)
@@ -943,9 +988,10 @@ const monthEndProjection = computed(() => {
 
 // The same projection compared against caps: the base monthly budget against its cap and its
 // categories with a budget against their caps. Like every budget widget, card expenses
-// follow the workspace basis.
+// follow the workspace basis. `baseSpent` is the shown month's base spending; a past month is
+// measured at its last instant, so its "projection" is its actual total (hidden in past months).
 const budgetMonthEndProjection = computed(() => {
-  const now = new Date()
+  const now = monthReferenceDate(selectedMonth.value, new Date())
   const budgets = goalsStore.categoryBudgets
   const options = { convert, billingFor: budgetBillingFor.value }
   const baseTransactions = transactionsStore.transactions.filter(t => resolveBudgetId(t.budgetId) === DEFAULT_MONTHLY_BUDGET_ID)
@@ -1015,8 +1061,7 @@ const memberExpenses = computed(() => {
   const profiles = workspacesStore.activeWorkspaceProfiles
   if (!profiles || profiles.length <= 1) return []
   
-  const now = new Date()
-  const thisMonth = now.getMonth(), thisYear = now.getFullYear()
+  const { year: thisYear, month: thisMonth } = selectedMonth.value
   const totals: Record<string, number> = {}
   
   transactionsStore.transactions.forEach(t => {
@@ -1064,7 +1109,7 @@ const budgetSummary = computed(() => {
   const ids = Object.keys(budgets)
   if (ids.length === 0) return null
 
-  const now = new Date()
+  const { year, month } = selectedMonth.value
   const capCurrency = goalsStore.categoryBudgetCurrency.status === 'confirmed'
     ? goalsStore.categoryBudgetCurrency.code
     : null
@@ -1072,7 +1117,7 @@ const budgetSummary = computed(() => {
     scope: { id: DEFAULT_MONTHLY_BUDGET_ID, kind: 'monthly', capCurrency },
     categoryCaps: budgets,
     transactions: transactionsStore.transactions,
-    period: { year: now.getFullYear(), month: now.getMonth() },
+    period: { year, month },
     reportingCurrency: primaryCurrency.value,
     exchangeRates: activeExchangeRates.value,
     cardBilling: budgetBillingFor.value
@@ -1174,12 +1219,12 @@ const goalProgress = computed(() =>
 
 // Agrupación de gastos por categoría para el gráfico de dona
 const expensesByCategory = computed(() => {
-  const now = new Date()
+  const { year, month } = selectedMonth.value
   const currentMonthExpenses = transactionsStore.transactions.filter(t => t.type === 'expense')
 
   const groups: Record<string, number> = {}
   currentMonthExpenses.forEach(t => {
-    const amount = expenseAmountForMonth(t, now.getFullYear(), now.getMonth(), cardBillingFor.value(t.accountId))
+    const amount = expenseAmountForMonth(t, year, month, cardBillingFor.value(t.accountId))
     if (amount === 0) return
     const cat = getCategory(t.categoryId)
     const name = cat ? cat.name : 'Otros'
@@ -1198,6 +1243,41 @@ const donutLegend = computed(() =>
     }))
     .sort((a, b) => b.amount - a.amount)
 )
+
+// Ingresos y gastos de los 6 meses que terminan en el mes mostrado (gráfico de flujo de caja)
+const monthlyFlowSeries = computed(() => {
+  const months: {
+    label: string;
+    month: number;
+    year: number;
+    income: number;
+    expense: number;
+  }[] = []
+  const { year: endYear, month: endMonth } = selectedMonth.value
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(endYear, endMonth - i, 1)
+    months.push({
+      label: d.toLocaleString('es-CO', { month: 'short' }),
+      month: d.getMonth(),
+      year: d.getFullYear(),
+      income: 0,
+      expense: 0
+    })
+  }
+
+  transactionsStore.transactions.forEach(t => {
+    if (t.type === 'income') {
+      const match = months.find(m => m.month === t.date.getMonth() && m.year === t.date.getFullYear())
+      if (match) match.income += convert(Math.abs(t.amount), t.currency)
+    } else if (t.type === 'expense') {
+      const billing = cardBillingFor.value(t.accountId)
+      months.forEach(month => {
+        month.expense += convert(expenseAmountForMonth(t, month.year, month.month, billing), t.currency)
+      })
+    }
+  })
+  return months
+})
 
 // Gráficos renderizados con Chart.js directamente
 const renderCharts = () => {
@@ -1249,37 +1329,8 @@ const renderCharts = () => {
 
   // Render Bar Chart (Monthly Income vs Expense)
   if (barCtx && transactionsStore.transactions.length > 0) {
-    // Agrupar los últimos 6 meses
-    const last6Months: {
-      label: string;
-      month: number;
-      year: number;
-      income: number;
-      expense: number;
-    }[] = []
-    const now = new Date()
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-      last6Months.push({
-        label: d.toLocaleString('es-CO', { month: 'short' }),
-        month: d.getMonth(),
-        year: d.getFullYear(),
-        income: 0,
-        expense: 0
-      })
-    }
-
-    transactionsStore.transactions.forEach(t => {
-      if (t.type === 'income') {
-        const match = last6Months.find(m => m.month === t.date.getMonth() && m.year === t.date.getFullYear())
-        if (match) match.income += convert(Math.abs(t.amount), t.currency)
-      } else if (t.type === 'expense') {
-        const billing = cardBillingFor.value(t.accountId)
-        last6Months.forEach(month => {
-          month.expense += convert(expenseAmountForMonth(t, month.year, month.month, billing), t.currency)
-        })
-      }
-    })
+    // Los 6 meses que terminan en el mes mostrado
+    const last6Months = monthlyFlowSeries.value
 
     barChart = new Chart(barCtx, {
       type: 'bar',

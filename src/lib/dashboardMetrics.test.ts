@@ -18,7 +18,9 @@ import {
   cardDebtRows,
   budgetCardFigures,
   hasBudgetActivity,
-  parseFlowView
+  parseFlowView,
+  monthComparisonPeriods,
+  monthReferenceDate
 } from './dashboardMetrics.ts'
 import { createCardBillingLookup } from './installments.ts'
 
@@ -34,6 +36,49 @@ test('aligned MoM on day 1 compares only the first day of each month', () => {
   const periods = alignedMonthPeriods(new Date(2026, 0, 1, 9, 0))
   assert.deepEqual(periods.current, { year: 2026, month: 0, uptoDay: 1 })
   assert.deepEqual(periods.previous, { year: 2025, month: 11, uptoDay: 1 })
+})
+
+// --- Selected month (S9) ---
+
+test('S9: the current month keeps the comparison aligned by elapsed days', () => {
+  const now = new Date(2026, 10, 24, 15, 30)
+  assert.deepEqual(monthComparisonPeriods({ year: 2026, month: 10 }, now), alignedMonthPeriods(now))
+  const lastDay = new Date(2026, 2, 31, 8, 0)
+  assert.deepEqual(monthComparisonPeriods({ year: 2026, month: 2 }, lastDay), alignedMonthPeriods(lastDay))
+})
+
+test('S9: a past month is compared in full with the full previous month', () => {
+  const now = new Date(2026, 10, 24, 15, 30)
+  // 28-day February against the whole 31-day January (not January 1..28, not January 1..24).
+  assert.deepEqual(monthComparisonPeriods({ year: 2026, month: 1 }, now), {
+    current: { year: 2026, month: 1, uptoDay: 28 },
+    previous: { year: 2026, month: 0, uptoDay: 31 }
+  })
+  assert.deepEqual(monthComparisonPeriods({ year: 2026, month: 0 }, now), {
+    current: { year: 2026, month: 0, uptoDay: 31 },
+    previous: { year: 2025, month: 11, uptoDay: 31 }
+  })
+  assert.deepEqual(monthComparisonPeriods({ year: 2024, month: 2 }, now), {
+    current: { year: 2024, month: 2, uptoDay: 31 },
+    previous: { year: 2024, month: 1, uptoDay: 29 }
+  })
+})
+
+test('S9: month figures are measured now in the current month and at the last instant of a past month', () => {
+  const now = new Date(2026, 10, 24, 15, 30)
+  assert.equal(monthReferenceDate({ year: 2026, month: 10 }, now), now)
+  assert.deepEqual(monthReferenceDate({ year: 2026, month: 1 }, now), new Date(2026, 1, 28, 23, 59, 59, 999))
+
+  // At that instant every day of the past month has elapsed: the pace/committed split adds up to
+  // the month's actual total and the month-end "projection" is that total.
+  const reference = monthReferenceDate({ year: 2026, month: 1 }, now)
+  const split = splitMonthEndExpenses([
+    { type: 'expense', amount: -100, date: new Date(2026, 1, 28, 21, 0), accountId: 'cash', currency: 'COP' },
+    { type: 'expense', amount: -60, date: new Date(2026, 0, 31), accountId: 'cash', currency: 'COP', installments: 2 },
+    { type: 'expense', amount: -999, date: new Date(2026, 2, 1), accountId: 'cash', currency: 'COP' }
+  ], reference, { convert: amount => amount })
+  assert.deepEqual(split, { pace: 100, committed: 30 })
+  assert.equal(projectMonthEndExpenses({ paceExpensesToDate: split.pace, committedExpenses: split.committed, now: reference }), 130)
 })
 
 test('isDateInPeriod includes the whole last day and excludes later days', () => {

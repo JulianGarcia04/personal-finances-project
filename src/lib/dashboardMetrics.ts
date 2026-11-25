@@ -30,6 +30,35 @@ export const alignedMonthPeriods = (now: Date): { current: MonthPeriod; previous
   }
 }
 
+// A calendar month; `month` is 0-based like Date#getMonth.
+export interface CalendarMonth {
+  year: number;
+  month: number;
+}
+
+const isMonthOf = (selected: CalendarMonth, date: Date) =>
+  selected.year === date.getFullYear() && selected.month === date.getMonth()
+
+const fullMonthPeriod = (year: number, month: number): MonthPeriod =>
+  ({ year, month, uptoDay: daysInMonth(year, month) })
+
+// Month-over-month periods for the month the Dashboard shows: the current month is aligned by
+// elapsed days (alignedMonthPeriods); a past month is compared in full with the full previous month.
+export const monthComparisonPeriods = (selected: CalendarMonth, now: Date): { current: MonthPeriod; previous: MonthPeriod } => {
+  if (isMonthOf(selected, now)) return alignedMonthPeriods(now)
+  const previousDate = new Date(selected.year, selected.month - 1, 1)
+  return {
+    current: fullMonthPeriod(selected.year, selected.month),
+    previous: fullMonthPeriod(previousDate.getFullYear(), previousDate.getMonth())
+  }
+}
+
+// The instant a month's figures are measured at: `now` itself for the current month, the last
+// millisecond of a past month (every day has elapsed, so a pace/committed split adds up to the
+// month's actual total and a month-end projection equals it).
+export const monthReferenceDate = (selected: CalendarMonth, now: Date): Date =>
+  isMonthOf(selected, now) ? now : new Date(selected.year, selected.month + 1, 0, 23, 59, 59, 999)
+
 export const isDateInPeriod = (date: Date, period: MonthPeriod) =>
   date.getFullYear() === period.year &&
   date.getMonth() === period.month &&
