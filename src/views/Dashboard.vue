@@ -4,7 +4,7 @@
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
       <div class="min-w-0">
         <h2 class="font-display font-bold text-2xl sm:text-3xl text-text-primary tracking-tight break-words">
-          Bóveda de {{ authStore.user?.displayName }}
+          Hola, {{ authStore.user?.displayName }}
         </h2>
         <p class="text-text-secondary text-sm mt-1">Aquí tienes el resumen de tu salud financiera actual.</p>
       </div>
@@ -50,6 +50,33 @@
 
     <!-- Dashboard Content when accounts exist -->
     <div v-else class="space-y-8 animate-fade-in">
+      <!-- Month shown (S9): a past month shows only that month's figures -->
+      <div class="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+        <MonthPicker
+          :label="selectedMonthLabel"
+          :can-go-next="canGoNextMonth"
+          @previous="goToPreviousMonth"
+          @next="goToNextMonth"
+        />
+        <div
+          v-if="!isCurrentMonth"
+          role="status"
+          data-testid="dashboard-past-month-notice"
+          class="min-w-0 rounded-2xl border border-accent-violet/30 bg-accent-violet/10 px-4 py-2 text-xs text-text-secondary"
+        >
+          <p>
+            Estás viendo <strong class="font-semibold text-text-primary">{{ selectedMonthLabel }}</strong>
+            <span aria-hidden="true"> · </span>
+            <button
+              type="button"
+              class="-my-3 inline-flex items-center min-h-11 font-semibold text-accent-emerald hover:underline"
+              @click="goToCurrentMonth"
+            >Volver al mes actual</button>
+          </p>
+          <p class="text-[11px] text-text-muted">Los topes, la configuración de tarjetas y las tasas de cambio son los actuales.</p>
+        </div>
+      </div>
+
       <!-- FX rate mismatch / missing rate warning banner (S10) -->
       <div
         v-if="hasFxWarning"
@@ -75,8 +102,8 @@
         </router-link>
       </div>
 
-      <!-- 0. Forward-looking KPIs (compact 2-column grid on mobile; spendable is the hero) -->
-      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
+      <!-- 0. Forward-looking KPIs (compact 2-column grid on mobile; spendable is the hero). Today only. -->
+      <div v-if="isCurrentMonth" class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
         <!-- Disponible para gastar (hero) -->
         <div class="glass-panel rounded-2xl p-4 sm:p-6 relative overflow-hidden border border-white/5 glow-card-emerald col-span-2 flex flex-col justify-between">
           <div class="min-w-0">
@@ -97,7 +124,7 @@
           </div>
           <div class="mt-3 pt-3 sm:mt-4 sm:pt-4 border-t border-white/5 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-text-muted">
             <span>Cuentas corrientes y efectivo: <span class="font-semibold text-text-primary tabular-nums whitespace-nowrap">{{ formatKpi(availableBalance) }}</span></span>
-            <span>Pagos de tarjeta este mes: <span class="font-semibold text-text-primary tabular-nums whitespace-nowrap">−{{ formatKpi(committedCards) }}</span></span>
+            <span>Pagos de tarjeta por vencer este mes: <span class="font-semibold text-text-primary tabular-nums whitespace-nowrap">−{{ formatKpi(committedCards) }}</span></span>
           </div>
         </div>
 
@@ -107,20 +134,21 @@
           <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Proyección de cierre</span>
           <h4
             :class="['min-w-0 font-display font-bold text-base sm:text-2xl tabular-nums mt-1 sm:mt-2', projectionExceeds ? 'text-accent-amber' : 'text-text-primary']"
-            :title="formatKpi(monthEndProjection.total)"
+            :title="formatKpi(monthEndProjection)"
           >
-            <span class="whitespace-nowrap">{{ splitMoney(formatKpi(monthEndProjection.total))[0] }}</span> <span class="inline-block max-w-full truncate align-bottom whitespace-nowrap">{{ splitMoney(formatKpi(monthEndProjection.total))[1] }}</span>
+            <span class="whitespace-nowrap">{{ splitMoney(formatKpi(monthEndProjection))[0] }}</span> <span class="inline-block max-w-full truncate align-bottom whitespace-nowrap">{{ splitMoney(formatKpi(monthEndProjection))[1] }}</span>
           </h4>
-          <span class="text-[10px] text-text-muted mt-0.5 block leading-tight">Gastos estimados al cierre a tu ritmo actual</span>
+          <span class="text-[10px] text-text-muted mt-0.5 block leading-tight">Gastos estimados al cierre a tu ritmo actual. Tarjetas: lo que pagas este mes.</span>
           <div v-if="projectionStatus.budget || projectionStatus.limit" class="mt-2 pt-2 sm:mt-3 sm:pt-3 border-t border-white/5 space-y-1.5 text-[10px] leading-tight">
             <div v-if="projectionStatus.budget" :class="projectionStatus.budget.exceeds ? 'text-accent-amber' : 'text-text-secondary'">
               <span class="block">{{ projectionStatus.budget.exceeds ? '⚠️ ' : '' }}Categorías con presupuesto</span>
               <span class="tabular-nums"><span class="whitespace-nowrap font-semibold">{{ formatKpi(projectionStatus.budget.projected) }}</span> de <span class="whitespace-nowrap">{{ formatKpi(projectionStatus.budget.cap) }}</span></span>
             </div>
             <div v-if="projectionStatus.limit" :class="projectionStatus.limit.exceeds ? 'text-accent-amber' : 'text-text-secondary'">
-              <span class="block">{{ projectionStatus.limit.exceeds ? '⚠️ ' : '' }}Límite de gastos</span>
+              <span class="block">{{ projectionStatus.limit.exceeds ? '⚠️ ' : '' }}Tope del presupuesto mensual base</span>
               <span class="tabular-nums"><span class="whitespace-nowrap font-semibold">{{ formatKpi(projectionStatus.limit.projected) }}</span> de <span class="whitespace-nowrap">{{ formatKpi(projectionStatus.limit.cap) }}</span></span>
             </div>
+            <p class="text-text-muted" :title="budgetBasisCaption" data-testid="dashboard-cap-basis">{{ capBasisNote }}</p>
           </div>
         </div>
 
@@ -175,9 +203,9 @@
       </div>
 
       <!-- Stats Cards Grid -->
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-        <!-- Patrimonio Neto (USD/COP default) -->
-        <div class="glass-panel rounded-2xl p-4 sm:p-6 relative overflow-hidden group border border-white/5 glow-card-emerald flex flex-col justify-between">
+      <div :class="['grid grid-cols-1 sm:grid-cols-2 gap-6', isCurrentMonth ? 'lg:grid-cols-4' : 'lg:grid-cols-3']">
+        <!-- Patrimonio Neto (USD/COP default). Today only. -->
+        <div v-if="isCurrentMonth" class="glass-panel rounded-2xl p-4 sm:p-6 relative overflow-hidden group border border-white/5 glow-card-emerald flex flex-col justify-between">
           <div>
             <div class="absolute top-0 right-0 w-24 h-24 bg-accent-emerald/5 rounded-full blur-xl pointer-events-none"></div>
             <span class="text-[10px] font-semibold text-text-secondary uppercase tracking-widest block">Patrimonio Neto</span>
@@ -205,7 +233,7 @@
                 {{ incomeData.percent > 0 ? '+' : '' }}{{ incomeData.percent }}%
               </span>
             </div>
-            <span class="text-[10px] text-text-muted mt-1 block">vs mismo periodo del mes anterior ({{ formatPrimaryCurrency(incomeData.previous) }})</span>
+            <span class="text-[10px] text-text-muted mt-1 block">{{ comparisonLabel }} ({{ formatPrimaryCurrency(incomeData.previous) }})</span>
           </div>
         </div>
 
@@ -222,7 +250,7 @@
                 {{ expensesData.percent > 0 ? '+' : '' }}{{ expensesData.percent }}%
               </span>
             </div>
-            <span class="text-[10px] text-text-muted mt-1 block">vs mismo periodo del mes anterior ({{ formatPrimaryCurrency(expensesData.previous) }})</span>
+            <span class="text-[10px] text-text-muted mt-1 block">{{ comparisonLabel }} ({{ formatPrimaryCurrency(expensesData.previous) }})</span>
             <span class="text-[10px] text-text-secondary mt-2 block">Compras registradas: {{ formatPrimaryCurrency(monthlyPurchaseTotal) }} total</span>
           </div>
           
@@ -240,15 +268,15 @@
             </div>
           </div>
 
-          <!-- ponytail: limit indicator -->
           <div v-if="currentExpenseLimit > 0" class="mt-3">
-            <div class="flex justify-between text-[10px] mb-1">
-              <span class="text-text-secondary">Límite{{ flowView === 'budget' ? ' (todos los gastos)' : '' }}: {{ formatPrimaryCurrency(currentExpenseLimit) }}</span>
-              <span :class="allMonthlyExpenses > currentExpenseLimit ? 'text-accent-rose' : 'text-accent-emerald'">{{ Math.round((allMonthlyExpenses / currentExpenseLimit) * 100) }}%</span>
+            <div class="flex justify-between gap-2 text-[10px] mb-1">
+              <span class="text-text-secondary">Tope del presupuesto mensual base: {{ formatPrimaryCurrency(currentExpenseLimit) }}</span>
+              <span :class="baseExpenseLimitExceeded ? 'text-accent-rose' : 'text-accent-emerald'">{{ Math.round(baseExpenseLimitPercent) }}%</span>
             </div>
             <div class="w-full h-1 bg-white/10 rounded-full overflow-hidden">
-              <div class="h-full rounded-full" :class="allMonthlyExpenses > currentExpenseLimit ? 'bg-accent-rose' : 'bg-accent-emerald'" :style="{ width: Math.min((allMonthlyExpenses / currentExpenseLimit) * 100, 100) + '%' }"></div>
+              <div class="h-full rounded-full" :class="baseExpenseLimitExceeded ? 'bg-accent-rose' : 'bg-accent-emerald'" :style="{ width: Math.min(baseExpenseLimitPercent, 100) + '%' }"></div>
             </div>
+            <p class="mt-1 text-[10px] text-text-muted" :title="budgetBasisCaption" data-testid="dashboard-cap-basis">{{ capBasisNote }}</p>
           </div>
         </div>
 
@@ -269,13 +297,13 @@
       <section v-if="flowView === 'budget'" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-3" data-testid="dashboard-budget-breakdown" aria-labelledby="dashboard-budget-breakdown-title">
         <div class="flex items-center justify-between gap-2">
           <h4 id="dashboard-budget-breakdown-title" class="min-w-0 font-display font-bold text-base text-text-primary">Por presupuesto</h4>
-          <router-link to="/goals" class="-my-3 -mr-2 inline-flex items-center min-h-11 px-2 shrink-0 text-xs text-accent-emerald font-semibold hover:underline">
+          <router-link :to="budgetsLink" class="-my-3 -mr-2 inline-flex items-center min-h-11 px-2 shrink-0 text-xs text-accent-emerald font-semibold hover:underline">
             Ver presupuestos
           </router-link>
         </div>
         <p class="text-[11px] text-text-muted" data-testid="dashboard-budget-basis-caption">{{ budgetBasisCaption }}</p>
         <p v-if="budgetBreakdown.length === 0" class="text-xs text-text-secondary">
-          Ningún presupuesto adicional tiene fondos ni gastos este mes.
+          Ningún presupuesto adicional tiene fondos ni gastos {{ monthPhrase }}.
         </p>
         <ul v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           <li v-for="budget in budgetBreakdown" :key="budget.id" class="min-w-0 rounded-xl border border-white/5 bg-white/[0.02] p-3 space-y-2">
@@ -323,7 +351,7 @@
           <div class="relative h-56 sm:h-auto sm:flex-1 flex items-center justify-center p-4">
             <canvas ref="donutCanvas" class="max-h-56"></canvas>
             <p v-if="Object.keys(expensesByCategory).length === 0" class="absolute text-center text-text-muted text-xs py-8">
-              No hay gastos registrados este mes.
+              No hay gastos registrados {{ monthPhrase }}.
             </p>
           </div>
 
@@ -359,7 +387,7 @@
         <div v-if="budgetSummary" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
           <div class="flex items-center justify-between">
             <h4 class="min-w-0 font-display font-bold text-base text-text-primary">Presupuesto del Mes</h4>
-            <router-link to="/goals" class="-my-3 -mr-2 inline-flex items-center min-h-11 px-2 shrink-0 text-xs text-accent-emerald font-semibold hover:underline">
+            <router-link :to="budgetsLink" class="-my-3 -mr-2 inline-flex items-center min-h-11 px-2 shrink-0 text-xs text-accent-emerald font-semibold hover:underline">
               Ajustar
             </router-link>
           </div>
@@ -441,11 +469,11 @@
           </div>
         </div>
 
-        <!-- Goals progress -->
-        <div v-if="goalProgress.length > 0" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
+        <!-- Goals progress (today's balances) -->
+        <div v-if="isCurrentMonth && goalProgress.length > 0" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
           <div class="flex items-center justify-between">
             <h4 class="font-display font-bold text-base text-text-primary">Tus Metas de Ahorro</h4>
-            <router-link to="/goals" class="-my-3 -mr-2 inline-flex items-center min-h-11 px-2 shrink-0 text-xs text-accent-emerald font-semibold hover:underline">
+            <router-link to="/goals?tab=savings" class="-my-3 -mr-2 inline-flex items-center min-h-11 px-2 shrink-0 text-xs text-accent-emerald font-semibold hover:underline">
               Ver metas
             </router-link>
           </div>
@@ -473,8 +501,8 @@
         </div>
       </div>
 
-      <!-- 2.6 Upcoming card payments (ciclo de facturación, no mes calendario) -->
-      <div v-if="upcomingCardPayments.length > 0" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
+      <!-- 2.6 Upcoming card payments (ciclo de facturación, no mes calendario). Today only. -->
+      <div v-if="isCurrentMonth && upcomingCardPayments.length > 0" class="glass-panel rounded-2xl p-4 sm:p-6 space-y-4">
         <div class="flex items-center justify-between">
           <h4 class="font-display font-bold text-base text-text-primary">Próximos Pagos de Tarjeta</h4>
           <router-link to="/accounts" class="-my-3 -mr-2 inline-flex items-center min-h-11 px-2 shrink-0 text-xs text-accent-emerald font-semibold hover:underline">
@@ -502,8 +530,8 @@
         </div>
       </div>
 
-      <!-- 3. Recent Transactions & Quick Summary -->
-      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <!-- 3. Recent Transactions & Quick Summary. Today only. -->
+      <div v-if="isCurrentMonth" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- Recent Transactions (List) -->
         <div class="glass-panel rounded-2xl p-4 sm:p-6 lg:col-span-2 space-y-4">
           <div class="flex items-center justify-between">
@@ -587,12 +615,11 @@ import { useGoalsStore } from '@/stores/goalsStore'
 import { getSavingsGoalProgressAmount } from '@/lib/savingsGoals'
 import { Account, AccountType, Transaction } from '@/types'
 import { createCardBillingLookup, expenseAmountForMonth } from '@/lib/installments'
-import { BUDGET_BASIS_HINTS, BUDGET_BASIS_LABELS, budgetBasis } from '@/lib/budgetBasis'
+import { BUDGET_BASIS_HINTS, BUDGET_BASIS_LABELS } from '@/lib/budgetBasis'
 import { getTransactionDisplay } from '@/lib/transactionDisplay'
 import { splitMoney } from '@/lib/money'
 import { getAccountDisplayLabel, groupAccountsByPocket } from '@/lib/pockets'
 import {
-  alignedMonthPeriods,
   isDateInPeriod,
   expenseAmountInPeriod,
   percentChange,
@@ -610,6 +637,8 @@ import {
   budgetCardFigures,
   hasBudgetActivity,
   parseFlowView,
+  monthComparisonPeriods,
+  monthReferenceDate,
   type FlowView
 } from '@/lib/dashboardMetrics'
 import { getNextOccurrence, daysUntil } from '@/lib/creditCycle'
@@ -617,6 +646,8 @@ import { buildCardStatementLedger } from '@/lib/cardStatements'
 import { DEFAULT_MONTHLY_BUDGET_ID, budgetScopedMonthFilter, linkedBudgetForAccount, resolveBudgetId } from '@/lib/budgets'
 import { detectFxWarnings, effectiveExchangeRates } from '@/lib/fx'
 import { reportAllBudgetsEstimatedMonthly, reportBudgetScope } from '@/lib/budgetReporting'
+import { SELECTED_MONTH_QUERY_KEY, formatMonthKey, useSelectedMonth } from '@/composables/useSelectedMonth'
+import MonthPicker from '@/components/MonthPicker.vue'
 import { 
   Plus as PlusIcon, 
   Sparkles as SparklesIcon,
@@ -640,6 +671,24 @@ const transactionsStore = useTransactionsStore()
 const settingsStore = useSettingsStore()
 const workspacesStore = useWorkspacesStore()
 const goalsStore = useGoalsStore()
+
+// Month the month figures show (?mes=YYYY-MM, shared with Presupuestos). A past month shows only
+// that month's figures: today's balances, debts, upcoming payments and projections are hidden.
+const {
+  selectedMonth,
+  isCurrentMonth,
+  label: selectedMonthLabel,
+  canGoNext: canGoNextMonth,
+  goToPreviousMonth,
+  goToNextMonth,
+  goToCurrentMonth
+} = useSelectedMonth()
+const comparisonLabel = computed(() => isCurrentMonth.value ? 'vs mismo periodo del mes anterior' : 'vs el mes anterior completo')
+const monthPhrase = computed(() => isCurrentMonth.value ? 'este mes' : `en ${selectedMonthLabel.value}`)
+// Presupuestos opens on the shown month; the current month is its default and needs no ?mes.
+const budgetsLink = computed(() => isCurrentMonth.value
+  ? '/goals'
+  : { path: '/goals', query: { [SELECTED_MONTH_QUERY_KEY]: formatMonthKey(selectedMonth.value) } })
 
 const donutCanvas = ref<HTMLCanvasElement | null>(null)
 const barCanvas = ref<HTMLCanvasElement | null>(null)
@@ -674,9 +723,9 @@ onMounted(async () => {
   renderCharts()
 })
 
-// Volver a renderizar gráficos si los datos cambian
+// Volver a renderizar gráficos si los datos o el mes cambian
 watch(
-  () => [transactionsStore.transactions, accountsStore.accounts],
+  () => [transactionsStore.transactions, accountsStore.accounts, selectedMonth.value],
   () => {
     renderCharts()
   },
@@ -730,17 +779,21 @@ const hasFxWarning = computed(() => {
 const cardBillingFor = computed(() => createCardBillingLookup(accountsStore.accounts, 'payment', {
   transactions: transactionsStore.transactions
 }))
-// Budget widgets follow the budget basis chosen in Goals ("Consumo del mes" by default).
+// Budget widgets follow the active workspace's card basis, set by its owner in Presupuestos
+// ("Consumo del mes" by default).
+const budgetBasis = computed(() => workspacesStore.activeBudgetCardBasis)
 const budgetBillingFor = computed(() => createCardBillingLookup(accountsStore.accounts, budgetBasis.value, {
   transactions: transactionsStore.transactions
 }))
 const budgetBasisCaption = computed(() => `Vista: ${BUDGET_BASIS_LABELS[budgetBasis.value]}. ${BUDGET_BASIS_HINTS[budgetBasis.value]}`)
+// Short note next to the cap comparisons, which sit beside cash-flow figures.
+const capBasisNote = computed(() => `Tarjetas según «${BUDGET_BASIS_LABELS[budgetBasis.value]}», como en tus presupuestos.`)
 
 const allBudgetsEstimatedMonthly = computed(() => {
-  const now = new Date()
+  const { year, month } = selectedMonth.value
   return reportAllBudgetsEstimatedMonthly({
     transactions: transactionsStore.transactions,
-    period: { year: now.getFullYear(), month: now.getMonth() },
+    period: { year, month },
     reportingCurrency: primaryCurrency.value,
     exchangeRates: activeExchangeRates.value,
     cardBilling: budgetBillingFor.value
@@ -799,11 +852,12 @@ const budgetMonthFilter = (period: { year: number; month: number }) =>
     convert
   })
 
-// Ingresos del mes actual
-// MoM (Month-over-Month) aligned by elapsed days: day 1..N vs day 1..min(N, lastDay)
-// of the previous month. `current` stays the full imputed month for the headline amount.
+// Ingresos del mes mostrado
+// MoM (Month-over-Month): the current month is aligned by elapsed days (day 1..N vs day
+// 1..min(N, lastDay) of the previous month); a past month is compared in full with the full
+// previous month. `current` stays the full imputed month for the headline amount.
 const getMoMData = (type: 'income' | 'expense', view: FlowView) => {
-  const { current: currentPeriod, previous: previousPeriod } = alignedMonthPeriods(new Date())
+  const { current: currentPeriod, previous: previousPeriod } = monthComparisonPeriods(selectedMonth.value, new Date())
   // Each month is judged by its own funding; "Todo" filters nothing.
   const currentFilter = view === 'budget' ? budgetMonthFilter(currentPeriod) : null
   const previousFilter = view === 'budget' ? budgetMonthFilter(previousPeriod) : null
@@ -836,16 +890,14 @@ const getMoMData = (type: 'income' | 'expense', view: FlowView) => {
 const incomeData = computed(() => getMoMData('income', flowView.value))
 const monthlyIncome = computed(() => incomeData.value.current)
 
-// Gastos del mes actual y comparativa. Runway and the workspace expense limit always use
-// every expense: they describe the money leaving the accounts, not the budget view.
+// Gastos del mes actual y comparativa. Runway always uses every expense.
 const allExpensesData = computed(() => getMoMData('expense', 'all'))
 const expensesData = computed(() => flowView.value === 'all' ? allExpensesData.value : getMoMData('expense', 'budget'))
 const monthlyExpenses = computed(() => expensesData.value.current)
-const allMonthlyExpenses = computed(() => allExpensesData.value.current)
 
 // Funds, spending and available of each active additional budget, as on the Goals budget cards.
 const budgetBreakdown = computed(() => {
-  const now = new Date()
+  const { year, month } = selectedMonth.value
   return goalsStore.operatingBudgets
     .filter(entry => !entry.budget.archived)
     .map(entry => ({
@@ -855,7 +907,7 @@ const budgetBreakdown = computed(() => {
       ...budgetCardFigures(entry, {
         linkedBudgetOf: linkedBudgetOfAccount,
         transactions: transactionsStore.transactions,
-        period: { year: now.getFullYear(), month: now.getMonth() },
+        period: { year, month },
         reportingCurrency: primaryCurrency.value,
         exchangeRates: activeExchangeRates.value,
         cardBilling: budgetBillingFor.value
@@ -865,9 +917,9 @@ const budgetBreakdown = computed(() => {
 })
 
 const monthlyPurchaseTotal = computed(() => {
-  const now = new Date()
+  const { year, month } = selectedMonth.value
   return transactionsStore.transactions.reduce((total, t) => {
-    if (t.type !== 'expense' || t.date.getMonth() !== now.getMonth() || t.date.getFullYear() !== now.getFullYear()) {
+    if (t.type !== 'expense' || t.date.getMonth() !== month || t.date.getFullYear() !== year) {
       return total
     }
     return total + convert(Math.abs(t.amount), t.currency)
@@ -927,32 +979,45 @@ const spendable = computed(() =>
 
 // Proyección de cierre: purchases made this month at the current daily pace plus
 // amounts of earlier purchases already imputed to this month (later installments and
-// card statements due this month), added once. `budgeted` only counts categories with
-// a budget, so it can be compared with the budget total.
+// card statements due this month), added once. The all-budget forecast is cash flow,
+// so card expenses count when they are paid.
 const monthEndProjection = computed(() => {
   const now = new Date()
-  const budgets = goalsStore.categoryBudgets
-  const options = { convert, billingFor: cardBillingFor.value }
-  const all = splitMonthEndExpenses(transactionsStore.transactions, now, options)
-  const budgeted = splitMonthEndExpenses(transactionsStore.transactions, now, {
-    ...options,
-    include: t => Boolean(
-      t.categoryId &&
-      budgets[t.categoryId] > 0 &&
-      resolveBudgetId(t.budgetId) === DEFAULT_MONTHLY_BUDGET_ID
-    )
+  const { pace, committed } = splitMonthEndExpenses(transactionsStore.transactions, now, {
+    convert,
+    billingFor: cardBillingFor.value
   })
+  return projectMonthEndExpenses({ paceExpensesToDate: pace, committedExpenses: committed, now })
+})
+
+// The same projection compared against caps: the base monthly budget against its cap and its
+// categories with a budget against their caps. Like every budget widget, card expenses
+// follow the workspace basis. `baseSpent` is the shown month's base spending; a past month is
+// measured at its last instant, so its "projection" is its actual total (hidden in past months).
+const budgetMonthEndProjection = computed(() => {
+  const now = monthReferenceDate(selectedMonth.value, new Date())
+  const budgets = goalsStore.categoryBudgets
+  const options = { convert, billingFor: budgetBillingFor.value }
+  const baseTransactions = transactionsStore.transactions.filter(t => resolveBudgetId(t.budgetId) === DEFAULT_MONTHLY_BUDGET_ID)
+  const base = splitMonthEndExpenses(baseTransactions, now, options)
+  const budgeted = splitMonthEndExpenses(baseTransactions, now, {
+    ...options,
+    include: t => Boolean(t.categoryId && budgets[t.categoryId] > 0)
+  })
+  const project = ({ pace, committed }: typeof base) =>
+    projectMonthEndExpenses({ paceExpensesToDate: pace, committedExpenses: committed, now })
   return {
-    total: projectMonthEndExpenses({ paceExpensesToDate: all.pace, committedExpenses: all.committed, now }),
-    budgeted: projectMonthEndExpenses({ paceExpensesToDate: budgeted.pace, committedExpenses: budgeted.committed, now })
+    budgeted: project(budgeted),
+    base: project(base),
+    baseSpent: base.pace + base.committed
   }
 })
 
 const projectionStatus = computed(() =>
   projectionChecks({
-    budgetedProjection: monthEndProjection.value.budgeted,
+    budgetedProjection: budgetMonthEndProjection.value.budgeted,
     budgetTotal: budgetSummary.value?.totalLimitForReporting ?? 0,
-    totalProjection: monthEndProjection.value.total,
+    baseProjection: budgetMonthEndProjection.value.base,
     expenseLimit: currentExpenseLimit.value
   })
 )
@@ -1000,8 +1065,7 @@ const memberExpenses = computed(() => {
   const profiles = workspacesStore.activeWorkspaceProfiles
   if (!profiles || profiles.length <= 1) return []
   
-  const now = new Date()
-  const thisMonth = now.getMonth(), thisYear = now.getFullYear()
+  const { year: thisYear, month: thisMonth } = selectedMonth.value
   const totals: Record<string, number> = {}
   
   transactionsStore.transactions.forEach(t => {
@@ -1021,12 +1085,16 @@ const memberExpenses = computed(() => {
   }).sort((a, b) => b.amount - a.amount)
 })
 
-// ponytail: current limit
+// The base cap retains its workspace value and reporting currency.
 const currentExpenseLimit = computed(() => {
   if (!authStore.activeWorkspaceId) return 0
   const ws = workspacesStore.workspaces.find(w => w.id === authStore.activeWorkspaceId)
   return ws?.expenseLimit || 0
 })
+const baseExpenseLimitPercent = computed(() => currentExpenseLimit.value > 0
+  ? (budgetMonthEndProjection.value.baseSpent / currentExpenseLimit.value) * 100
+  : 0)
+const baseExpenseLimitExceeded = computed(() => budgetMonthEndProjection.value.baseSpent > currentExpenseLimit.value)
 
 const savingsRate = computed(() => {
   if (monthlyIncome.value === 0) return 0
@@ -1045,7 +1113,7 @@ const budgetSummary = computed(() => {
   const ids = Object.keys(budgets)
   if (ids.length === 0) return null
 
-  const now = new Date()
+  const { year, month } = selectedMonth.value
   const capCurrency = goalsStore.categoryBudgetCurrency.status === 'confirmed'
     ? goalsStore.categoryBudgetCurrency.code
     : null
@@ -1053,7 +1121,7 @@ const budgetSummary = computed(() => {
     scope: { id: DEFAULT_MONTHLY_BUDGET_ID, kind: 'monthly', capCurrency },
     categoryCaps: budgets,
     transactions: transactionsStore.transactions,
-    period: { year: now.getFullYear(), month: now.getMonth() },
+    period: { year, month },
     reportingCurrency: primaryCurrency.value,
     exchangeRates: activeExchangeRates.value,
     cardBilling: budgetBillingFor.value
@@ -1155,12 +1223,12 @@ const goalProgress = computed(() =>
 
 // Agrupación de gastos por categoría para el gráfico de dona
 const expensesByCategory = computed(() => {
-  const now = new Date()
+  const { year, month } = selectedMonth.value
   const currentMonthExpenses = transactionsStore.transactions.filter(t => t.type === 'expense')
 
   const groups: Record<string, number> = {}
   currentMonthExpenses.forEach(t => {
-    const amount = expenseAmountForMonth(t, now.getFullYear(), now.getMonth(), cardBillingFor.value(t.accountId))
+    const amount = expenseAmountForMonth(t, year, month, cardBillingFor.value(t.accountId))
     if (amount === 0) return
     const cat = getCategory(t.categoryId)
     const name = cat ? cat.name : 'Otros'
@@ -1179,6 +1247,41 @@ const donutLegend = computed(() =>
     }))
     .sort((a, b) => b.amount - a.amount)
 )
+
+// Ingresos y gastos de los 6 meses que terminan en el mes mostrado (gráfico de flujo de caja)
+const monthlyFlowSeries = computed(() => {
+  const months: {
+    label: string;
+    month: number;
+    year: number;
+    income: number;
+    expense: number;
+  }[] = []
+  const { year: endYear, month: endMonth } = selectedMonth.value
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(endYear, endMonth - i, 1)
+    months.push({
+      label: d.toLocaleString('es-CO', { month: 'short' }),
+      month: d.getMonth(),
+      year: d.getFullYear(),
+      income: 0,
+      expense: 0
+    })
+  }
+
+  transactionsStore.transactions.forEach(t => {
+    if (t.type === 'income') {
+      const match = months.find(m => m.month === t.date.getMonth() && m.year === t.date.getFullYear())
+      if (match) match.income += convert(Math.abs(t.amount), t.currency)
+    } else if (t.type === 'expense') {
+      const billing = cardBillingFor.value(t.accountId)
+      months.forEach(month => {
+        month.expense += convert(expenseAmountForMonth(t, month.year, month.month, billing), t.currency)
+      })
+    }
+  })
+  return months
+})
 
 // Gráficos renderizados con Chart.js directamente
 const renderCharts = () => {
@@ -1230,37 +1333,8 @@ const renderCharts = () => {
 
   // Render Bar Chart (Monthly Income vs Expense)
   if (barCtx && transactionsStore.transactions.length > 0) {
-    // Agrupar los últimos 6 meses
-    const last6Months: {
-      label: string;
-      month: number;
-      year: number;
-      income: number;
-      expense: number;
-    }[] = []
-    const now = new Date()
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-      last6Months.push({
-        label: d.toLocaleString('es-CO', { month: 'short' }),
-        month: d.getMonth(),
-        year: d.getFullYear(),
-        income: 0,
-        expense: 0
-      })
-    }
-
-    transactionsStore.transactions.forEach(t => {
-      if (t.type === 'income') {
-        const match = last6Months.find(m => m.month === t.date.getMonth() && m.year === t.date.getFullYear())
-        if (match) match.income += convert(Math.abs(t.amount), t.currency)
-      } else if (t.type === 'expense') {
-        const billing = cardBillingFor.value(t.accountId)
-        last6Months.forEach(month => {
-          month.expense += convert(expenseAmountForMonth(t, month.year, month.month, billing), t.currency)
-        })
-      }
-    })
+    // Los 6 meses que terminan en el mes mostrado
+    const last6Months = monthlyFlowSeries.value
 
     barChart = new Chart(barCtx, {
       type: 'bar',

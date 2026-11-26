@@ -31,7 +31,7 @@
     </div>
 
     <!-- Filters Pane -->
-    <div class="glass-panel rounded-2xl p-4 sm:p-5 grid grid-cols-2 lg:grid-cols-6 gap-3 sm:gap-4">
+    <div class="glass-panel rounded-2xl p-4 sm:p-5 grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-3 sm:gap-4">
       <!-- Search Input (+ mobile filters toggle) -->
       <div class="space-y-1 col-span-2 sm:col-span-1 min-w-0">
         <label for="tx-filter-search" class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Buscar</label>
@@ -101,6 +101,22 @@
         </select>
       </div>
 
+      <!-- Budget Filter (expenses and income; the base budget also covers movements without one) -->
+      <div :class="['space-y-1 col-span-2 sm:col-span-1 min-w-0', showMobileFilters ? '' : 'hidden sm:block']">
+        <label for="tx-filter-budget" class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Presupuesto</label>
+        <select
+          id="tx-filter-budget"
+          v-model="filters.budgetId"
+          class="field min-w-0"
+        >
+          <option value="">Todos los presupuestos</option>
+          <option :value="DEFAULT_MONTHLY_BUDGET_ID">{{ BASE_MONTHLY_BUDGET_LABEL }}</option>
+          <option v-for="option in budgetFilterOptions" :key="option.id" :value="option.id">
+            {{ option.label }}
+          </option>
+        </select>
+      </div>
+
       <!-- Date From Filter -->
       <div :class="['space-y-1 min-w-0 col-span-2 min-[380px]:col-span-1', showMobileFilters ? '' : 'hidden sm:block']">
         <label class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Desde</label>
@@ -154,6 +170,7 @@
               <th class="py-4 px-3">Detalles / Comercio</th>
               <th class="py-4 px-3">Cuenta</th>
               <th class="py-4 px-3">Categoría</th>
+              <th class="py-4 px-3">Presupuesto</th>
               <th class="py-4 px-3 whitespace-nowrap">Fecha</th>
               <th class="py-4 px-3 text-right">Monto</th>
               <th class="py-4 px-3 text-center w-24">Acciones</th>
@@ -203,6 +220,13 @@
                   <span>{{ getCategory(tx.categoryId)?.name }}</span>
                 </span>
                 <span v-else class="text-text-muted text-xs">-</span>
+              </td>
+              <!-- Budget (expenses and income; "—" for the rest) -->
+              <td class="py-4 px-3 max-w-[11rem]" data-testid="budget-cell">
+                <span
+                  :class="['block truncate text-xs', budgetOfTransaction(tx) === null ? 'text-text-muted' : 'text-text-secondary']"
+                  :title="budgetLabelOf(tx)"
+                >{{ budgetLabelOf(tx) }}</span>
               </td>
               <!-- Date -->
               <td class="py-4 px-3 text-text-secondary whitespace-nowrap">
@@ -254,7 +278,7 @@
               </td>
             </tr>
             <tr v-if="displayedTransactions.length === 0">
-              <td colspan="7" class="text-center py-12 text-text-muted text-sm">
+              <td colspan="8" class="text-center py-12 text-text-muted text-sm">
                 No hay transacciones registradas que coincidan con los filtros.
               </td>
             </tr>
@@ -289,6 +313,9 @@
         <div class="h-5 w-px bg-border/50 shrink-0"></div>
 
         <div class="flex items-center shrink-0">
+          <button @click="openBulkEdit" class="tap flex items-center justify-center text-text-muted hover:text-accent-emerald hover:bg-white/5 active:bg-white/10 rounded-full transition-colors" title="Editar categoría o presupuesto" aria-label="Editar categoría o presupuesto de la selección">
+            <PencilIcon class="w-4 h-4" />
+          </button>
           <button @click="handleBatchDelete" class="tap flex items-center justify-center text-text-muted hover:text-accent-rose hover:bg-white/5 active:bg-white/10 rounded-full transition-colors" title="Eliminar Seleccionados" aria-label="Eliminar seleccionados">
             <TrashIcon class="w-4 h-4" />
           </button>
@@ -344,6 +371,15 @@
             <span class="truncate">{{ getCategory(tx.categoryId)?.name }}</span>
           </span>
           <span v-else class="text-text-muted text-xs">-</span>
+          <span
+            v-if="budgetOfTransaction(tx) !== null"
+            data-testid="budget-badge"
+            class="inline-flex min-w-0 max-w-full items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-white/5 text-text-secondary"
+          >
+            <WalletIcon class="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+            <span class="sr-only">Presupuesto:</span>
+            <span class="truncate">{{ budgetLabelOf(tx) }}</span>
+          </span>
           <div class="flex items-center ml-auto -mr-2">
             <a
               v-if="tx.receiptUrl"
@@ -735,6 +771,78 @@
       </template>
     </BaseSheet>
 
+    <!-- Bulk Edit Sheet -->
+    <BaseSheet :open="showBulkEdit" title="Editar selección" :close-on-backdrop="false" @close="closeBulkEdit">
+      <p class="text-text-secondary text-xs mb-5">
+        {{ selectedTxIds.length === 1 ? '1 movimiento seleccionado' : `${selectedTxIds.length} movimientos seleccionados` }}. Deja «Sin cambios» en lo que no quieras modificar; antes de guardar verás cuántos cambiarán.
+      </p>
+
+      <form id="bulk-edit-form" @submit.prevent="applyBulkEdit" class="space-y-4">
+        <div class="space-y-1">
+          <label for="bulk-edit-category" class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Categoría</label>
+          <select
+            id="bulk-edit-category"
+            data-testid="bulk-edit-category"
+            v-model="bulkCategoryId"
+            :disabled="!bulkCategoryKind || bulkSaving"
+            :aria-describedby="bulkCategoryKind ? undefined : 'bulk-edit-category-hint'"
+            class="field disabled:opacity-70"
+          >
+            <option value="">Sin cambios</option>
+            <option v-for="category in bulkCategoryOptions" :key="category.id" :value="category.id">
+              {{ category.name }}
+            </option>
+          </select>
+          <p v-if="!bulkCategoryKind" id="bulk-edit-category-hint" class="text-[10px] text-text-secondary">
+            {{ BULK_CATEGORY_SINGLE_TYPE_MESSAGE }}
+          </p>
+        </div>
+
+        <div class="space-y-1">
+          <label for="bulk-edit-budget" class="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Presupuesto</label>
+          <select
+            id="bulk-edit-budget"
+            data-testid="bulk-edit-budget"
+            v-model="bulkBudgetId"
+            :disabled="!budgetSettingsReady || bulkSaving"
+            aria-describedby="bulk-edit-budget-hint"
+            class="field disabled:opacity-70"
+          >
+            <option value="">Sin cambios</option>
+            <option v-for="option in bulkBudgetOptions" :key="option.id" :value="option.id">
+              {{ option.label }}
+            </option>
+          </select>
+          <p id="bulk-edit-budget-hint" class="text-[10px] text-text-secondary">
+            {{ budgetSettingsReady
+              ? 'Las transferencias y los préstamos no llevan presupuesto, y los movimientos de una cuenta ligada conservan el suyo.'
+              : 'Espera a que carguen los presupuestos para editar la selección.' }}
+          </p>
+        </div>
+      </form>
+
+      <template #footer>
+        <div class="flex gap-3">
+          <button
+            type="button"
+            @click="closeBulkEdit"
+            :disabled="bulkSaving"
+            class="flex-1 min-h-11 py-2.5 rounded-xl border border-border text-text-secondary hover:text-text-primary hover:bg-white/5 font-semibold text-sm transition-all disabled:opacity-50"
+          >
+            Cancelar
+          </button>
+          <button
+            type="submit"
+            form="bulk-edit-form"
+            :disabled="bulkSaving || !budgetSettingsReady || (!bulkCategoryId && !bulkBudgetId)"
+            class="flex-1 min-h-11 py-2.5 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm shadow-glow-emerald cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {{ bulkSaving ? 'Guardando…' : 'Aplicar' }}
+          </button>
+        </div>
+      </template>
+    </BaseSheet>
+
     <!-- Edit Transaction Modal -->
     <BaseSheet :open="showEditModal" title="Editar Transacción" :close-on-backdrop="false" @close="closeEditModal">
         <p class="text-text-secondary text-xs mb-5">Modifica los detalles de este movimiento.</p>
@@ -862,14 +970,14 @@
             </div>
           </div>
 
-          <div v-if="canCarryBudget(editingOriginalType) && editTx.type === editingOriginalType" class="rounded-xl border border-border/60 bg-slate-900/30 p-3 space-y-2">
+          <div v-if="editBudgetSelectable" class="rounded-xl border border-border/60 bg-slate-900/30 p-3 space-y-2">
             <label class="block text-[10px] font-semibold text-text-secondary uppercase tracking-wider">
               Presupuesto asignado
               <select
                 v-if="budgetSettingsReady"
                 data-testid="budget-assignment-edit"
                 v-model="editBudgetId"
-                :disabled="isBudgetAssignmentPending(editingTxId) || !!editingLinkedBudget"
+                :disabled="!!editingLinkedBudget"
                 :aria-describedby="editingLinkedBudget ? 'edit-budget-lock' : undefined"
                 class="mt-1 field disabled:opacity-70"
               >
@@ -887,16 +995,7 @@
               <LinkIcon class="w-3 h-3 mt-px shrink-0" />
               <span>Este movimiento sale de una cuenta ligada a «{{ editingLinkedBudget.name }}», así que pertenece a ese presupuesto.</span>
             </p>
-            <button
-              type="button"
-              data-testid="budget-assignment-apply"
-              :disabled="!budgetSettingsReady || editBudgetId === editingOriginalBudgetId || isBudgetAssignmentPending(editingTxId)"
-              @click="applyEditBudgetAssignment"
-              class="w-full min-h-11 px-3 py-2 rounded-xl border border-accent-emerald/25 text-xs font-semibold text-accent-emerald hover:bg-accent-emerald/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              Actualizar presupuesto
-            </button>
-            <p class="text-[10px] text-text-muted">Esta acción solo cambia el presupuesto asignado; no modifica el monto ni otros datos.</p>
+            <p class="text-[10px] text-text-muted">El presupuesto se guarda junto con los demás cambios al pulsar «Guardar».</p>
           </div>
 
           <!-- Description and amount -->
@@ -1047,6 +1146,7 @@ import { useGoalsStore } from '@/stores/goalsStore'
 import { DEFAULT_MONTHLY_BUDGET_ID, budgetChangeForEdit, canAssignBudget, canCarryBudget, linkedBudgetForAccount, resolveBudgetId } from '@/lib/budgets'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useAuthStore } from '@/stores/authStore'
+import { useNotificationsStore } from '@/stores/notificationsStore'
 import type { Category, Transaction, TransactionType } from '@/types'
 import { TransactionSchema } from '@/schemas'
 import { getMonthlyInstallmentAmount } from '@/lib/installments'
@@ -1055,6 +1155,11 @@ import { getTransactionDisplay } from '@/lib/transactionDisplay'
 import { canTransferBetweenAccounts, getAccountDisplayLabel, isPocketAccount, isPocketRelatedAccount } from '@/lib/pockets'
 import { DELETED_ACCOUNT_HISTORY_MESSAGE, referencesDeletedAccount } from '@/lib/deletedAccountHistory'
 import { canDeleteMirrorTransaction, isSettlementCandidate } from '@/lib/mirror'
+import { BASE_MONTHLY_BUDGET_LABEL, budgetOfTransaction } from '@/lib/transactionClassification'
+import {
+  BULK_CATEGORY_SINGLE_TYPE_MESSAGE, bulkCategoryType, describeBulkEditOutcome, describeBulkEditPlan, planBulkTransactionEdit,
+  type BulkEditPlan, type BulkEditRequest
+} from '@/lib/bulkTransactionEdit'
 import { 
   Plus as PlusIcon, 
   Trash2 as TrashIcon, 
@@ -1067,7 +1172,8 @@ import {
   HandCoins as HandCoinsIcon,
   RotateCcw as RotateCcwIcon,
   SlidersHorizontal as SlidersHorizontalIcon,
-  Link2 as LinkIcon
+  Link2 as LinkIcon,
+  Wallet as WalletIcon
 } from 'lucide-vue-next'
 import BaseSheet from '@/components/ui/BaseSheet.vue'
 import CategoryQuickCreate from '@/components/CategoryQuickCreate.vue'
@@ -1077,9 +1183,9 @@ const transactionsStore = useTransactionsStore()
 const goalsStore = useGoalsStore()
 const workspacesStore = useWorkspacesStore()
 const authStore = useAuthStore()
+const notifications = useNotificationsStore()
 const budgetSettingsReady = ref(false)
 const budgetSettingsError = ref('')
-const assigningBudgetIds = ref(new Set<string>())
 const editBudgetId = ref(DEFAULT_MONTHLY_BUDGET_ID)
 const editingOriginalBudgetId = ref(DEFAULT_MONTHLY_BUDGET_ID)
 const editingOriginalType = ref<TransactionType>('expense')
@@ -1137,12 +1243,6 @@ const selectedTxIds = ref<string[]>([])
 const deletableDisplayedTransactions = computed(() =>
   displayedTransactions.value.filter(canDeleteMirrorTransaction)
 )
-watch(deletableDisplayedTransactions, rows => {
-  const allowed = new Set(rows.map(row => row.id))
-  if (selectedTxIds.value.some(id => !allowed.has(id))) {
-    selectedTxIds.value = selectedTxIds.value.filter(id => allowed.has(id))
-  }
-})
 const isAllSelected = computed(() => {
   return deletableDisplayedTransactions.value.length > 0 &&
          selectedTxIds.value.length === deletableDisplayedTransactions.value.length
@@ -1174,20 +1274,126 @@ const handleBatchDelete = async () => {
     return !tx || canDeleteMirrorTransaction(tx)
   })
   if (ids.length === 0) return
-  if (confirm(`¿Eliminar ${ids.length} transacciones? Esto actualizará los saldos de las cuentas.`)) {
-    const failed: string[] = []
-    for (const id of ids) {
-      try {
-        await transactionsStore.deleteTransaction(id)
-        selectedTxIds.value = selectedTxIds.value.filter(selectedId => selectedId !== id)
-      } catch (err) {
-        console.error('Error en batch delete', err)
-        failed.push(err instanceof Error ? err.message : 'No se pudo eliminar una transacción.')
-      }
+  const confirmed = await notifications.confirm({
+    title: 'Eliminar transacciones',
+    message: `¿Eliminar ${ids.length === 1 ? 'la transacción seleccionada' : `${ids.length} transacciones`}? Esto actualizará los saldos de las cuentas.`,
+    confirmLabel: 'Eliminar',
+    tone: 'danger'
+  })
+  if (!confirmed) return
+  const failed: string[] = []
+  for (const id of ids) {
+    try {
+      await transactionsStore.deleteTransaction(id)
+      selectedTxIds.value = selectedTxIds.value.filter(selectedId => selectedId !== id)
+    } catch (err) {
+      console.error('Error en batch delete', err)
+      failed.push(err instanceof Error ? err.message : 'No se pudo eliminar una transacción.')
     }
-    if (failed.length > 0) {
-      alert(failed[0])
+  }
+  if (failed.length > 0) {
+    // Failed movements stay selected; the first reason explains the most common cause.
+    const count = failed.length === 1 ? 'No se pudo eliminar 1' : `No se pudieron eliminar ${failed.length}`
+    const total = `${ids.length} ${ids.length === 1 ? 'transacción' : 'transacciones'}`
+    notifications.error(`${count} de ${total}. ${failed[0]}`)
+  }
+}
+
+// S9: category and/or budget of the selection at once. The edit modal stays the path for one
+// movement; here a plan says which rows change and why the others are skipped, the user confirms
+// it, and the store writes only those fields in writeBatch chunks.
+const showBulkEdit = ref(false)
+const bulkCategoryId = ref('')
+const bulkBudgetId = ref('')
+const bulkSaving = ref(false)
+const selectedTransactions = computed(() => {
+  const ids = new Set(selectedTxIds.value)
+  return transactionsStore.transactions.filter(tx => ids.has(tx.id))
+})
+// A category change needs a selection of only expenses or only income.
+const bulkCategoryKind = computed(() => bulkCategoryType(selectedTransactions.value))
+const bulkCategoryOptionsFor = (kind: 'expense' | 'income' | null) =>
+  kind ? transactionsStore.categories.filter(category => category.type === kind || category.type === 'both') : []
+const bulkCategoryOptions = computed(() => bulkCategoryOptionsFor(bulkCategoryKind.value))
+// The base monthly budget or an active one; archived budgets only keep their existing movements.
+const bulkBudgetOptions = computed(() => [
+  { id: DEFAULT_MONTHLY_BUDGET_ID, label: BASE_MONTHLY_BUDGET_LABEL },
+  ...linkableBudgets.value
+    .filter(budget => !budget.archived && budget.id !== DEFAULT_MONTHLY_BUDGET_ID)
+    .map(budget => ({ id: budget.id, label: budget.name }))
+])
+const openBulkEdit = () => {
+  bulkCategoryId.value = ''
+  bulkBudgetId.value = ''
+  showBulkEdit.value = true
+}
+const closeBulkEdit = () => {
+  if (!bulkSaving.value) showBulkEdit.value = false
+}
+const bulkEditRequest = (): BulkEditRequest => ({
+  ...(bulkCategoryId.value ? { categoryId: bulkCategoryId.value } : {}),
+  ...(bulkBudgetId.value ? { budgetId: bulkBudgetId.value } : {})
+})
+const bulkEditContext = () => ({
+  workspaceId: authStore.activeWorkspaceId ?? '',
+  accounts: accountsStore.accounts,
+  loadedAccountsWorkspaceId: loadedAccountsWorkspaceId(),
+  budgets: linkableBudgets.value,
+  categories: transactionsStore.categories
+})
+const planSelection = (request: BulkEditRequest): BulkEditPlan =>
+  planBulkTransactionEdit(request, selectedTxIds.value, transactionsStore.transactions, bulkEditContext())
+const applyBulkEdit = async () => {
+  // Links, archived budgets and existing references are checked against the loaded budgets.
+  if (bulkSaving.value || !budgetSettingsReady.value) return
+  const request = bulkEditRequest()
+  let plan: BulkEditPlan
+  try {
+    plan = planSelection(request)
+    // Another member may have added an account after the last load: refresh once before skipping its rows.
+    if (plan.skipped.some(skip => skip.reason === 'deleted-account') && await accountsStore.fetchAccounts()) {
+      plan = planSelection(request)
     }
+  } catch (err) {
+    notifications.error(err instanceof Error ? err.message : 'No se pudieron preparar los cambios.')
+    return
+  }
+  const summary = describeBulkEditPlan(plan)
+  if (plan.updates.length === 0) {
+    notifications.error(summary)
+    return
+  }
+  const confirmed = await notifications.confirm({
+    title: 'Aplicar cambios a la selección',
+    message: summary,
+    confirmLabel: 'Aplicar'
+  })
+  if (!confirmed) return
+  bulkSaving.value = true
+  try {
+    const outcome = await transactionsStore.bulkEditTransactions(request, [...selectedTxIds.value], linkableBudgets.value)
+    const failedIds = new Set(outcome.failed.flatMap(failure => failure.ids))
+    const message = describeBulkEditOutcome({
+      planned: outcome.plan.updates.length,
+      written: outcome.written.length,
+      skipped: outcome.plan.skipped.length
+    })
+    showBulkEdit.value = false
+    if (failedIds.size > 0) {
+      // Rows of a failed chunk stay selected to retry; the rest of the selection is done.
+      selectedTxIds.value = selectedTxIds.value.filter(id => failedIds.has(id))
+      notifications.error(message)
+    } else if (outcome.written.length === 0) {
+      notifications.info(describeBulkEditPlan(outcome.plan))
+    } else {
+      selectedTxIds.value = []
+      notifications.success(message)
+    }
+  } catch (err) {
+    console.error('Error en la edición masiva:', err)
+    notifications.error(err instanceof Error ? err.message : 'No se pudieron aplicar los cambios.')
+  } finally {
+    bulkSaving.value = false
   }
 }
 // -----------------
@@ -1197,6 +1403,7 @@ const filters = reactive({
   accountId: '',
   categoryId: '',
   type: '',
+  budgetId: '',
   dateFrom: '',
   dateTo: ''
 })
@@ -1204,13 +1411,17 @@ const filters = reactive({
 // Mobile-only: collapse secondary filters behind a toggle (desktop always shows them).
 const showMobileFilters = ref(false)
 const activeFilterCount = computed(() =>
-  [filters.accountId, filters.categoryId, filters.type, filters.dateFrom, filters.dateTo].filter(Boolean).length
+  [filters.accountId, filters.categoryId, filters.type, filters.budgetId, filters.dateFrom, filters.dateTo].filter(Boolean).length
 )
 
 // ponytail: paginación client-side, los datos ya están todos cargados
 const PAGE_SIZE = 50
 const visibleCount = ref(PAGE_SIZE)
-watch(filters, () => { visibleCount.value = PAGE_SIZE })
+// Other filters show other rows: start again from the first page, with nothing selected.
+watch(filters, () => {
+  visibleCount.value = PAGE_SIZE
+  selectedTxIds.value = []
+})
 
 // Receipt refs
 const receiptInput = ref<HTMLInputElement | null>(null)
@@ -1320,45 +1531,21 @@ const budgetOptionsForExpense = (currentBudgetId?: string | null, accountId = ''
   ].filter(option => allowed(option.id))
 }
 
-const isBudgetAssignmentPending = (transactionId: string) =>
-  assigningBudgetIds.value.has(transactionId)
+// The budget selector shows for a persisted expense or income whose draft keeps its type.
+const editBudgetSelectable = computed(() =>
+  canCarryBudget(editingOriginalType.value) && editTx.value.type === editingOriginalType.value)
 
-const assignBudgetToExpense = async (transaction: any, budgetId: string): Promise<boolean> => {
-  if (!budgetSettingsReady.value || !canCarryBudget(transaction.type)) return false
-  if (resolveBudgetId(transaction.budgetId) === budgetId) return false
-  if (!canAssignBudget(linkableBudgets.value, transaction.accountId, budgetId)) return false
-  if (assigningBudgetIds.value.has(transaction.id)) return false
-
-  assigningBudgetIds.value.add(transaction.id)
-  try {
-    await transactionsStore.assignExpenseBudget(transaction.id, budgetId)
-    return true
-  } catch (error: unknown) {
-    console.error('Error actualizando presupuesto del movimiento:', error)
-    alert(error instanceof Error ? error.message : 'No se pudo actualizar el presupuesto del movimiento')
-    return false
-  } finally {
-    assigningBudgetIds.value.delete(transaction.id)
-  }
+// Budget picked in the edit form; "Guardar" saves it in the same write as the rest of the edit.
+// Undefined when the selector is hidden, not ready or left unchanged.
+const editBudgetChoice = (): string | undefined => {
+  if (!budgetSettingsReady.value || !editBudgetSelectable.value) return undefined
+  return editBudgetId.value === editingOriginalBudgetId.value ? undefined : editBudgetId.value
 }
 
-const applyEditBudgetAssignment = async () => {
-  if (!budgetSettingsReady.value) return
-
-  const transaction = transactionsStore.transactions.find(tx => tx.id === editingTxId.value)
-  if (!transaction || !canCarryBudget(transaction.type)) return
-
-  const selectedOption = budgetOptionsForExpense(editingOriginalBudgetId.value)
-    .find(option => option.id === editBudgetId.value)
-  if (!selectedOption || selectedOption.archived) {
-    editBudgetId.value = editingOriginalBudgetId.value
-    return
-  }
-
-  const saved = await assignBudgetToExpense(transaction, editBudgetId.value)
-  if (saved) editingOriginalBudgetId.value = resolveBudgetId(editBudgetId.value)
-  else editBudgetId.value = editingOriginalBudgetId.value
-}
+// Only a budget the selector offers as active can be chosen (never archived or from elsewhere).
+const isOfferedEditBudget = (budgetId: string) =>
+  budgetOptionsForExpense(editingOriginalBudgetId.value, editingTransaction.value?.accountId)
+    .some(option => option.id === budgetId && !option.archived)
 
 // Computed properties for Edit Modal
 // Bridges are left out, except the one the movement already uses so the form can show it.
@@ -1412,6 +1599,14 @@ const filteredCount = computed(() => transactionsStore.filteredTransactions(filt
 
 const displayedTransactions = computed(() => {
   return transactionsStore.filteredTransactions(filters).slice(0, visibleCount.value)
+})
+
+// watch reads its source during setup, so the displayed list must already exist.
+watch(deletableDisplayedTransactions, rows => {
+  const allowed = new Set(rows.map(row => row.id))
+  if (selectedTxIds.value.some(id => !allowed.has(id))) {
+    selectedTxIds.value = selectedTxIds.value.filter(id => allowed.has(id))
+  }
 })
 
 // Préstamos pendientes por cobrar: |préstamos dados| - pagos recibidos, por moneda.
@@ -1501,6 +1696,21 @@ const availableCategories = computed(() => {
   const type = newTx.value.type
   return transactionsStore.categories.filter(c => c.type === type || c.type === 'both')
 })
+
+// Budget shown for a movement in the list: expenses and income name theirs, the rest show "—".
+const budgetLabelOf = (tx: Pick<Transaction, 'type' | 'budgetId'>): string => {
+  const budgetId = budgetOfTransaction(tx)
+  if (budgetId === null) return '—'
+  if (budgetId === DEFAULT_MONTHLY_BUDGET_ID) return BASE_MONTHLY_BUDGET_LABEL
+  if (!budgetSettingsReady.value) return '…'
+  const budget = linkableBudgets.value.find(candidate => candidate.id === budgetId)
+  if (!budget) return 'Presupuesto no disponible'
+  return budget.archived ? `${budget.name} · Archivado` : budget.name
+}
+// Every budget of the workspace can be filtered by, archived ones included (their history stays).
+const budgetFilterOptions = computed(() => linkableBudgets.value
+  .filter(budget => budget.id !== DEFAULT_MONTHLY_BUDGET_ID)
+  .map(budget => ({ id: budget.id, label: budget.archived ? `${budget.name} · Archivado` : budget.name })))
 
 const getUserName = (uid?: string) => {
   if (!uid) return 'Desconocido'
@@ -1603,7 +1813,7 @@ const saveTransaction = async () => {
   })
 
   if (!validation.success) {
-    alert(validation.error.errors[0].message)
+    notifications.error(validation.error.errors[0].message)
     return
   }
 
@@ -1627,7 +1837,7 @@ const saveTransaction = async () => {
     closeAddModal()
   } catch (err: any) {
     console.error('Error guardando transacción:', err)
-    alert(err?.message || 'No se pudo guardar el movimiento')
+    notifications.error(err?.message || 'No se pudo guardar el movimiento')
   } finally {
     loading.value = false
   }
@@ -1643,7 +1853,7 @@ const openEditModal = async (tx: any) => {
     // successful refresh still cannot find it.
     if (await accountsStore.fetchAccounts() &&
         referencesDeletedAccount(tx, accountsStore.accounts, loadedAccountsWorkspaceId())) {
-      alert(DELETED_ACCOUNT_HISTORY_MESSAGE)
+      notifications.error(DELETED_ACCOUNT_HISTORY_MESSAGE)
       return
     }
   }
@@ -1739,7 +1949,12 @@ const saveEditedTransaction = async () => {
   })
 
   if (!validation.success) {
-    alert(validation.error.errors[0].message)
+    notifications.error(validation.error.errors[0].message)
+    return
+  }
+  const chosenBudgetId = editBudgetChoice()
+  if (chosenBudgetId !== undefined && !isOfferedEditBudget(chosenBudgetId)) {
+    notifications.error('El presupuesto elegido ya no está disponible. Elige otro.')
     return
   }
 
@@ -1757,12 +1972,13 @@ const saveEditedTransaction = async () => {
       notes: editTx.value.notes || null,
       installments,
       userId: editTx.value.userId || undefined,
-      linkedBudgetId: editLinkedBudget.value?.id ?? null
+      linkedBudgetId: editLinkedBudget.value?.id ?? null,
+      chosenBudgetId
     })
     closeEditModal()
   } catch (err: any) {
     console.error('Error actualizando transacción:', err)
-    alert(err?.message || 'No se pudo actualizar el movimiento')
+    notifications.error(err?.message || 'No se pudo actualizar el movimiento')
   } finally {
     loading.value = false
   }
@@ -1804,13 +2020,18 @@ const clearEditReceipt = () => {
 }
 
 const handleDelete = async (id: string) => {
-  if (confirm('¿Estás seguro de que deseas eliminar este movimiento? El saldo de la cuenta asociada se actualizará correspondientemente.')) {
-    try {
-      await transactionsStore.deleteTransaction(id)
-    } catch (err) {
-      console.error('Error al borrar movimiento:', err)
-      alert(err instanceof Error ? err.message : 'No se pudo eliminar el movimiento.')
-    }
+  const confirmed = await notifications.confirm({
+    title: 'Eliminar movimiento',
+    message: '¿Estás seguro de que deseas eliminar este movimiento? El saldo de la cuenta asociada se actualizará correspondientemente.',
+    confirmLabel: 'Eliminar',
+    tone: 'danger'
+  })
+  if (!confirmed) return
+  try {
+    await transactionsStore.deleteTransaction(id)
+  } catch (err) {
+    console.error('Error al borrar movimiento:', err)
+    notifications.error(err instanceof Error ? err.message : 'No se pudo eliminar el movimiento.')
   }
 }
 
@@ -1830,7 +2051,7 @@ const confirmSettlementReversal = async () => {
     settlementToReverse.value = null
   } catch (err: any) {
     console.error('Error al revertir la liquidación contable:', err)
-    alert(err?.message || 'No se pudo corregir la contabilidad de esta liquidación.')
+    notifications.error(err?.message || 'No se pudo corregir la contabilidad de esta liquidación.')
   } finally {
     reversingSettlement.value = false
   }

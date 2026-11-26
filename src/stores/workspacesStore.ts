@@ -3,11 +3,16 @@ import { db, auth } from '@/lib/firebase'
 import { Workspace, UserProfile } from '@/types'
 import { collection, query, where, getDocs, doc, setDoc, updateDoc, getDoc } from 'firebase/firestore'
 import { useAuthStore } from './authStore'
+import { parseBudgetBasis, type BudgetBasis } from '@/lib/budgetBasis'
+import { planLegacyCategoryBudgetCurrencyConfirmation } from '@/lib/budgetWorkspaceAdapter'
+import { defaultCurrencyCode } from '@/lib/currencies'
 
 interface WorkspacesState {
   workspaces: Workspace[];
   activeWorkspaceProfiles: UserProfile[];
   loading: boolean;
+  pendingExpenseLimitWrites: Set<string>;
+  pendingBudgetCardBasisWrites: Set<string>;
 }
 
 // Función auxiliar (puedes adaptarla a tu entorno)
@@ -19,12 +24,49 @@ const getFunctionUrl = (name: string): string => {
   return `https://us-central1-${projectId}.cloudfunctions.net/${name}`
 }
 
+/** The creator's regional settings; the main currency counts only once a country was saved (before, it is a sign-up default). */
+export interface WorkspaceCreator {
+  readonly countryConfigured: boolean
+  readonly currency: string
+}
+
+/**
+ * Currency fields of every new workspace (Ajustes and sign-up). With the creator's main currency
+ * known, the budget-limit currency is stored already confirmed in it, with the same patch the
+ * onboarding confirmation writes, so the wizard has nothing to ask. Without it (sign-up), the
+ * limit currency stays unconfirmed and onboarding asks for it after the region step.
+ * Stored codes are normalized like every currency selector ('cop' -> 'COP'; unknown -> the app
+ * default), so a profile value never makes the creation fail.
+ */
+export function newWorkspaceCurrencyFields(mainCurrency: string | null, fallbackCurrency: string): Pick<Workspace, 'currency' | 'categoryBudgetCurrency'> {
+  if (mainCurrency === null) return { currency: defaultCurrencyCode(fallbackCurrency) }
+  const code = defaultCurrencyCode(mainCurrency)
+  const plan = planLegacyCategoryBudgetCurrencyConfirmation({}, code)
+  return { currency: code, ...(plan.status === 'confirmed' ? plan.patch : {}) }
+}
+
 export const useWorkspacesStore = defineStore('workspaces', {
   state: (): WorkspacesState => ({
     workspaces: [],
     activeWorkspaceProfiles: [],
-    loading: false
+    loading: false,
+    pendingExpenseLimitWrites: new Set(),
+    pendingBudgetCardBasisWrites: new Set()
   }),
+  getters: {
+    activeWorkspace(state): Workspace | undefined {
+      const workspaceId = useAuthStore().activeWorkspaceId
+      return state.workspaces.find(w => w.id === workspaceId)
+    },
+    // Shared by every member and budget surface; absent or invalid counts consumption.
+    activeBudgetCardBasis(): BudgetBasis {
+      return parseBudgetBasis(this.activeWorkspace?.budgetCardBasis)
+    },
+    isActiveWorkspaceOwner(): boolean {
+      const uid = useAuthStore().user?.uid
+      return Boolean(uid && this.activeWorkspace?.ownerId === uid)
+    }
+  },
   actions: {
     async fetchMyWorkspaces() {
       const user = auth.currentUser
@@ -71,7 +113,9 @@ export const useWorkspacesStore = defineStore('workspaces', {
       }
     },
     
-    async createWorkspace(name: string) {
+    // `activate` is the shared switch-and-reload (src/composables/useWorkspaceActivation.ts), passed in
+    // by the caller: this store must not import the workspace-scoped stores, because authStore imports it.
+    async createWorkspace(name: string, creator: WorkspaceCreator, activate: (workspaceId: string) => Promise<void>) {
       const user = auth.currentUser
       if (!user) return
 
@@ -79,13 +123,14 @@ export const useWorkspacesStore = defineStore('workspaces', {
       try {
         const newRef = doc(collection(db, 'workspaces'))
         const workspaceId = newRef.id
-        
+        const mainCurrency = creator.countryConfigured ? creator.currency : null
+
         const newWorkspace: Workspace = {
           id: workspaceId,
           name,
           ownerId: user.uid,
           members: [user.uid],
-          currency: 'USD',
+          ...newWorkspaceCurrencyFields(mainCurrency, creator.currency),
           createdAt: new Date().toISOString()
         }
         await setDoc(newRef, newWorkspace)
@@ -101,8 +146,8 @@ export const useWorkspacesStore = defineStore('workspaces', {
             workspaces: updatedWorkspaces
           })
           
-          // Automáticamente cambiar a este workspace
-          await authStore.switchWorkspace(workspaceId)
+          // Switch to it and reload every workspace-scoped store, exactly like the sidebar switcher.
+          await activate(workspaceId)
         }
         
         return workspaceId
@@ -154,9 +199,40 @@ export const useWorkspacesStore = defineStore('workspaces', {
       if (!Number.isFinite(normalized) || normalized < 0) {
         throw new Error('El límite de gastos debe ser un número mayor o igual a 0.')
       }
-      await updateDoc(doc(db, 'workspaces', workspaceId), { expenseLimit: normalized })
-      const ws = this.workspaces.find(w => w.id === workspaceId)
-      if (ws) ws.expenseLimit = normalized
+      // Keep the claim across route changes; other workspaces can still save.
+      if (this.pendingExpenseLimitWrites.has(workspaceId)) {
+        throw new Error('Ya se está guardando el tope de este espacio de trabajo.')
+      }
+      this.pendingExpenseLimitWrites.add(workspaceId)
+      try {
+        await updateDoc(doc(db, 'workspaces', workspaceId), { expenseLimit: normalized })
+        const ws = this.workspaces.find(w => w.id === workspaceId)
+        if (ws) ws.expenseLimit = normalized
+      } finally {
+        this.pendingExpenseLimitWrites.delete(workspaceId)
+      }
+    },
+
+    // Only the owner changes how budgets count card expenses for every member (rules enforce it too).
+    async updateBudgetCardBasis(workspaceId: string, basis: BudgetBasis) {
+      if (basis !== 'consumption' && basis !== 'payment') {
+        throw new Error('Elige Consumo del mes o Pagos del mes.')
+      }
+      const uid = useAuthStore().user?.uid
+      if (!uid || this.workspaces.find(w => w.id === workspaceId)?.ownerId !== uid) {
+        throw new Error('Solo el dueño del espacio de trabajo puede cambiar cómo se cuentan las tarjetas.')
+      }
+      if (this.pendingBudgetCardBasisWrites.has(workspaceId)) {
+        throw new Error('Ya se está guardando cómo se cuentan las tarjetas en este espacio de trabajo.')
+      }
+      this.pendingBudgetCardBasisWrites.add(workspaceId)
+      try {
+        await updateDoc(doc(db, 'workspaces', workspaceId), { budgetCardBasis: basis })
+        const ws = this.workspaces.find(w => w.id === workspaceId)
+        if (ws) ws.budgetCardBasis = basis
+      } finally {
+        this.pendingBudgetCardBasisWrites.delete(workspaceId)
+      }
     }
   }
 })

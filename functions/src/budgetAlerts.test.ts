@@ -23,7 +23,12 @@ import {
   monthKey,
   resolveAlertBudgetId,
   spendFieldsChanged,
-  ALERT_CARD_BASIS,
+  alertCardBilling,
+  alertCardCredits,
+  alertTransactionTypes,
+  cardCreditAlertScopes,
+  creditedAccountOf,
+  skipsAlertWrite,
   effectiveWorkspaceExchangeRates
 } from "./budgetAlerts";
 
@@ -488,13 +493,115 @@ test("a write that is only a transfer touching no linked account cannot move any
   assert.equal(skipsUnlinkedTransferWrite(undefined, undefined, linkedBudgetOf), false);
 });
 
-test("budget alerts count card purchases in their statement cycle month (consumption)", () => {
-  assert.equal(ALERT_CARD_BASIS, "consumption");
-  const card = { statementClosingDay: 30, paymentDueDay: 15, basis: ALERT_CARD_BASIS };
+test("budget alerts count cards by the workspace basis: Consumo unless the owner chose Pagos", () => {
+  // Closing day 30, due day 15: an Oct 15 purchase is in the October cycle and paid on Nov 15.
+  const visa = { id: "visa", type: "credit", statementClosingDay: 30, paymentDueDay: 15, balance: -100 };
   const purchase = { type: "expense", amount: -100, categoryId: "food", accountId: "visa", date: "2026-10-15" };
-  const options = { timeZone: BOGOTA, billingFor: () => card };
-  assert.equal(alertCategoryFor(purchase, DEFAULT_SCOPE, { year: 2026, month: 9 }, options), "food");
-  assert.equal(alertCategoryFor(purchase, DEFAULT_SCOPE, { year: 2026, month: 10 }, options), null);
+  const ledgerInput = { transactions: [purchase], timeZone: BOGOTA };
+  for (const workspace of [{}, { budgetCardBasis: "consumption" }, { budgetCardBasis: "monthly" }, null, undefined]) {
+    const { basis, billingFor } = alertCardBilling(workspace, [visa], ledgerInput);
+    assert.equal(basis, "consumption");
+    assert.deepEqual(billingFor("visa"), { statementClosingDay: 30, paymentDueDay: 15, basis: "consumption" });
+    const options = { timeZone: BOGOTA, billingFor };
+    assert.equal(alertCategoryFor(purchase, DEFAULT_SCOPE, { year: 2026, month: 9 }, options), "food");
+    assert.equal(alertCategoryFor(purchase, DEFAULT_SCOPE, { year: 2026, month: 10 }, options), null);
+  }
+  const { basis, billingFor } = alertCardBilling({ budgetCardBasis: "payment" }, [visa], ledgerInput);
+  assert.equal(basis, "payment");
+  assert.equal(billingFor("visa")?.basis, undefined);
+  assert.ok(billingFor("visa")?.ledger, "Pagos applies the card's payments");
+  assert.equal(billingFor("cash"), null);
+  assert.equal(billingFor(undefined), null);
+  // Unpaid, the statement counts in its November payment month.
+  const options = { timeZone: BOGOTA, billingFor };
+  assert.equal(alertCategoryFor(purchase, DEFAULT_SCOPE, { year: 2026, month: 9 }, options), null);
+  assert.equal(alertCategoryFor(purchase, DEFAULT_SCOPE, { year: 2026, month: 10 }, options), "food");
+});
+
+// Closing day 25, due day 10: an Oct 28 purchase closes on Nov 25 and is due on Dec 10.
+const PAGOS_VISA = { id: "visa", type: "credit", statementClosingDay: 25, paymentDueDay: 10 };
+const DECEMBER = { year: 2026, month: 11 };
+const cardPurchase = () => expense(100, { accountId: "visa", date: new Date("2026-10-28T17:00:00.000Z") });
+const cardPayment = (extra: Record<string, unknown> = {}) => ({
+  type: "transfer", accountId: "bank", toAccountId: "visa", amount: 100, currency: "COP",
+  date: new Date("2026-10-30T17:00:00.000Z"), ...extra
+});
+
+test("Pagos: an early card payment moves the statement's spending into the month it was paid", () => {
+  const purchase = cardPurchase();
+  const others = [expense(5), expense(7, { accountId: "visa", categoryId: "fun", date: new Date("2026-11-28T17:00:00.000Z") })];
+  const paid = alertCardBilling({ budgetCardBasis: "payment" }, [{ ...PAGOS_VISA, balance: -7 }], {
+    transactions: [purchase, cardPayment(), ...others], timeZone: BOGOTA
+  });
+  const options = { ...COP_OPTIONS, billingFor: paid.billingFor };
+  assert.equal(categorySpendForScope([purchase, ...others], "food", DEFAULT_SCOPE, OCTOBER, options), 105);
+  assert.equal(categorySpendForScope([purchase, ...others], "food", DEFAULT_SCOPE, DECEMBER, options), 0);
+  assert.equal(monthlyExpenseTotal([purchase, ...others], OCTOBER, options), 105);
+  const spent = categorySpendForScope([purchase, ...others], "food", DEFAULT_SCOPE, OCTOBER, options) ?? 0;
+  assert.deepEqual(evaluateBudgetThresholds(spent, 100, []), { threshold: 100, claim: [80, 100] });
+  // The payment re-checks the budgets and categories of the card's expenses that count in October,
+  // not the unrelated cash expense nor the card's later, unpaid statement.
+  assert.deepEqual(
+    cardCreditAlertScopes([purchase, ...others], ["visa"], OCTOBER, { timeZone: BOGOTA, billingFor: paid.billingFor }),
+    new Map([["default-monthly", ["food"]]])
+  );
+
+  // Without the payment the statement still counts whole in its December payment month.
+  const unpaid = alertCardBilling({ budgetCardBasis: "payment" }, [{ ...PAGOS_VISA, balance: -107 }], {
+    transactions: [purchase, ...others], timeZone: BOGOTA
+  });
+  const unpaidOptions = { ...COP_OPTIONS, billingFor: unpaid.billingFor };
+  assert.equal(categorySpendForScope([purchase], "food", DEFAULT_SCOPE, OCTOBER, unpaidOptions), 0);
+  assert.equal(categorySpendForScope([purchase], "food", DEFAULT_SCOPE, DECEMBER, unpaidOptions), 100);
+  assert.deepEqual(cardCreditAlertScopes([purchase], ["visa"], OCTOBER, { timeZone: BOGOTA, billingFor: unpaid.billingFor }), new Map());
+});
+
+test("Pagos re-checks a card payment from an unlinked account; Consumo still skips it", () => {
+  const accounts = [PAGOS_VISA, { id: "bank", type: "checking" }, { id: "amex", type: "credit" }];
+  const linkedBudgetOf = () => null;
+  const payment = cardPayment();
+  assert.deepEqual(alertCardCredits("payment", undefined, payment, accounts), ["visa"]);
+  assert.equal(skipsAlertWrite(undefined, payment, linkedBudgetOf, ["visa"]), false);
+  assert.deepEqual(alertCardCredits("consumption", undefined, payment, accounts), []);
+  assert.equal(skipsAlertWrite(undefined, payment, linkedBudgetOf, []), true);
+  // Deleting or editing a payment re-checks the card it paid, before and after.
+  assert.deepEqual(alertCardCredits("payment", payment, undefined, accounts), ["visa"]);
+  assert.deepEqual(alertCardCredits("payment", payment, cardPayment({ amount: 50 }), accounts), ["visa"]);
+  // A refund or a loan repayment on the card is a credit too.
+  for (const type of ["income", "loan_payment"]) {
+    assert.deepEqual(alertCardCredits("payment", undefined, { type, accountId: "visa", amount: 30 }, accounts), ["visa"]);
+    assert.deepEqual(alertCardCredits("consumption", undefined, { type, accountId: "visa", amount: 30 }, accounts), []);
+  }
+  // Charges, transfers out of the card, cards without billing days and other accounts credit nothing.
+  assert.deepEqual(alertCardCredits("payment", undefined, cardPurchase(), accounts), []);
+  assert.deepEqual(alertCardCredits("payment", undefined, { type: "loan", accountId: "visa", amount: -30 }, accounts), []);
+  assert.deepEqual(alertCardCredits("payment", undefined, cardPayment({ accountId: "visa", toAccountId: "bank" }), accounts), []);
+  assert.deepEqual(alertCardCredits("payment", undefined, cardPayment({ toAccountId: "amex" }), accounts), []);
+  assert.deepEqual(alertCardCredits("payment", undefined, { type: "income", accountId: "bank", amount: 30 }, accounts), []);
+  assert.equal(skipsAlertWrite(undefined, cardPayment({ toAccountId: "amex" }), linkedBudgetOf, []), true);
+  // The trigger reads the workspace for a loan repayment (a possible card credit), never for a loan.
+  assert.equal(creditedAccountOf({ type: "loan_payment", accountId: "visa", amount: 30 }), "visa");
+  assert.equal(creditedAccountOf({ type: "loan", accountId: "visa", amount: -30 }), null);
+  assert.equal(creditedAccountOf(cardPayment({ toAccountId: "bank", accountId: "bank" })), null);
+});
+
+test("Consumo keeps today's alert loads, skips and amounts", () => {
+  // Only expenses, income and transfers are read; card payments never move consumption.
+  assert.deepEqual(alertTransactionTypes("consumption"), ["expense", "income", "transfer"]);
+  assert.deepEqual(alertTransactionTypes("payment"), ["expense", "income", "transfer", "loan", "loan_payment"]);
+  const accounts = [{ ...PAGOS_VISA, balance: 0 }, { id: "bank", type: "checking" }];
+  const purchase = cardPurchase();
+  const { basis, billingFor } = alertCardBilling({}, accounts, { transactions: [purchase, cardPayment()], timeZone: BOGOTA });
+  assert.equal(basis, "consumption");
+  assert.deepEqual(alertCardCredits(basis, undefined, cardPayment(), accounts), []);
+  assert.equal(skipsAlertWrite(undefined, cardPayment(), () => null, []), true);
+  assert.equal(skipsAlertWrite(undefined, cardPayment(), (accountId) => (accountId === "bank" ? "casa" : null), []), false);
+  // The Oct 28 purchase counts in its November statement cycle, whatever was paid in October.
+  const options = { ...COP_OPTIONS, billingFor };
+  assert.equal(categorySpendForScope([purchase], "food", DEFAULT_SCOPE, OCTOBER, options), 0);
+  assert.equal(categorySpendForScope([purchase], "food", DEFAULT_SCOPE, { year: 2026, month: 10 }, options), 100);
+  assert.equal(monthlyExpenseTotal([purchase], { year: 2026, month: 10 }, options), 100);
+  assert.equal(alertCategoryFor(purchase, DEFAULT_SCOPE, { year: 2026, month: 10 }, { timeZone: BOGOTA, billingFor }), "food");
 });
 
 test("S10: effectiveWorkspaceExchangeRates disables stored rates when exchangeRatesBaseCurrency differs from reporting currency", () => {

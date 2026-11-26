@@ -103,34 +103,6 @@
               <p v-if="inviteMsg" :class="inviteError ? 'text-accent-rose' : 'text-accent-emerald'" class="text-xs font-medium">{{ inviteMsg }}</p>
             </div>
 
-            <!-- Expense limit -->
-            <div class="p-4 sm:p-6 space-y-3">
-              <div>
-                <h4 class="font-display font-medium text-sm text-text-primary">Límite de gastos mensual</h4>
-                <p class="text-text-muted text-xs mt-1">Tope de egresos para este workspace, en tu moneda principal ({{ currency }}). Déjalo vacío para quitar el límite.</p>
-              </div>
-              <form @submit.prevent="handleUpdateLimit" class="flex flex-col sm:flex-row gap-3">
-                <input
-                  type="number"
-                  inputmode="decimal"
-                  min="0"
-                  step="any"
-                  v-model="expenseLimitInput"
-                  placeholder="Sin límite (ej. 1500000)"
-                  aria-label="Límite de gastos"
-                  class="field flex-1"
-                />
-                <button
-                  type="submit"
-                  class="sm:w-36 min-h-11 px-5 py-2.5 rounded-xl border border-accent-emerald/40 text-accent-emerald hover:bg-accent-emerald/10 font-display font-semibold text-sm cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                  <CheckIcon class="w-4 h-4" />
-                  <span>Guardar</span>
-                </button>
-              </form>
-              <p v-if="limitMsg" :class="limitError ? 'text-accent-rose' : 'text-accent-emerald'" class="text-xs font-medium" role="status" aria-live="polite">{{ limitMsg }}</p>
-            </div>
-
             <!-- Budget alert emails (workspace-wide). Whole row toggles the switch. -->
             <div class="p-4 sm:p-6">
               <label class="flex items-start justify-between gap-4 min-h-11 cursor-pointer">
@@ -603,6 +575,8 @@ import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useGoalsStore } from '@/stores/goalsStore'
+import { useNotificationsStore } from '@/stores/notificationsStore'
+import { activateWorkspace } from '@/composables/useWorkspaceActivation'
 import { ApiKeySchema, CategorySchema } from '@/schemas'
 import { getPushStatus, enablePush, disablePush, onForegroundMessage, type PushStatus } from '@/lib/push'
 import { CATEGORY_COLORS, CATEGORY_ICONS, getCategoryIconComponent } from '@/lib/categoryIcons'
@@ -614,7 +588,7 @@ import { fetchWorkspaceExport } from '@/lib/dataExportFetch'
 import { ACCOUNT_DELETION_CONFIRMATION, isDeletionConfirmed } from '@/lib/accountDeletion'
 import { track } from '@/lib/analytics'
 import {
-  Trash2 as TrashIcon, Plus as PlusIcon, Mail as MailIcon, Check as CheckIcon,
+  Trash2 as TrashIcon, Plus as PlusIcon, Mail as MailIcon,
   KeyRound as KeyRoundIcon, Sparkles, Users, Globe, Tags, Download as DownloadIcon, FileText
 } from 'lucide-vue-next'
 
@@ -624,6 +598,7 @@ const workspacesStore = useWorkspacesStore()
 const transactionsStore = useTransactionsStore()
 const accountsStore = useAccountsStore()
 const goalsStore = useGoalsStore()
+const notifications = useNotificationsStore()
 
 // Section tabs (synced to ?tab= so sections are linkable and survive reloads)
 type SettingsTab = 'workspace' | 'regional' | 'categories' | 'ai' | 'data'
@@ -750,7 +725,7 @@ const createCategory = async () => {
   })
 
   if (!validation.success) {
-    alert(validation.error.errors[0].message)
+    notifications.error(validation.error.errors[0].message)
     return
   }
 
@@ -768,18 +743,25 @@ const createCategory = async () => {
     newCatType.value = 'expense'
   } catch (err: any) {
     console.error('Error al crear categoría:', err)
+    notifications.error('No se pudo crear la categoría. Inténtalo de nuevo.')
   } finally {
     loadingCategory.value = false
   }
 }
 
 const deleteCategory = async (id: string) => {
-  if (confirm('¿Estás seguro de que deseas eliminar esta categoría?')) {
-    try {
-      await transactionsStore.deleteCategory(id)
-    } catch (err) {
-      console.error('Error al borrar categoría:', err)
-    }
+  const confirmed = await notifications.confirm({
+    title: '¿Eliminar esta categoría?',
+    message: 'Esta acción no se puede deshacer.',
+    confirmLabel: 'Eliminar',
+    tone: 'danger'
+  })
+  if (!confirmed) return
+  try {
+    await transactionsStore.deleteCategory(id)
+  } catch (err) {
+    console.error('Error al borrar categoría:', err)
+    notifications.error('No se pudo eliminar la categoría. Inténtalo de nuevo.')
   }
 }
 
@@ -933,12 +915,15 @@ const handleCreateWorkspace = async () => {
   
   creatingWorkspace.value = true
   try {
-    await workspacesStore.createWorkspace(newWorkspaceName.value.trim())
+    // The store confirms its limit currency in your main currency, then switches to it and reloads its
+    // data through the shared activation (the same one as the sidebar switcher).
+    await workspacesStore.createWorkspace(newWorkspaceName.value.trim(), settingsStore, activateWorkspace)
     track('workspace_created')
     newWorkspaceName.value = ''
+    budgetAlertsEnabled.value = goalsStore.budgetAlertsEnabled
   } catch (err: any) {
     console.error('Error al crear workspace', err)
-    alert(err.message || 'Error al crear workspace')
+    notifications.error('No se pudo crear el workspace. Inténtalo de nuevo.')
   } finally {
     creatingWorkspace.value = false
   }
@@ -972,6 +957,7 @@ const handleBudgetAlertsChange = async () => {
   } catch (err) {
     console.error('Error actualizando alertas de presupuesto:', err)
     budgetAlertsEnabled.value = !enabled
+    notifications.error('No se pudieron actualizar las alertas de presupuesto. Inténtalo de nuevo.')
   }
 }
 
@@ -989,7 +975,7 @@ const pushStatusText = computed(() => {
     case 'disabled': return 'Desactivadas en este dispositivo.'
     case 'denied': return 'Bloqueadas por el navegador. Permite las notificaciones de este sitio en la configuración del navegador.'
     case 'unsupported': return 'Este navegador no soporta notificaciones push.'
-    case 'missing-vapid': return 'Falta configurar la clave VAPID (VITE_FIREBASE_VAPID_KEY).'
+    case 'missing-vapid': return 'Las notificaciones push no están disponibles en esta instalación.'
     default: return 'Verificando…'
   }
 })
@@ -1027,42 +1013,6 @@ const handlePushToggle = async (event: Event) => {
   }
 }
 
-// Límite mensual de gastos del workspace (hidratado desde Firestore y limpiable)
-const expenseLimitInput = ref<number | string>('')
-const limitMsg = ref('')
-const limitError = ref(false)
-
-const activeWorkspace = computed(() =>
-  workspacesStore.workspaces.find(w => w.id === authStore.activeWorkspaceId) ?? null
-)
-watch([() => authStore.activeWorkspaceId, () => activeWorkspace.value?.expenseLimit], () => {
-  const limit = activeWorkspace.value?.expenseLimit
-  expenseLimitInput.value = limit && limit > 0 ? limit : ''
-}, { immediate: true })
-
-const handleUpdateLimit = async () => {
-  if (!authStore.activeWorkspaceId) return
-  limitMsg.value = ''
-  limitError.value = false
-  const raw = String(expenseLimitInput.value ?? '').trim()
-  const numeric = raw === '' ? 0 : Number(raw)
-  if (!Number.isFinite(numeric) || numeric < 0) {
-    limitError.value = true
-    limitMsg.value = 'Ingresa un monto válido mayor o igual a 0.'
-    return
-  }
-  try {
-    await workspacesStore.updateWorkspaceLimit(authStore.activeWorkspaceId, numeric)
-    expenseLimitInput.value = numeric > 0 ? numeric : ''
-    limitMsg.value = numeric > 0 ? 'Límite mensual actualizado.' : 'Límite mensual eliminado.'
-    setTimeout(() => { limitMsg.value = '' }, 2500)
-  } catch (err: any) {
-    console.error('Error al actualizar límite mensual:', err)
-    limitError.value = true
-    limitMsg.value = err?.message || 'No se pudo actualizar el límite.'
-  }
-}
-
 const handleGeneralSettingsChange = async () => {
   try {
     await settingsStore.saveSettings({
@@ -1073,6 +1023,7 @@ const handleGeneralSettingsChange = async () => {
     })
   } catch (err) {
     console.error('Error actualizando configuraciones:', err)
+    notifications.error('No se pudo guardar la configuración. Inténtalo de nuevo.')
   }
 }
 

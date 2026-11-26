@@ -9,6 +9,8 @@ export interface Workspace {
   categoryBudgetCurrency?: string;
   /** Target currency that manual `exchangeRates` convert into (e.g. 'COP' for USD -> COP). */
   exchangeRatesBaseCurrency?: string | null;
+  /** How budgets count credit-card expenses for every member; only the owner changes it. Absent = consumption. */
+  budgetCardBasis?: 'consumption' | 'payment';
   createdAt: string | Date;
 }
 

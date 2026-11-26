@@ -18,7 +18,7 @@ import {
   signedAmount,
   toLeanTransaction
 } from "./agentTools";
-import { resolvePrimaryCurrency } from "./agentContext";
+import { buildAgentTools, resolvePrimaryCurrency } from "./agentContext";
 import { HttpError, zonedDateKey } from "./http";
 
 const BOGOTA = "America/Bogota";
@@ -90,9 +90,29 @@ test("buildAgentContextBlock states date, time zone, currency and sign conventio
   }
 });
 
-test("buildAgentContextBlock explains that card purchases count in their statement payment month", () => {
+test("P1 S8.4: buildAgentContextBlock says summary totals count card statements when paid, with the payments made, like the dashboard cash flow", () => {
   const block = buildAgentContextBlock({ now: new Date("2026-10-11T15:00:00-05:00"), timeZone: BOGOTA, currency: "COP" });
-  assert.match(block, /tarjeta de crédito que tiene día de corte y de pago cuentan en el mes en que se paga el extracto/);
+  assert.match(block, /tarjeta de crédito que tiene día de corte y de pago cuentan cuando se paga el extracto que las incluye, igual que en el flujo de caja del panel de control: lo abonado a la tarjeta cuenta en el mes del abono/);
+  assert.match(block, /lo que falta por pagar, en el mes de pago del extracto \(cada cuota un mes después\)/);
+});
+
+test("P1 S8.4: the summary tools describe card cash flow like the dashboard and say plainly where their figures differ", () => {
+  const tools = buildAgentTools({} as never, { workspaceId: "w", userId: "u", timeZone: BOGOTA, primaryCurrency: "COP" });
+  const description = (name: string) => tools.find(tool => tool.name === name)?.description ?? "";
+  const summary = description("getFinancialSummary");
+  assert.match(summary, /cuentan cuando se paga su extracto: lo abonado a la tarjeta en el mes del abono y lo que falta por pagar en el mes de pago/);
+  assert.match(summary, /comparison compara el periodo completo con el anterior completo; el porcentaje del panel de control compara el mes en curso solo hasta hoy/);
+  assert.match(summary, /con la base Consumo, de la vista «Por presupuesto» del panel de control/);
+  assert.doesNotMatch(summary, /cuentan en el mes en que se paga su extracto/);
+  const settings = description("getWorkspaceSettings");
+  assert.match(settings, /totals, como el flujo de caja del panel de control \(vista «Todo»\): cuando se paga el extracto, con lo abonado a la tarjeta en el mes del abono/);
+  assert.doesNotMatch(settings, /totals, en el mes en que se paga el extracto/);
+});
+
+test("P1 S6: buildAgentContextBlock says budget figures count card purchases by the workspace Consumo/Pagos basis", () => {
+  const block = buildAgentContextBlock({ now: new Date("2026-10-11T15:00:00-05:00"), timeZone: BOGOTA, currency: "COP" });
+  assert.match(block, /cifras de presupuesto .* según la base Consumo\/Pagos/);
+  assert.doesNotMatch(block, /En resúmenes y presupuestos, las compras con una tarjeta/);
 });
 
 test("toLeanTransaction keeps a legacy date-only string on its local calendar day", () => {

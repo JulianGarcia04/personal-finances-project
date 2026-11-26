@@ -23,8 +23,9 @@ import { parseDateOnly, toDateValue } from '@/lib/dates'
 import { roundMoney } from '@/lib/money'
 import { planTransferDirection, resolveStatementImportId, type StatementImportType } from '@/lib/statementImport'
 import { DELETED_ACCOUNT_HISTORY_MESSAGE, referencesDeletedAccount } from '@/lib/deletedAccountHistory'
-import { createExpenseBudgetAssigner, selectBudgetExpenses } from '@/lib/transactionClassification'
-import { budgetChangeForEdit, budgetIdToPersist, type EditBudgetChange } from '@/lib/budgets'
+import { budgetOfTransaction, createExpenseBudgetAssigner, selectBudgetExpenses } from '@/lib/transactionClassification'
+import { budgetChangeForEdit, budgetIdToPersist, type EditBudgetChange, type LinkableBudget } from '@/lib/budgets'
+import { chunkBulkEditUpdates, planBulkTransactionEdit, type BulkEditPlan, type BulkEditRequest } from '@/lib/bulkTransactionEdit'
 import { 
   collection, 
   query, 
@@ -61,6 +62,8 @@ type TransactionUpdate = {
   userId?: string;
   // Active budget the edited account is linked to, if any (its movements belong to it).
   linkedBudgetId?: string | null;
+  // Budget the user chose in the edit form, saved in the same write; omitted when unchanged.
+  chosenBudgetId?: string | null;
 }
 
 // Categorías por defecto iniciales
@@ -205,6 +208,8 @@ async function commitPocketMovement(options: {
   next?: PocketMovementTransaction
   // Linked budget of the target account; budget transition is derived from live before.type.
   linkedBudgetId?: string | null
+  // Budget the user chose for the edited movement, if any.
+  chosenBudgetId?: string | null
 }): Promise<{ id: string; data: any; deltas: Record<string, number>; budgetChange?: EditBudgetChange }> {
   const transactionRef = options.transactionId
     ? doc(db, 'transactions', options.transactionId)
@@ -326,7 +331,8 @@ async function commitPocketMovement(options: {
     const liveBudgetChange = budgetChangeForEdit({
       fromType: before.type,
       toType: options.next.type,
-      linkedBudgetId: options.linkedBudgetId ?? null
+      linkedBudgetId: options.linkedBudgetId ?? null,
+      chosenBudgetId: options.chosenBudgetId ?? null
     })
     const { createdAt: _ignoredCreatedAt, ...mutableNext } = options.next
     transaction.update(transactionRef, { ...mutableNext, ...(budgetPatchFor(liveBudgetChange) ?? {}) })
@@ -361,6 +367,9 @@ interface TransactionsState {
   categories: Category[];
   reversibleSettlementIds: string[];
   loading: boolean;
+  // Newest fetchTransactions / fetchCategories request; an older one is superseded and changes nothing.
+  transactionsLoadVersion: number;
+  categoriesLoadVersion: number;
 }
 
 export const useTransactionsStore = defineStore('transactions', {
@@ -369,6 +378,8 @@ export const useTransactionsStore = defineStore('transactions', {
     categories: [],
     reversibleSettlementIds: [],
     loading: false,
+    transactionsLoadVersion: 0,
+    categoriesLoadVersion: 0,
   }),
   getters: {
     // Filtrar transacciones locales
@@ -379,6 +390,8 @@ export const useTransactionsStore = defineStore('transactions', {
       search?: string;
       dateFrom?: string;
       dateTo?: string;
+      // Budget id; the base monthly budget also matches movements without one. Transfers and loans never match.
+      budgetId?: string;
     } = {}) => {
       let list = [...state.transactions]
 
@@ -392,6 +405,9 @@ export const useTransactionsStore = defineStore('transactions', {
       }
       if (filters.type) {
         list = list.filter(t => t.type === filters.type)
+      }
+      if (filters.budgetId) {
+        list = list.filter(t => budgetOfTransaction(t) === filters.budgetId)
       }
       if (filters.search) {
         const term = filters.search.toLowerCase()
@@ -441,6 +457,10 @@ export const useTransactionsStore = defineStore('transactions', {
       const workspaceId = authStore.activeWorkspaceId
       if (!user || !workspaceId) return
 
+      // Results apply only while this is the newest load and its workspace is still the active one.
+      const requestVersion = ++this.categoriesLoadVersion
+      const isCurrent = () => requestVersion === this.categoriesLoadVersion &&
+        authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === user.uid
       this.loading = true
       try {
         const q = query(
@@ -448,6 +468,7 @@ export const useTransactionsStore = defineStore('transactions', {
           where('workspaceId', '==', workspaceId)
         )
         const snapshot = await getDocs(q)
+        if (!isCurrent()) return
         const categoriesList: Category[] = []
         snapshot.forEach(docSnap => {
           categoriesList.push({ id: docSnap.id, ...docSnap.data() } as Category)
@@ -456,22 +477,28 @@ export const useTransactionsStore = defineStore('transactions', {
         // Si no existen categorías personalizadas ni globales asociadas al workspace, inicializamos las por defecto
         const workspaceHasCategories = categoriesList.some(cat => cat.workspaceId === workspaceId)
         if (categoriesList.length === 0 || !workspaceHasCategories) {
-          await this.initDefaultCategories()
+          await this.initDefaultCategories(workspaceId, isCurrent)
         } else {
           this.categories = categoriesList
         }
       } catch (error) {
         console.error('Error al cargar categorías:', error)
       } finally {
-        this.loading = false
+        if (requestVersion === this.categoriesLoadVersion) this.loading = false
       }
     },
 
     // Guardar las categorías iniciales en la base de datos
-    async initDefaultCategories(): Promise<void> {
+    // They are written to `workspaceId` (the active workspace by default) and shown only if `isCurrent`
+    // still holds when the write ends; by default, if that workspace and user are still the active ones.
+    async initDefaultCategories(
+      workspaceId: string | null = useAuthStore().activeWorkspaceId,
+      isCurrent?: () => boolean
+    ): Promise<void> {
       const authStore = useAuthStore()
-      const workspaceId = authStore.activeWorkspaceId
+      const userId = auth.currentUser?.uid
       if (!workspaceId) return
+      const stillCurrent = isCurrent ?? (() => authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === userId)
 
       const batch = writeBatch(db)
       const newCats: Category[] = []
@@ -488,7 +515,7 @@ export const useTransactionsStore = defineStore('transactions', {
       })
 
       await batch.commit()
-      this.categories = newCats
+      if (stillCurrent()) this.categories = newCats
     },
 
     // 2. Cargar Transacciones
@@ -498,6 +525,10 @@ export const useTransactionsStore = defineStore('transactions', {
       const workspaceId = authStore.activeWorkspaceId
       if (!user || !workspaceId) return
 
+      // Results apply only while this is the newest load and its workspace is still the active one.
+      const requestVersion = ++this.transactionsLoadVersion
+      const isCurrent = () => requestVersion === this.transactionsLoadVersion &&
+        authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === user.uid
       this.loading = true
       try {
         const q = query(
@@ -506,6 +537,7 @@ export const useTransactionsStore = defineStore('transactions', {
           orderBy('date', 'desc')
         )
         const snapshot = await getDocs(q)
+        if (!isCurrent()) return
         const transactionsList: Transaction[] = []
         snapshot.forEach(docSnap => {
           const data = docSnap.data()
@@ -522,11 +554,12 @@ export const useTransactionsStore = defineStore('transactions', {
         const reversibleIds = await Promise.all(
           transactionsList.map(async tx => await this.canReverseSettlement(tx) ? tx.id : null)
         )
+        if (!isCurrent()) return
         this.reversibleSettlementIds = reversibleIds.filter((id): id is string => id !== null)
       } catch (error) {
         console.error('Error fetching transactions:', error)
       } finally {
-        this.loading = false
+        if (requestVersion === this.transactionsLoadVersion) this.loading = false
       }
     },
 
@@ -1744,6 +1777,58 @@ export const useTransactionsStore = defineStore('transactions', {
       await assign(transactionId, budgetId)
     },
 
+    // S9: category and/or budget of several movements at once. The plan is made again here from the
+    // live local rows, and only `categoryId`/`budgetId` are written, in writeBatch chunks of up to
+    // 500 that each apply all-or-nothing. Pocket movements and the expense leg of a shared expense
+    // take these fields alone (the rules accept them without balances or the twin, which carries
+    // neither). A failed chunk is reported with its rows and the next chunks still run, unless the
+    // signed-in user changed, which stops the rest.
+    async bulkEditTransactions(
+      request: BulkEditRequest,
+      transactionIds: readonly string[],
+      budgets: readonly LinkableBudget[]
+    ): Promise<{ plan: BulkEditPlan; written: string[]; failed: Array<{ ids: string[]; error: unknown }> }> {
+      const user = auth.currentUser
+      const authStore = useAuthStore()
+      const workspaceId = authStore.activeWorkspaceId
+      if (!user || !workspaceId) throw new Error('Usuario o Workspace no inicializado')
+      const accountsStore = useAccountsStore()
+      const plan = planBulkTransactionEdit(request, transactionIds, this.transactions, {
+        workspaceId,
+        accounts: accountsStore.accounts,
+        loadedAccountsWorkspaceId: accountsStore.loadedWorkspaceId === workspaceId ? workspaceId : null,
+        budgets,
+        categories: this.categories
+      })
+
+      const written: string[] = []
+      const failed: Array<{ ids: string[]; error: unknown }> = []
+      for (const chunk of chunkBulkEditUpdates(plan.updates)) {
+        const ids = chunk.map(update => update.id)
+        if (auth.currentUser?.uid !== user.uid) {
+          failed.push({ ids, error: new Error('La sesión cambió antes de guardar los cambios.') })
+          continue
+        }
+        const batch = writeBatch(db)
+        for (const { id, patch } of chunk) batch.update(doc(db, 'transactions', id), { ...patch })
+        try {
+          await batch.commit()
+        } catch (error) {
+          console.error('Error al editar movimientos en lote:', error)
+          failed.push({ ids, error })
+          continue
+        }
+        written.push(...ids)
+        // A completed write must not leak into another user's or workspace's list.
+        if (auth.currentUser?.uid !== user.uid || authStore.activeWorkspaceId !== workspaceId) continue
+        for (const { id, type, patch } of chunk) {
+          const current = this.transactions.find(transaction => transaction.id === id)
+          if (current?.workspaceId === workspaceId && current.type === type) Object.assign(current, patch)
+        }
+      }
+      return { plan, written, failed }
+    },
+
     // 6. Editar / Actualizar Transacción
     async updateTransaction(transactionId: string, updates: TransactionUpdate): Promise<Transaction> {
       const user = auth.currentUser
@@ -1792,7 +1877,8 @@ export const useTransactionsStore = defineStore('transactions', {
           // The budget follows the edit in the same write as the pocket movement.
           const result = await commitPocketMovement({
             kind: 'updated', transactionId, workspaceId, userId: user.uid, next,
-            linkedBudgetId: updates.linkedBudgetId ?? null
+            linkedBudgetId: updates.linkedBudgetId ?? null,
+            chosenBudgetId: updates.chosenBudgetId ?? null
           })
           const updatedTx = withBudgetChange(
             { ...oldTx, ...next, date: transactionDate },
@@ -1831,7 +1917,8 @@ export const useTransactionsStore = defineStore('transactions', {
           const liveBudgetChange = budgetChangeForEdit({
             fromType: storedOld.type,
             toType: updates.type,
-            linkedBudgetId: updates.linkedBudgetId ?? null
+            linkedBudgetId: updates.linkedBudgetId ?? null,
+            chosenBudgetId: updates.chosenBudgetId ?? null
           })
           const budgetField = budgetPatchFor(liveBudgetChange) ?? {}
 
@@ -1990,7 +2077,7 @@ export const useTransactionsStore = defineStore('transactions', {
       const twinRef = doc(db, 'transactions', oldTx.mirrorOf)
       this.loading = true
       try {
-        const patch = await runTransaction(db, async (transaction) => {
+        const committed = await runTransaction(db, async (transaction) => {
           const [editedSnap, twinSnap] = await Promise.all([transaction.get(editedRef), transaction.get(twinRef)])
           if (!editedSnap.exists()) throw new Error('La transacción ya no existe.')
           if (!twinSnap.exists()) {
@@ -2043,7 +2130,17 @@ export const useTransactionsStore = defineStore('transactions', {
             } : {})
           }
           const mirrorPatch = { ...shared, amount: -spent, ...(editingBridgeLeg ? {} : ownFields) }
-          transaction.update(doc(db, 'transactions', bridgeLeg.id), bridgePatch)
+          // Only the expense leg carries a budget: the one chosen in its form travels in this write.
+          // A bridge is never linked to a budget (the rules refuse the link), so no link applies.
+          const budgetChange: EditBudgetChange = editingBridgeLeg
+            ? budgetChangeForEdit({
+                fromType: edited.type,
+                toType: updates.type,
+                linkedBudgetId: null,
+                chosenBudgetId: updates.chosenBudgetId ?? null
+              })
+            : { action: 'keep' }
+          transaction.update(doc(db, 'transactions', bridgeLeg.id), { ...bridgePatch, ...(budgetPatchFor(budgetChange) ?? {}) })
           transaction.update(doc(db, 'transactions', mirrorLeg.id), mirrorPatch)
           if (deltas.bridge !== 0) {
             const [bridgeRef, sourceRef, receivableRef] = accountRefs
@@ -2051,10 +2148,13 @@ export const useTransactionsStore = defineStore('transactions', {
             transaction.update(sourceRef, { balance: increment(deltas.source) })
             transaction.update(receivableRef, { balance: increment(deltas.receivable) })
           }
-          return editingBridgeLeg ? bridgePatch : mirrorPatch
+          return { patch: editingBridgeLeg ? bridgePatch : mirrorPatch, budgetChange }
         })
 
-        const updatedTx = { ...oldTx, ...patch, date: transactionDate } as Transaction
+        const updatedTx = withBudgetChange(
+          { ...oldTx, ...committed.patch, date: transactionDate } as Transaction,
+          committed.budgetChange
+        )
         if (authStore.activeWorkspaceId === workspaceId) {
           const currentIndex = this.transactions.findIndex(existing => existing.id === oldTx.id)
           if (currentIndex !== -1) this.transactions[currentIndex] = updatedTx

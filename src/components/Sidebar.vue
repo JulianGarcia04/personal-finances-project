@@ -1,11 +1,26 @@
 <template>
   <div>
-    <!-- Mobile Top Header (brand only; navigation lives in the bottom tab bar) -->
+    <!-- Mobile Top Header: brand and the active workspace (navigation lives in the bottom tab bar) -->
     <header
       v-if="authStore.isAuthenticated"
-      class="lg:hidden fixed top-0 left-0 right-0 h-[calc(4rem+env(safe-area-inset-top))] pt-safe glass-panel border-b border-white/5 z-30 flex items-center px-4 backdrop-blur-md bg-background/80"
+      class="lg:hidden fixed top-0 left-0 right-0 h-[calc(4rem+env(safe-area-inset-top))] pt-safe glass-panel border-b border-white/5 z-30 flex items-center justify-between gap-3 px-4 backdrop-blur-md bg-background/80"
     >
-      <LynorLogo mark-class="w-7 h-7" class="text-lg" />
+      <LynorLogo mark-class="w-7 h-7" class="text-lg shrink-0" />
+      <!-- Opens the switcher in the "Más" drawer, so a movement is never saved in the wrong workspace unnoticed. -->
+      <button
+        v-if="workspacesStore.workspaces.length > 0"
+        ref="headerWorkspaceButton"
+        type="button"
+        @click="openWorkspaceSwitcher"
+        :aria-expanded="isOpen"
+        aria-controls="app-drawer"
+        :aria-label="`Espacio de trabajo: ${activeWorkspaceName}. Cambiar de espacio`"
+        class="min-w-0 max-w-[60%] min-h-11 flex items-center gap-1.5 px-3 rounded-xl bg-slate-800/50 border border-border text-sm font-medium text-text-primary hover:bg-slate-700/50 active:bg-slate-700/50 transition-colors focus-visible:outline-2 focus-visible:outline-accent-emerald"
+      >
+        <BuildingIcon class="shrink-0 w-4 h-4 text-accent-emerald" aria-hidden="true" />
+        <span class="truncate">{{ activeWorkspaceName }}</span>
+        <ChevronDownIcon class="shrink-0 w-4 h-4 text-text-muted" aria-hidden="true" />
+      </button>
     </header>
 
     <!-- Overlay when mobile menu open -->
@@ -34,6 +49,7 @@
             <LynorLogo layout="stacked" mark-class="w-10 h-10" class="text-lg" />
           </h1>
           <button
+            ref="drawerCloseButton"
             type="button"
             @click="isOpen = false"
             aria-label="Cerrar menú"
@@ -46,6 +62,7 @@
         <!-- Workspace Switcher -->
         <div ref="workspaceMenuRef" class="mb-6 px-2 relative" v-if="workspacesStore.workspaces.length > 0">
           <button
+            ref="workspaceSwitcherButton"
             type="button"
             @click="isWorkspaceMenuOpen = !isWorkspaceMenuOpen"
             :aria-expanded="isWorkspaceMenuOpen"
@@ -84,17 +101,26 @@
         </div>
 
         <!-- Navigation Links -->
-        <nav class="space-y-1">
-          <router-link 
-            v-for="item in navItems" 
-            :key="item.path" 
+        <nav aria-label="Navegación del menú" class="space-y-1">
+          <router-link
+            v-for="item in navItems"
+            :key="item.path"
             :to="item.path"
-            @click="isOpen = false"
-            class="flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 group text-text-secondary hover:text-text-primary hover:bg-white/5"
-            active-class="bg-accent-emerald/10 text-accent-emerald! shadow-glow-emerald border-l-2 border-accent-emerald"
+            custom
+            v-slot="{ href, navigate, isActive, isExactActive }"
           >
-            <component :is="item.icon" class="w-5 h-5 transition-transform group-hover:scale-110" />
-            <span>{{ item.name }}</span>
+            <a
+              :href="href"
+              @click="navigateFromDrawer($event, navigate)"
+              :aria-current="isNavItemActive(item.path, isExactActive) ? 'page' : undefined"
+              :class="[
+                'flex min-h-11 items-center space-x-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 group hover:text-text-primary hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-accent-emerald',
+                isNavItemActive(item.path, isActive) ? 'bg-accent-emerald/10 text-accent-emerald! shadow-glow-emerald border-l-2 border-accent-emerald' : 'text-text-secondary'
+              ]"
+            >
+              <component :is="item.icon" class="w-5 h-5 shrink-0 transition-transform group-hover:scale-110" aria-hidden="true" />
+              <span>{{ item.name }}</span>
+            </a>
           </router-link>
         </nav>
       </div>
@@ -138,32 +164,35 @@
             <a
               :href="href"
               @click="navigate"
-              :aria-current="isActive && !isOpen ? 'page' : undefined"
+              :aria-label="tab.path === budgetsPath ? tab.name : undefined"
+              :aria-current="isNavItemActive(tab.path, isActive) && !isOpen ? 'page' : undefined"
               :class="[
-                'h-full flex flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-medium transition-colors',
-                isActive && !isOpen ? 'text-accent-emerald' : 'text-text-muted active:text-text-primary'
+                'h-full flex flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-accent-emerald',
+                isNavItemActive(tab.path, isActive) && !isOpen ? 'text-accent-emerald' : 'text-text-muted active:text-text-primary'
               ]"
             >
               <span
                 :class="[
                   'flex items-center justify-center w-12 h-7 rounded-full transition-colors',
-                  isActive && !isOpen ? 'bg-accent-emerald/10 shadow-glow-emerald' : ''
+                  isNavItemActive(tab.path, isActive) && !isOpen ? 'bg-accent-emerald/10 shadow-glow-emerald' : ''
                 ]"
               >
-                <component :is="tab.icon" class="w-5 h-5" />
+                <component :is="tab.icon" class="w-5 h-5" aria-hidden="true" />
               </span>
-              <span class="max-w-full truncate px-0.5">{{ tab.name }}</span>
+              <span v-if="tab.path === budgetsPath" class="min-[375px]:hidden" aria-hidden="true">Presup.</span>
+              <span class="max-w-full truncate px-0.5" :class="{ 'hidden min-[375px]:inline': tab.path === budgetsPath }">{{ tab.name }}</span>
             </a>
           </router-link>
         </li>
         <li class="min-w-0">
           <button
+            ref="moreButton"
             type="button"
             @click="isOpen = !isOpen"
             :aria-expanded="isOpen"
             aria-controls="app-drawer"
             :class="[
-              'w-full h-full flex flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-medium transition-colors',
+              'w-full h-full flex flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-accent-emerald',
               isOpen || isMoreRouteActive ? 'text-accent-emerald' : 'text-text-muted active:text-text-primary'
             ]"
           >
@@ -184,16 +213,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, useTemplateRef } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useBodyScrollLock } from '@/components/ui/useBodyScrollLock'
 import LynorLogo from '@/components/LynorLogo.vue'
 import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
-import { useAccountsStore } from '@/stores/accountsStore'
-import { useTransactionsStore } from '@/stores/transactionsStore'
-import { useGoalsStore } from '@/stores/goalsStore'
+import { useNotificationsStore } from '@/stores/notificationsStore'
+import { activateWorkspace } from '@/composables/useWorkspaceActivation'
 import { 
   LayoutDashboard as DashboardIcon, 
   Landmark as AccountsIcon, 
@@ -205,6 +233,7 @@ import {
   X as XIcon,
   Bot as AgentIcon,
   Target as GoalsIcon,
+  Wallet as BudgetsIcon,
   Building as BuildingIcon,
   ChevronDown as ChevronDownIcon
 } from 'lucide-vue-next'
@@ -212,15 +241,19 @@ import {
 const authStore = useAuthStore()
 const settingsStore = useSettingsStore()
 const workspacesStore = useWorkspacesStore()
-const accountsStore = useAccountsStore()
-const transactionsStore = useTransactionsStore()
-const goalsStore = useGoalsStore()
+const notifications = useNotificationsStore()
 const router = useRouter()
 const route = useRoute()
 
 const isOpen = ref(false)
 const isWorkspaceMenuOpen = ref(false)
 const workspaceMenuRef = ref<HTMLElement | null>(null)
+const drawerCloseButton = useTemplateRef<HTMLButtonElement>('drawerCloseButton')
+const moreButton = useTemplateRef<HTMLButtonElement>('moreButton')
+const headerWorkspaceButton = useTemplateRef<HTMLButtonElement>('headerWorkspaceButton')
+const workspaceSwitcherButton = useTemplateRef<HTMLButtonElement>('workspaceSwitcherButton')
+// True while the drawer was opened from the header workspace control: focus goes to the switcher and back.
+const openedFromWorkspace = ref(false)
 
 // Drawer is off-canvas only below lg (1024px); keep in sync to release locks on resize.
 const desktopQuery = typeof window !== 'undefined' ? window.matchMedia('(min-width: 1024px)') : null
@@ -242,8 +275,31 @@ watch(
 )
 
 watch(isOpen, (open) => {
-  if (!open) isWorkspaceMenuOpen.value = false
-})
+  const fromWorkspace = openedFromWorkspace.value
+  if (!open) {
+    isWorkspaceMenuOpen.value = false
+    openedFromWorkspace.value = false
+  }
+  if (isDesktop.value) return
+  const focused = document.activeElement
+  if (open || focused === document.body || focused?.closest('#app-drawer')) {
+    const target = open
+      ? (fromWorkspace ? workspaceSwitcherButton : drawerCloseButton)
+      : (fromWorkspace ? headerWorkspaceButton : moreButton)
+    target.value?.focus({ preventScroll: true })
+  }
+}, { flush: 'post' })
+
+const openWorkspaceSwitcher = () => {
+  openedFromWorkspace.value = true
+  isOpen.value = true
+  isWorkspaceMenuOpen.value = true
+}
+
+const navigateFromDrawer = (event: MouseEvent, navigate: (event: MouseEvent) => Promise<unknown>) => {
+  isOpen.value = false
+  return navigate(event)
+}
 
 const onKeydown = (event: KeyboardEvent) => {
   if (event.key !== 'Escape') return
@@ -289,19 +345,12 @@ const switchWorkspace = async (workspaceId: string) => {
     return
   }
   
-  await authStore.switchWorkspace(workspaceId)
   isWorkspaceMenuOpen.value = false
   isOpen.value = false // Cierra sidebar en móvil
-  
-  // Recargar datos reactivos de stores operativas para el nuevo workspace
-  await Promise.all([
-    accountsStore.fetchAccounts(),
-    transactionsStore.fetchTransactions(),
-    goalsStore.fetchGoals(),
-    goalsStore.loadBudgetSettings(),
-    transactionsStore.fetchCategories()
-  ])
-  
+
+  // Shared with workspace creation: switches and reloads every workspace-scoped store.
+  await activateWorkspace(workspaceId)
+
   // Opcional: Redirigir al dashboard para limpiar vistas profundas
   if (router.currentRoute.value.name !== 'Dashboard') {
     router.push({ name: 'Dashboard' })
@@ -314,12 +363,21 @@ const userInitials = computed(() => {
   return name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase()
 })
 
+const budgetsPath = '/goals'
+const savingsPath = '/goals?tab=savings'
+const activeGoalsPath = computed(() => route.query.tab === 'savings' ? savingsPath : budgetsPath)
+// Vue Router matches the same route record for both links, regardless of query.
+const isNavItemActive = (path: string, routerActive: boolean) => routerActive && (
+  (path !== budgetsPath && path !== savingsPath) || path === activeGoalsPath.value
+)
+
 const navItems = computed(() => {
   const items = [
     { name: 'Dashboard', path: '/', icon: DashboardIcon },
     { name: 'Cuentas', path: '/accounts', icon: AccountsIcon },
     { name: 'Transacciones', path: '/transactions', icon: TransactionsIcon },
-    { name: 'Presupuestos & Metas', path: '/goals', icon: GoalsIcon }
+    { name: 'Presupuestos', path: budgetsPath, icon: BudgetsIcon },
+    { name: 'Metas de ahorro', path: savingsPath, icon: GoalsIcon }
   ]
 
   // Mostrar herramientas IA solo si están habilitadas en configuraciones
@@ -338,10 +396,13 @@ const tabItems = [
   { name: 'Inicio', path: '/', icon: DashboardIcon },
   { name: 'Transacciones', path: '/transactions', icon: TransactionsIcon },
   { name: 'Cuentas', path: '/accounts', icon: AccountsIcon },
-  { name: 'Metas', path: '/goals', icon: GoalsIcon }
+  { name: 'Presupuestos', path: budgetsPath, icon: BudgetsIcon }
 ]
 
-const isMoreRouteActive = computed(() => !tabItems.some(tab => tab.path === route.path))
+const isMoreRouteActive = computed(() => {
+  const path = route.name === 'Goals' ? activeGoalsPath.value : route.path
+  return !tabItems.some(tab => tab.path === path)
+})
 
 const handleLogout = async () => {
   try {
@@ -349,6 +410,7 @@ const handleLogout = async () => {
     router.push({ name: 'Login' })
   } catch (err) {
     console.error('Error al salir:', err)
+    notifications.error('No se pudo cerrar la sesión. Inténtalo de nuevo.')
   }
 }
 </script>

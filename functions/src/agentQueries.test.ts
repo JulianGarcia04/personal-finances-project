@@ -16,6 +16,8 @@ import {
   type SavingsGoalAccountSnapshot
 } from "./agentQueries";
 import { AgentToolError, NameMaps } from "./agentTools";
+import { buildAgentTools } from "./agentContext";
+import { expenseAmountForMonth } from "./http";
 
 const TZ = "America/Bogota";
 // Sunday 2026-10-11 15:00 in Bogotá.
@@ -265,14 +267,51 @@ test("buildBudgetStatus compares category budgets and the expense limit with the
   assert.equal(buildBudgetStatus({ categoryBudgets: {}, expenseLimit: 0, summary: month, names: NAMES }).expenseLimit, null);
 });
 
-test("S9: buildBudgetStatus converts categoryBudgets using categoryBudgetCurrency, disables comparison when unconfirmed/missing rate, and evaluates expenseLimit on all monthly expenses", () => {
+test("P1 S3: getWorkspaceSettings reports the base monthly cap separately from all-budget totals", async () => {
+  const assigns = ["extra-monthly", "event", "archived-event"].map(budgetId =>
+    tx(budgetId, "expense", -100_000, "2026-10-08T17:00:00Z", { categoryId: "food", budgetId })
+  );
+  const rows = ROWS.map(row => row.id === "market" ? { ...row, budgetId: "default-monthly" } : row);
+  const workspace = { expenseLimit: 500_000, categoryBudgets: { food: 100 }, categoryBudgetCurrency: "USD", exchangeRates: RATES };
+  const snapshots = (entries: [string, object][]) => entries.map(([id, data]) => ({ id, data: () => data }));
+  const collections = {
+    transactions: snapshots([...rows, ...assigns].map(row => [row.id, row])),
+    categories: snapshots([...NAMES.categories].map(([id, name]) => [id, { name }])),
+    // Balance as its movements leave it (300,000 charged, 60,000 received): cash flow reads it for the card ledger.
+    accounts: snapshots([["card", { type: "credit", name: "Visa", statementClosingDay: 25, paymentDueDay: 5, balance: -240_000 }]])
+  };
+  // Stub the queries with local snapshots. Dates and duplicate rows are still handled by the real tool.
+  const db = { collection(name: keyof typeof collections) {
+    const query = {
+      where: () => query,
+      orderBy: () => query,
+      get: async () => ({ docs: collections[name] ?? [] }),
+      doc: () => ({ get: async () => ({ data: () => workspace }) })
+    };
+    return query;
+  } } as unknown as Parameters<typeof buildAgentTools>[0];
+  const tools = buildAgentTools(db, {
+    workspaceId: "workspace-a", userId: "user-a", primaryCurrency: "COP", timeZone: TZ, now: () => NOW
+  });
+  const settings = await tools.find(tool => tool.name === "getWorkspaceSettings")!.run({});
+  assert.ok(settings && typeof settings === "object" && "currentMonth" in settings);
+  assert.deepEqual(settings.currentMonth, {
+    period: { start: "2026-10-01", end: "2026-10-31", label: "octubre de 2026" },
+    totals: { income: 5_000_000, expenses: 790_020, net: 4_209_980, savingsRate: 84.2, upcomingInstallments: 0 },
+    expenseLimit: { limit: 500_000, spent: 490_020, remaining: 9_980, percentUsed: 98, exceeded: false },
+    categoryBudgets: [
+      { categoryId: "food", categoryName: "Comida", limit: 400_000, spent: 390_000, remaining: 10_000, percentUsed: 98, exceeded: false }
+    ],
+    categoryBudgetTotals: { budget: 400_000, spent: 390_000, percentUsed: 98 }
+  });
+});
+
+test("buildBudgetStatus converts category caps with manual FX but leaves the base expense cap in the reporting currency", () => {
   const month = run({ preset: "this_month" }, { groupBy: "category" });
-  // Confirmed USD caps converted to COP at 4000; expenseLimit evaluated on allExpensesTotal (900_000), not default-only summary.totals.expenses.
   const converted = buildBudgetStatus({
     categoryBudgets: { food: 100 },
     expenseLimit: 800_000,
     summary: month,
-    allExpensesTotal: 900_000,
     capCurrency: "USD",
     primaryCurrency: "COP",
     exchangeRates: { USD: 4000 },
@@ -281,8 +320,7 @@ test("S9: buildBudgetStatus converts categoryBudgets using categoryBudgetCurrenc
   assert.equal(converted.categories[0].limit, 400_000);
   assert.equal(converted.categories[0].percentUsed, 98);
   assert.equal(converted.totals.budget, 400_000);
-  assert.equal(converted.expenseLimit?.spent, 900_000);
-  assert.equal(converted.expenseLimit?.exceeded, true);
+  assert.deepEqual(converted.expenseLimit, { limit: 800_000, spent: 490_020, remaining: 309_980, percentUsed: 61, exceeded: false });
 
   // Unconfirmed capCurrency (null) or missing rate disables comparison instead of comparing 1:1.
   const unconfirmed = buildBudgetStatus({
@@ -588,4 +626,358 @@ test("cardBillingByAccount tags billing with the consumption basis only when ask
     cardBillingByAccount(accounts, "consumption").get("visa"),
     { statementClosingDay: 30, paymentDueDay: 15, basis: "consumption" }
   );
+});
+
+test("cardBillingByAccount attaches each card's statement ledger on the payment basis when given its history", () => {
+  const accounts = [
+    { id: "visa", type: "credit", statementClosingDay: 30, paymentDueDay: 15, balance: 0 },
+    { id: "bank", type: "checking", balance: 5_000 }
+  ];
+  const ledgerInput = {
+    timeZone: "UTC",
+    transactions: [
+      { type: "expense", amount: -1_000, date: new Date("2026-10-10T12:00:00Z"), accountId: "visa" },
+      { type: "transfer", amount: 1_000, date: new Date("2026-10-20T12:00:00Z"), accountId: "bank", toAccountId: "visa" }
+    ]
+  };
+  const purchase = ledgerInput.transactions[0];
+  const paid = cardBillingByAccount(accounts, "payment", ledgerInput).get("visa");
+  // Statement due in November was paid in full in October, so the purchase counts in October.
+  assert.equal(expenseAmountForMonth(purchase, 2026, 9, "UTC", paid), 1_000);
+  assert.equal(expenseAmountForMonth(purchase, 2026, 10, "UTC", paid), 0);
+  // Without history (or on the consumption basis) nothing changes.
+  assert.equal(cardBillingByAccount(accounts, "payment").get("visa")?.ledger, undefined);
+  assert.deepEqual(
+    cardBillingByAccount(accounts, "consumption", ledgerInput).get("visa"),
+    { statementClosingDay: 30, paymentDueDay: 15, basis: "consumption" }
+  );
+  assert.equal(cardBillingByAccount(accounts, "payment", ledgerInput).has("bank"), false);
+});
+
+// --- P1 S6: Asesor budget figures follow the workspace card basis ------------------
+
+/**
+ * Agent tools over local snapshots. Every query returns its whole collection (the real tools
+ * still filter by date, type and card); `queries` records each filter as "collection.field op".
+ */
+function stubAgentTools(
+  data: { workspace: Record<string, unknown>; accounts: [string, object][]; transactions: SummaryTransaction[] },
+  now = NOW
+) {
+  const snapshots = (entries: [string, object][]) => entries.map(([id, value]) => ({ id, data: () => value }));
+  const collections: Record<string, { id: string; data: () => object }[]> = {
+    transactions: snapshots(data.transactions.map(row => [row.id, row])),
+    categories: snapshots([...NAMES.categories].map(([id, name]) => [id, { name }])),
+    accounts: snapshots(data.accounts)
+  };
+  const queries: string[] = [];
+  const db = { collection(name: string) {
+    const query = {
+      where: (field: string, op: string) => {
+        queries.push(`${name}.${field} ${op}`);
+        return query;
+      },
+      orderBy: () => query,
+      get: async () => ({ docs: collections[name] ?? [] }),
+      doc: () => ({ get: async () => ({ data: () => data.workspace }) })
+    };
+    return query;
+  } } as unknown as Parameters<typeof buildAgentTools>[0];
+  const tools = buildAgentTools(db, { workspaceId: "workspace-a", userId: "user-a", primaryCurrency: "COP", timeZone: TZ, now: () => now });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const call = (name: string, input: object = {}) => tools.find(tool => tool.name === name)!.run(input) as Promise<any>;
+  return { call, queries };
+}
+
+// Visa closes on the 25th and is due on the 5th of the next month.
+const VISA = { type: "credit", name: "Visa", statementClosingDay: 25, paymentDueDay: 5 };
+const BANK_ACCOUNT: [string, object] = ["bank", { type: "checking", name: "Banco", balance: 1_000_000 }];
+const CARD_HISTORY = "transactions.toAccountId in";
+const CYCLE_ROWS: SummaryTransaction[] = [
+  // September cycle, statement paid on Oct 5.
+  tx("sepCard", "expense", -30_000, "2026-09-20T17:00:00Z", { accountId: "visa", categoryId: "food" }),
+  // October cycle, statement paid on Nov 5.
+  tx("octCard", "expense", -100_000, "2026-10-03T17:00:00Z", { accountId: "visa", categoryId: "food" }),
+  tx("bankFood", "expense", -50_000, "2026-10-05T17:00:00Z", { categoryId: "food" })
+];
+const CYCLE_WORKSPACE = { expenseLimit: 500_000, categoryBudgets: { food: 200_000 }, categoryBudgetCurrency: "COP" };
+// Oct 8: 60,000 into the Visa pays the statement due Oct 5 (30,000) and 30,000 of the one due Nov 5.
+const EARLY_PAYMENT = tx("early", "transfer", 60_000, "2026-10-08T17:00:00Z", { accountId: "bank", toAccountId: "visa" });
+
+test("P1 S6: under Consumo (no basis set) the Asesor counts a card purchase in its statement cycle month for budgets", async () => {
+  const { call, queries } = stubAgentTools({
+    workspace: CYCLE_WORKSPACE,
+    accounts: [["visa", { ...VISA, balance: -130_000 }], BANK_ACCOUNT],
+    transactions: CYCLE_ROWS
+  });
+  const settings = await call("getWorkspaceSettings");
+  // The October-cycle purchase (paid in November) and the bank expense; the September-cycle
+  // purchase stays in September even though its statement is paid on Oct 5.
+  assert.deepEqual(settings.currentMonth.categoryBudgets, [
+    { categoryId: "food", categoryName: "Comida", limit: 200_000, spent: 150_000, remaining: 50_000, percentUsed: 75, exceeded: false }
+  ]);
+  assert.deepEqual(settings.currentMonth.categoryBudgetTotals, { budget: 200_000, spent: 150_000, percentUsed: 75 });
+  assert.deepEqual(settings.currentMonth.expenseLimit, { limit: 500_000, spent: 150_000, remaining: 350_000, percentUsed: 30, exceeded: false });
+  // Cash flow counts each statement when it is paid: the one due on Oct 5 plus the bank expense.
+  assert.equal(settings.currentMonth.totals.expenses, 80_000);
+  assert.ok(settings.notes.some((note: string) => note.includes("base Consumo")));
+
+  const summary = await call("getFinancialSummary", { preset: "this_month" });
+  assert.equal(summary.totals.expenses, 80_000);
+  assert.equal(summary.byBudget.monthlyExpense, 150_000);
+  assert.ok(summary.byBudget.notes.some((note: string) => note.includes("base Consumo")));
+  // Cash flow reads the card history under every basis (the payments made to each card, like the Dashboard).
+  assert.ok(queries.includes(CARD_HISTORY));
+});
+
+test("P1 S6: under Pagos a statement paid early counts in the month paid, and its unpaid rest in its payment month", async () => {
+  const data = {
+    workspace: { ...CYCLE_WORKSPACE, budgetCardBasis: "payment" },
+    accounts: [["visa", { ...VISA, balance: -70_000 }], BANK_ACCOUNT] as [string, object][],
+    transactions: [...CYCLE_ROWS, EARLY_PAYMENT]
+  };
+  const october = stubAgentTools(data);
+  const settings = await october.call("getWorkspaceSettings");
+  // 30,000 of the Oct 5 statement + 30,000 paid early of the Nov 5 statement + 50,000 bank.
+  assert.deepEqual(settings.currentMonth.categoryBudgets, [
+    { categoryId: "food", categoryName: "Comida", limit: 200_000, spent: 110_000, remaining: 90_000, percentUsed: 55, exceeded: false }
+  ]);
+  assert.deepEqual(settings.currentMonth.expenseLimit, { limit: 500_000, spent: 110_000, remaining: 390_000, percentUsed: 22, exceeded: false });
+  // Cash flow counts the card the same way, like the Dashboard.
+  assert.equal(settings.currentMonth.totals.expenses, 110_000);
+  assert.ok(settings.notes.some((note: string) => note.includes("base Pagos")));
+  assert.equal((await october.call("getFinancialSummary", { preset: "this_month" })).byBudget.monthlyExpense, 110_000);
+  assert.ok(october.queries.includes(CARD_HISTORY));
+
+  // November: the 70,000 still unpaid of the Nov 5 statement.
+  const november = stubAgentTools(data, new Date("2026-11-11T15:00:00-05:00"));
+  const novemberSettings = await november.call("getWorkspaceSettings");
+  assert.equal(novemberSettings.currentMonth.categoryBudgets[0].spent, 70_000);
+  assert.equal(novemberSettings.currentMonth.expenseLimit.spent, 70_000);
+  assert.equal(novemberSettings.currentMonth.totals.expenses, 70_000);
+  assert.equal((await november.call("getFinancialSummary", { preset: "this_month" })).byBudget.monthlyExpense, 70_000);
+
+  // Periods without byBudget (not whole months) still read the card history for cash flow.
+  const week = stubAgentTools(data);
+  await week.call("getFinancialSummary", { preset: "this_week" });
+  assert.ok(week.queries.includes(CARD_HISTORY));
+  // A summary of another account never uses the cards, so it reads no card history.
+  const bank = stubAgentTools(data);
+  await bank.call("getFinancialSummary", { preset: "this_month", accountId: "bank" });
+  assert.ok(!bank.queries.includes(CARD_HISTORY));
+});
+
+test("P1 S6: the Asesor cash-flow summary is identical under both card bases", async () => {
+  const transactions = [...CYCLE_ROWS, EARLY_PAYMENT];
+  const accounts: [string, object][] = [["visa", { ...VISA, balance: -70_000 }], BANK_ACCOUNT];
+  const withBasis = (budgetCardBasis?: string) =>
+    stubAgentTools({ workspace: { ...CYCLE_WORKSPACE, ...(budgetCardBasis ? { budgetCardBasis } : {}) }, accounts, transactions }).call;
+  const [consumo, explicitConsumo, pagos] = [withBasis(), withBasis("consumption"), withBasis("payment")];
+  const inputs = [
+    { preset: "this_month", groupBy: "category", compareWithPrevious: true },
+    { preset: "last_month", groupBy: "day" },
+    { preset: "this_year", groupBy: "month" },
+    { lastCompleteMonths: 2, groupBy: "account" },
+    { preset: "this_week", type: "expense" }
+  ];
+  for (const input of inputs) {
+    // Everything except byBudget is cash flow.
+    const [base, explicit, payment] = await Promise.all([consumo, explicitConsumo, pagos].map(async call => {
+      const { byBudget, ...cashFlow } = await call("getFinancialSummary", input);
+      return cashFlow;
+    }));
+    assert.deepEqual(explicit, base, JSON.stringify(input));
+    assert.deepEqual(payment, base, JSON.stringify(input));
+  }
+  // The early payment counts in October under both bases, like the Dashboard.
+  assert.equal((await consumo("getFinancialSummary", { preset: "this_month" })).totals.expenses, 110_000);
+  const months = await Promise.all([consumo, explicitConsumo, pagos].map(async call => {
+    const { period, totals } = (await call("getWorkspaceSettings")).currentMonth;
+    return { period, totals };
+  }));
+  assert.deepEqual(months[1], months[0]);
+  assert.deepEqual(months[2], months[0]);
+  assert.deepEqual(months[0].totals, { income: 0, expenses: 110_000, net: -110_000, savingsRate: 0, upcomingInstallments: 0 });
+});
+
+test("P1 S6: without billing cards the Asesor budget figures are the same under both bases, as before", async () => {
+  const assigns = ["extra-monthly", "event"].map(budgetId =>
+    tx(budgetId, "expense", -100_000, "2026-10-08T17:00:00Z", { categoryId: "food", budgetId })
+  );
+  const transactions = [...ROWS.map(row => row.id === "market" ? { ...row, budgetId: "default-monthly" } : row), ...assigns];
+  // The card has no billing days and the bridge is a mirror: no account bills by statement.
+  const accounts: [string, object][] = [
+    ["card", { type: "credit", name: "Visa", balance: -300_000 }],
+    ["bridge", { type: "credit", name: "Puente", statementClosingDay: 25, paymentDueDay: 5, mirror: { workspaceId: "w" } }],
+    BANK_ACCOUNT
+  ];
+  const workspace = { expenseLimit: 500_000, categoryBudgets: { food: 300_000, tech: 150_000 }, categoryBudgetCurrency: "COP", exchangeRates: RATES };
+  const run = async (budgetCardBasis?: string) => {
+    const { call, queries } = stubAgentTools({ workspace: { ...workspace, ...(budgetCardBasis ? { budgetCardBasis } : {}) }, accounts, transactions });
+    const result = { settings: await call("getWorkspaceSettings"), summary: await call("getFinancialSummary", { preset: "this_month" }) };
+    assert.ok(!queries.includes(CARD_HISTORY));
+    return result;
+  };
+  const consumo = await run();
+  assert.deepEqual(await run("payment"), consumo);
+  assert.deepEqual(consumo.settings.currentMonth, {
+    period: { start: "2026-10-01", end: "2026-10-31", label: "octubre de 2026" },
+    totals: { income: 5_000_000, expenses: 690_020, net: 4_309_980, savingsRate: 86.2, upcomingInstallments: 100_000 },
+    expenseLimit: { limit: 500_000, spent: 490_020, remaining: 9_980, percentUsed: 98, exceeded: false },
+    categoryBudgets: [
+      { categoryId: "food", categoryName: "Comida", limit: 300_000, spent: 390_000, remaining: -90_000, percentUsed: 130, exceeded: true },
+      { categoryId: "tech", categoryName: "Tecnología", limit: 150_000, spent: 100_000, remaining: 50_000, percentUsed: 67, exceeded: false }
+    ],
+    categoryBudgetTotals: { budget: 450_000, spent: 490_000, percentUsed: 109 }
+  });
+  assert.ok(!consumo.settings.notes.some((note: string) => /base (Consumo|Pagos)/.test(note)));
+  assert.ok(!consumo.summary.byBudget.notes.some((note: string) => /base (Consumo|Pagos)/.test(note)));
+});
+
+// --- P1 S8.4: Asesor cash flow counts card payments like the Dashboard ------------
+
+const LEDGER_ROWS = [...CYCLE_ROWS, EARLY_PAYMENT];
+// The Dashboard's cash-flow billing: payment basis with each card's statement ledger.
+const LEDGER_BILLING = cardBillingByAccount(
+  [{ id: "visa", ...VISA, balance: -70_000 }, { id: "bank", type: "checking" }],
+  "payment",
+  { transactions: LEDGER_ROWS, timeZone: TZ }
+);
+const runLedger = (input: Parameters<typeof resolvePeriod>[0], extra: Partial<Parameters<typeof summarize>[1]> = {}) =>
+  summarize(LEDGER_ROWS, {
+    period: resolvePeriod(input, NOW, TZ),
+    now: NOW,
+    timeZone: TZ,
+    primaryCurrency: "COP",
+    exchangeRates: RATES,
+    names: NAMES,
+    cardBilling: LEDGER_BILLING,
+    ...extra
+  });
+/** The Dashboard's expenses of a local month: each expense's share with the ledger (http.ts port of the app helper). */
+const dashboardMonthExpenses = (year: number, month: number) => LEDGER_ROWS.reduce(
+  (sum, row) => sum + expenseAmountForMonth(row, year, month, TZ, LEDGER_BILLING.get(String(row.accountId)) ?? null),
+  0
+);
+
+test("P1 S8.4: an early card payment moves spend into the month paid in the cash-flow summary", () => {
+  const october = runLedger({ preset: "this_month" });
+  // The Oct 5 statement (30,000, paid on Oct 8), 30,000 paid early of the Nov 5 statement and 50,000 at the bank.
+  assert.deepEqual(october.totals, { income: 0, expenses: 110_000, net: -110_000, savingsRate: 0, upcomingInstallments: 0 });
+  assert.equal(october.totals.expenses, dashboardMonthExpenses(2026, 9));
+  assert.equal(october.topExpenses.find(row => row.id === "octCard")?.amount, 30_000);
+  assert.ok(october.notes.some(note => note.includes("en el mes del abono")));
+  // The card's 60,000 sits on the day it was paid (Oct 8); the bank expense on Oct 5.
+  assert.deepEqual(runLedger({ preset: "this_month" }, { groupBy: "day" }).groups.map(g => [g.key, g.expenses]), [["2026-10-05", 50_000], ["2026-10-08", 60_000]]);
+
+  // November keeps only the 70,000 still unpaid of the Nov 5 statement; nothing counts twice.
+  const months = runLedger({ startDate: "2026-09-01", endDate: "2026-12-31" }, { groupBy: "month" });
+  assert.deepEqual(months.groups.map(g => [g.key, g.expenses]), [["2026-10", 110_000], ["2026-11", 70_000]]);
+  assert.equal(dashboardMonthExpenses(2026, 10), 70_000);
+  const november = summarize(LEDGER_ROWS, {
+    period: resolvePeriod({ preset: "this_month" }, new Date("2026-11-11T15:00:00-05:00"), TZ),
+    now: new Date("2026-11-11T15:00:00-05:00"), timeZone: TZ, primaryCurrency: "COP", exchangeRates: RATES, names: NAMES,
+    cardBilling: LEDGER_BILLING, compareWithPrevious: true
+  });
+  assert.equal(november.totals.expenses, 70_000);
+  assert.equal(november.comparison?.totals.expenses, 110_000);
+});
+
+test("P1 S8.4: card installments paid early split by month, with their share labels", () => {
+  // 90,000 in 3 installments on Oct 3: statements due Nov 5, Dec 5 and Jan 5 (30,000 each). The
+  // card already owed nothing; 45,000 paid on Oct 20 settles the first and half of the second.
+  const rows = [
+    tx("tv", "expense", -90_000, "2026-10-03T17:00:00Z", { accountId: "visa", categoryId: "tech", installments: 3 }),
+    tx("tvPay", "transfer", 45_000, "2026-10-20T17:00:00Z", { accountId: "bank", toAccountId: "visa" })
+  ];
+  const billing = cardBillingByAccount([{ id: "visa", ...VISA, balance: -45_000 }], "payment", { transactions: rows, timeZone: TZ });
+  const s = summarize(rows, {
+    period: resolvePeriod({ startDate: "2026-10-01", endDate: "2027-01-31" }, NOW, TZ),
+    now: NOW, timeZone: TZ, primaryCurrency: "COP", exchangeRates: RATES, names: NAMES, cardBilling: billing, groupBy: "month"
+  });
+  assert.deepEqual(s.groups.map(g => [g.key, g.expenses]), [["2026-10", 45_000], ["2026-12", 15_000], ["2027-01", 30_000]]);
+  assert.equal(s.totals.expenses, 90_000);
+  // Shares due after today stay flagged as upcoming: half of the Dec 5 statement and the Jan 5 one.
+  assert.equal(s.totals.upcomingInstallments, 45_000);
+  assert.equal(s.topExpenses[0].installmentsInfo, "cuotas 1 a 3 de 3 (compra total 90000 COP)");
+  const october = summarize(rows, {
+    period: resolvePeriod({ preset: "this_month" }, NOW, TZ),
+    now: NOW, timeZone: TZ, primaryCurrency: "COP", exchangeRates: RATES, names: NAMES, cardBilling: billing
+  });
+  assert.equal(october.topExpenses[0].amount, 45_000);
+  assert.equal(october.topExpenses[0].installmentsInfo, "cuotas 1 a 2 de 3 (compra total 90000 COP)");
+});
+
+test("P1 S8.4: per-month cash flow equals the server expenseAmountForMonth sum on billing cards with payments", () => {
+  // Months June to October 2026 (NOW is Oct 11).
+  const rows = [
+    // Master closes on the 10th and is due on the 25th (same month).
+    tx("m1", "expense", -120_000, "2026-08-12T17:00:00Z", { accountId: "master", categoryId: "tech" }),
+    tx("m2", "expense", -240_000, "2026-09-05T17:00:00Z", { accountId: "master", categoryId: "food", installments: 6 }),
+    tx("m3", "expense", -75_000, "2026-10-08T17:00:00Z", { accountId: "master", categoryId: "fun" }),
+    tx("mp1", "transfer", 120_000, "2026-09-24T17:00:00Z", { accountId: "bank", toAccountId: "master" }),
+    tx("mp2", "transfer", 100_000, "2026-10-09T17:00:00Z", { accountId: "bank", toAccountId: "master" }),
+    // Diners closes on the 31st and is due on the 15th (next month): 12 installments, partial payments.
+    tx("d1", "expense", -500_000, "2026-07-28T17:00:00Z", { accountId: "diners", categoryId: "tech", installments: 12 }),
+    tx("d2", "expense", -45_000, "2026-10-01T17:00:00Z", { accountId: "diners", categoryId: "fun" }),
+    tx("dp1", "transfer", 41_667, "2026-08-14T17:00:00Z", { accountId: "bank", toAccountId: "diners" }),
+    tx("dp2", "transfer", 100_000, "2026-09-25T17:00:00Z", { accountId: "bank", toAccountId: "diners" }),
+    // Closes on the 20th, due on the 5th; it had 50,000 of credit before its first movement.
+    tx("p1", "expense", -60_000, "2026-06-25T17:00:00Z", { accountId: "pre", categoryId: "food" }),
+    tx("p2", "expense", -30_000, "2026-08-03T17:00:00Z", { accountId: "pre", categoryId: "food", installments: 2 }),
+    tx("pp", "transfer", 20_000, "2026-09-02T17:00:00Z", { accountId: "bank", toAccountId: "pre" }),
+    tx("cash", "expense", -10_000, "2026-06-03T17:00:00Z", { categoryId: "food" })
+  ];
+  const billing = cardBillingByAccount([
+    { id: "master", type: "credit", statementClosingDay: 10, paymentDueDay: 25, balance: -215_000 },
+    { id: "diners", type: "credit", statementClosingDay: 31, paymentDueDay: 15, balance: -403_333 },
+    { id: "pre", type: "credit", statementClosingDay: 20, paymentDueDay: 5, balance: -20_000 },
+    { id: "bank", type: "checking", balance: 0 }
+  ], "payment", { transactions: rows, timeZone: TZ });
+  const options = { now: NOW, timeZone: TZ, primaryCurrency: "COP", exchangeRates: RATES, names: NAMES, cardBilling: billing };
+  const months = [5, 6, 7, 8, 9].map(month => {
+    const end = new Date(Date.UTC(2026, month + 1, 0)).getUTCDate();
+    const key = `2026-${String(month + 1).padStart(2, "0")}`;
+    const server = rows.reduce((sum, row) =>
+      sum + expenseAmountForMonth(row, 2026, month, TZ, billing.get(String(row.accountId)) ?? null), 0);
+    const summary = summarize(rows, { ...options, period: resolvePeriod({ startDate: `${key}-01`, endDate: `${key}-${end}` }, NOW, TZ) });
+    return { key, summary: summary.totals.expenses, server: Math.round(server * 100) / 100 };
+  });
+  for (const { key, summary, server } of months) assert.equal(summary, server, key);
+  assert.ok(months.every(({ server }) => server > 0));
+  // One summary over the five months splits the same way.
+  const grouped = summarize(rows, { ...options, groupBy: "month", period: resolvePeriod({ startDate: "2026-06-01", endDate: "2026-10-31" }, NOW, TZ) });
+  assert.deepEqual(grouped.groups.map(g => [g.key, g.expenses]), months.map(({ key, server }) => [key, server]));
+  // By day, paid parts sit on their payment days and add up to each month to the cent.
+  const byDay = summarize(rows, { ...options, groupBy: "day", period: resolvePeriod({ startDate: "2026-06-01", endDate: "2026-10-31" }, NOW, TZ) });
+  for (const { key, server } of months) {
+    const days = byDay.groups.filter(g => g.key.startsWith(key)).reduce((sum, g) => sum + Math.round(g.expenses * 100), 0);
+    assert.equal(days, Math.round(server * 100), key);
+  }
+  assert.ok(byDay.groups.some(g => g.key === "2026-09-24"), "the Sep 24 Master payment is a day of its own");
+});
+
+test("P1 S8.4: money already paid to a card never counts as upcoming and sits on the day it was paid", () => {
+  // Master closes on the 10th and is due on the 25th. Today is Nov 20.
+  const now = new Date("2026-11-20T12:00:00-05:00");
+  // The card's balance is what its movements leave (no debt or credit from before).
+  const run = (rows: SummaryTransaction[], balance: number) => summarize(rows, {
+    period: resolvePeriod({ preset: "this_month" }, now, TZ), now, timeZone: TZ, primaryCurrency: "COP", exchangeRates: RATES, names: NAMES,
+    groupBy: "day",
+    cardBilling: cardBillingByAccount([{ id: "master", type: "credit", statementClosingDay: 10, paymentDueDay: 25, balance }], "payment", { transactions: rows, timeZone: TZ })
+  });
+  const pay = (amount: number) => tx("pay", "transfer", amount, "2026-11-15T17:00:00Z", { accountId: "bank", toAccountId: "master" });
+
+  // Bought on Nov 12 (statement due Dec 25) and paid in full on Nov 15: nothing is still due.
+  const paid = run([tx("buy", "expense", -100_000, "2026-11-12T17:00:00Z", { accountId: "master", categoryId: "food" }), pay(100_000)], 0);
+  assert.equal(paid.totals.expenses, 100_000);
+  assert.equal(paid.totals.upcomingInstallments, 0);
+  assert.ok(!paid.notes.some(note => note.includes("vencen después de hoy")));
+  assert.deepEqual(paid.groups.map(g => [g.key, g.expenses]), [["2026-11-15", 100_000]]);
+
+  // Bought on Nov 2 (statement due Nov 25), 40,000 paid on Nov 15: only the unpaid 60,000 is still due.
+  const partial = run([tx("buy", "expense", -100_000, "2026-11-02T17:00:00Z", { accountId: "master", categoryId: "food" }), pay(40_000)], -60_000);
+  assert.equal(partial.totals.expenses, 100_000);
+  assert.equal(partial.totals.upcomingInstallments, 60_000);
+  assert.deepEqual(partial.groups.map(g => [g.key, g.expenses]), [["2026-11-15", 40_000], ["2026-11-25", 60_000]]);
 });

@@ -1,4 +1,14 @@
-import { CardBilling, expenseAmountForMonth, storedDateValue, YearMonth, zonedYearMonth } from "./http";
+import { cardBillingByAccount, type CardLedgerTransaction } from "./cardStatements";
+import {
+  CardBilling,
+  cardBillingOf,
+  expenseAmountForMonth,
+  ImputationBasis,
+  storedDateValue,
+  workspaceCardBasis,
+  YearMonth,
+  zonedYearMonth
+} from "./http";
 import { DEFAULT_MONTHLY_BUDGET_ID } from "./legacyCategoryBudgets";
 
 // Pure budget-alert logic for the notifyBudgetThreshold trigger. No firebase-admin here.
@@ -13,9 +23,10 @@ import { DEFAULT_MONTHLY_BUDGET_ID } from "./legacyCategoryBudgets";
 // - only `type === 'expense'` with a categoryId counts; income, transfers (including card
 //   repayments and mirror legs), loans and loan payments are ignored;
 // - monthly scopes count this month's share, installments split to the cent and imputed to
-//   the card statement payment month for billed credit cards (src/lib/installments.ts
-//   expenseAmountForMonth, server port http.ts expenseAmountForMonth); event scopes count
-//   the full assigned principal once (src/lib/budgets.ts eventBudgetCommittedAllocation);
+//   the card month of billed credit cards (src/lib/installments.ts expenseAmountForMonth, server
+//   port http.ts expenseAmountForMonth) by the basis the workspace owner chose for budgets
+//   (alertCardBilling); event scopes count the full assigned principal once
+//   (src/lib/budgets.ts eventBudgetCommittedAllocation);
 // - currency: expenses and the cap are converted to the reporting currency with the manual
 //   workspace `exchangeRates` (source -> reporting). A missing/invalid rate or an
 //   unconfirmed cap currency makes the comparison unknown (null): no 1:1 fallback.
@@ -23,11 +34,6 @@ import { DEFAULT_MONTHLY_BUDGET_ID } from "./legacyCategoryBudgets";
 // (see notifyBudgetThreshold for how it is chosen).
 
 export const BUDGET_ALERTS_COLLECTION = "budgetAlerts";
-/**
- * Alerts warn about consumption: card purchases count in their statement cycle month, the
- * default "Consumo del mes" view of the app's budgets (src/lib/budgetBasis.ts).
- */
-export const ALERT_CARD_BASIS = "consumption" as const;
 export const BUDGET_ALERT_THRESHOLDS = [80, 100] as const;
 export type BudgetThreshold = (typeof BUDGET_ALERT_THRESHOLDS)[number];
 /** Ledger slot (in place of a category id) for alerts on a budget's overall cap. */
@@ -36,6 +42,123 @@ export const TOTAL_ALERT_SUBJECT = "__total";
 export const FUNDS_ALERT_SUBJECT = "__funds";
 
 export type BillingLookup = (accountId?: string | null) => CardBilling | null;
+
+type AlertAccount = { id: string; [key: string]: unknown };
+
+/**
+ * Transaction types the alerts read for a workspace. Pagos also reads loans and loan payments,
+ * because the card ledger counts every charge and credit on a card (cardStatements.ts).
+ */
+export function alertTransactionTypes(basis: ImputationBasis): string[] {
+  const types = ["expense", "income", "transfer"];
+  return basis === "payment" ? [...types, "loan", "loan_payment"] : types;
+}
+
+/** Credit cards whose purchases bill by statement (cardBillingOf). */
+function billingCardIds(accounts: readonly AlertAccount[]): Set<string> {
+  return new Set(accounts.filter((account) => cardBillingOf(account) !== null).map((account) => account.id));
+}
+
+/**
+ * Card billing of the alerts, by the basis the workspace owner chose for budgets
+ * (workspaceCardBasis, Consumo by default). Consumo counts card purchases in their statement
+ * cycle month. Pagos counts them when their statement is paid: payments made early count in the
+ * month they were made and only the unpaid rest in the payment month (cardStatements.ts, like the
+ * app's createCardBillingLookup). `ledgerInput` holds the workspace's transactions (whole history,
+ * every type) and the owner's time zone; only Pagos reads it.
+ */
+export function alertCardBilling(
+  workspace: Record<string, any> | null | undefined,
+  accounts: AlertAccount[],
+  ledgerInput?: { transactions: readonly Record<string, any>[]; timeZone: string }
+): { basis: ImputationBasis; billingFor: BillingLookup } {
+  const basis = workspaceCardBasis(workspace);
+  let billing: Map<string, CardBilling>;
+  if (basis === "payment" && ledgerInput) {
+    const cards = billingCardIds(accounts);
+    const movements = ledgerInput.transactions.filter((tx) =>
+      cards.has(tx.accountId) || (tx.type === "transfer" && cards.has(tx.toAccountId)));
+    billing = cardBillingByAccount(accounts, basis, {
+      transactions: movements as CardLedgerTransaction[],
+      timeZone: ledgerInput.timeZone
+    });
+  } else {
+    billing = cardBillingByAccount(accounts, basis);
+  }
+  return { basis, billingFor: (accountId) => (accountId ? billing.get(accountId) ?? null : null) };
+}
+
+/**
+ * Account a movement credits in the card ledger (cardStatements.ts): the destination of a
+ * transfer, or the account of any other non-expense movement with a positive amount (a refund, a
+ * loan repayment). Null for charges and anything else.
+ */
+export function creditedAccountOf(tx: Record<string, any> | undefined): string | null {
+  if (!tx) return null;
+  if (tx.type === "transfer") {
+    return typeof tx.toAccountId === "string" && tx.toAccountId && tx.toAccountId !== tx.accountId ? tx.toAccountId : null;
+  }
+  if (tx.type === "expense" || typeof tx.amount !== "number" || !(tx.amount > 0)) return null;
+  return typeof tx.accountId === "string" && tx.accountId ? tx.accountId : null;
+}
+
+/**
+ * Billing cards a write credits, before or after it, when that moves what the alerts count. Under
+ * Pagos a payment or credit on a card moves its statements' spending into the month it was made,
+ * so creating, editing or deleting one can push a budget over a threshold. Under Consumo card
+ * payments move nothing (none).
+ */
+export function alertCardCredits(
+  basis: ImputationBasis,
+  before: Record<string, any> | undefined,
+  after: Record<string, any> | undefined,
+  accounts: readonly AlertAccount[]
+): string[] {
+  if (basis !== "payment") return [];
+  const cards = billingCardIds(accounts);
+  const credited = [creditedAccountOf(before), creditedAccountOf(after)]
+    .filter((accountId): accountId is string => accountId !== null && cards.has(accountId));
+  return [...new Set(credited)];
+}
+
+/**
+ * Whether the trigger can stop before reading anything else: a write that only moves money
+ * between accounts no active budget links (skipsUnlinkedTransferWrite) and credits no billing
+ * card that counts (alertCardCredits).
+ */
+export function skipsAlertWrite(
+  before: Record<string, any> | undefined,
+  after: Record<string, any> | undefined,
+  linkedBudgetOf: LinkedBudgetLookup,
+  cardCredits: readonly string[]
+): boolean {
+  return cardCredits.length === 0 && skipsUnlinkedTransferWrite(before, after, linkedBudgetOf);
+}
+
+/**
+ * Budgets and categories a payment or credit on the given cards can push over a threshold: those
+ * of every expense on those cards with a share in the evaluated month. Budget id -> categories of
+ * those expenses (empty when they are all uncategorized), in first-seen order.
+ */
+export function cardCreditAlertScopes(
+  expenses: Iterable<Record<string, any>>,
+  cardIds: readonly string[],
+  month: YearMonth,
+  options: { timeZone: string; billingFor?: BillingLookup }
+): Map<string, string[]> {
+  const scopes = new Map<string, string[]>();
+  if (cardIds.length === 0) return scopes;
+  const cards = new Set(cardIds);
+  for (const tx of expenses) {
+    if (typeof tx.accountId !== "string" || !cards.has(tx.accountId)) continue;
+    if (!countsTowardMonthlySpend(tx, month, options)) continue;
+    const budgetId = resolveAlertBudgetId(tx.budgetId);
+    const categories = scopes.get(budgetId) ?? [];
+    if (typeof tx.categoryId === "string" && tx.categoryId && !categories.includes(tx.categoryId)) categories.push(tx.categoryId);
+    scopes.set(budgetId, categories);
+  }
+  return scopes;
+}
 
 /** Operating budget whose category cap an expense counts against. */
 export interface AlertScope {

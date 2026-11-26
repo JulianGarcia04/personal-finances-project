@@ -5,7 +5,7 @@
       <div class="relative w-16 h-16 mb-4">
         <div class="absolute inset-0 rounded-full border-4 border-accent-emerald/20 border-t-accent-emerald animate-spin"></div>
       </div>
-      <p class="font-display text-sm tracking-widest text-accent-emerald font-semibold uppercase animate-pulse">Cargando Bóveda...</p>
+      <p class="font-display text-sm tracking-widest text-accent-emerald font-semibold uppercase animate-pulse">Cargando Lynor Finanzas…</p>
     </div>
 
     <!-- App Layout -->
@@ -33,6 +33,9 @@
 
       <OnboardingWizard v-if="authStore.isAuthenticated" />
     </div>
+
+    <!-- Toasts and confirmations for every state, including Login. -->
+    <NotificationHost />
   </div>
 </template>
 
@@ -40,6 +43,7 @@
 import { onMounted } from 'vue'
 import Sidebar from '@/components/Sidebar.vue'
 import OnboardingWizard from '@/components/OnboardingWizard.vue'
+import NotificationHost from '@/components/ui/NotificationHost.vue'
 import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { onForegroundMessage } from '@/lib/push'

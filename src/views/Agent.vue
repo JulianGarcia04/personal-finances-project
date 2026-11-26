@@ -143,7 +143,7 @@
 
         <div class="hidden sm:flex shrink-0 text-[10px] bg-slate-950/45 border border-white/5 px-3 py-1.5 rounded-lg text-text-secondary items-center gap-1.5">
           <span class="w-1.5 h-1.5 rounded-full bg-accent-amber"></span>
-          <span class="hidden sm:inline">Modo Agente con acceso a BD</span>
+          <span class="hidden sm:inline">Consulta y registra tus finanzas</span>
           <span class="sm:hidden">Agente IA</span>
         </div>
       </div>
@@ -167,7 +167,7 @@
 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full">
             <button 
-              v-for="chip in suggestionChips" 
+              v-for="chip in chips.starters"
               :key="chip"
               @click="sendSuggestion(chip)"
               class="min-h-11 p-3.5 text-left rounded-xl bg-slate-950/45 hover:bg-slate-900 border border-white/5 hover:border-accent-amber/20 text-xs text-text-secondary hover:text-text-primary transition-all duration-200 cursor-pointer"
@@ -231,7 +231,7 @@
       <!-- Suggestion chips (Floating context-aware shortcuts when messages exist) -->
       <div v-if="activeChatMessages && activeChatMessages.length > 0 && !loading" class="flex overflow-x-auto gap-2 pb-3 pt-1 scrollbar-none shrink-0">
         <button 
-          v-for="chip in contextChips" 
+          v-for="chip in chips.followUps"
           :key="chip"
           @click="sendSuggestion(chip)"
           class="whitespace-nowrap min-h-10 px-3.5 py-2 rounded-full bg-slate-900 border border-white/5 hover:border-accent-amber/25 text-xs text-text-secondary hover:text-text-primary transition-all cursor-pointer"
@@ -277,6 +277,7 @@ import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useGoalsStore } from '@/stores/goalsStore'
 import { useChatsStore } from '@/stores/chatsStore'
+import { useNotificationsStore } from '@/stores/notificationsStore'
 import type { ChatMessage } from '@/types'
 import { 
   Sparkles as SparklesIcon, 
@@ -296,6 +297,7 @@ const accountsStore = useAccountsStore()
 const transactionsStore = useTransactionsStore()
 const goalsStore = useGoalsStore()
 const chatsStore = useChatsStore()
+const notifications = useNotificationsStore()
 
 // Request limits mirrored from functions/src/http.ts (server: 50 messages,
 // 4000 chars per user message, 16000 per assistant message).
@@ -324,25 +326,47 @@ const loading = ref(false)
 const messageAreaRef = ref<HTMLDivElement | null>(null)
 const showHistoryDrawer = ref(false)
 
-const suggestionChips = [
-  'Resumen de mis gastos de este mes',
-  'Compara este mes con el anterior',
-  '¿Cómo voy con mi presupuesto?',
-  'Mis 5 gastos más grandes del mes',
-  '¿Cuál es mi patrimonio neto actual?',
-  'Registra un gasto de 30000 COP en Comida hoy'
-]
+// Main currency: the user's, as on the Dashboard and in the advisor's own answers.
+const mainCurrency = computed(() => settingsStore.currency || 'COP')
 
-const contextChips = [
-  'Resumen de mis gastos de este mes',
-  'Compara este mes con el anterior',
-  '¿Cómo voy con mi presupuesto?',
-  'Mis 5 gastos más grandes del mes',
-  '¿Cuándo compré ropa?',
-  '¿Cómo voy con mis metas de ahorro?',
-  'Dáme consejos para ahorrar',
-  'Crea una cuenta llamada Efectivo con saldo 50000 COP'
-]
+// Example amounts sized for each main currency: a tapped chip is sent as is and records a real movement.
+const CHIP_EXAMPLE_AMOUNTS: Record<string, { expense: number; balance: number }> = {
+  COP: { expense: 30000, balance: 50000 },
+  MXN: { expense: 150, balance: 250 },
+  EUR: { expense: 10, balance: 20 },
+  USD: { expense: 10, balance: 20 },
+  CLP: { expense: 8000, balance: 15000 },
+  ARS: { expense: 10000, balance: 20000 },
+  PEN: { expense: 30, balance: 50 }
+}
+const FALLBACK_CHIP_AMOUNTS = { expense: 10, balance: 20 }
+
+// Starters show on an empty chat; follow-ups float above the input once there are messages.
+const chipsFor = (currency: string) => {
+  const { expense, balance } = CHIP_EXAMPLE_AMOUNTS[currency] ?? FALLBACK_CHIP_AMOUNTS
+  return {
+    starters: [
+      'Resumen de mis gastos de este mes',
+      'Compara este mes con el anterior',
+      '¿Cómo voy con mi presupuesto?',
+      'Mis 5 gastos más grandes del mes',
+      '¿Cuál es mi patrimonio neto actual?',
+      `Registra un gasto de ${expense} ${currency} en Comida hoy`
+    ],
+    followUps: [
+      'Resumen de mis gastos de este mes',
+      'Compara este mes con el anterior',
+      '¿Cómo voy con mi presupuesto?',
+      'Mis 5 gastos más grandes del mes',
+      '¿Cuándo compré ropa?',
+      '¿Cómo voy con mis metas de ahorro?',
+      'Dáme consejos para ahorrar',
+      `Crea una cuenta llamada Efectivo con saldo ${balance} ${currency}`
+    ]
+  }
+}
+
+const chips = computed(() => chipsFor(mainCurrency.value))
 
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 
@@ -434,8 +458,18 @@ const selectChat = (chatId: string) => {
 }
 
 const deleteConversation = async (chatId: string) => {
-  if (confirm('¿Estás seguro de que deseas eliminar esta conversación?')) {
+  const confirmed = await notifications.confirm({
+    title: '¿Eliminar esta conversación?',
+    message: 'Se borrarán todos sus mensajes. Esta acción no se puede deshacer.',
+    confirmLabel: 'Eliminar',
+    tone: 'danger'
+  })
+  if (!confirmed) return
+  try {
     await chatsStore.deleteChat(chatId)
+  } catch (err) {
+    console.error('Error al eliminar conversación:', err)
+    notifications.error('No se pudo eliminar la conversación. Inténtalo de nuevo.')
   }
 }
 
@@ -536,7 +570,7 @@ const reportError = (chatId: string | null, err: any) => {
     chatId,
     err?.fromServer
       ? `⚠️ ${err.message}`
-      : `⚠️ Error de conexión: ${err?.message}. Asegúrate de tener los emuladores o el backend en ejecución.`
+      : '⚠️ No pudimos conectar con el Asesor IA. Revisa tu conexión a internet e inténtalo de nuevo.'
   )
 }
 

@@ -14,6 +14,7 @@ import {
   storedDateValue,
   timeZoneForCountry,
   verifyBearerToken,
+  workspaceCardBasis,
   zonedDateKey,
   zonedYearMonth
 } from "./http";
@@ -238,4 +239,21 @@ test("expenseAmountForMonth without a basis keeps the statement payment month", 
   const purchase = { type: "expense", amount: -100, date: "2026-10-15" };
   assert.equal(expenseAmountForMonth(purchase, 2026, 9, "America/Bogota", card), 0);
   assert.equal(expenseAmountForMonth(purchase, 2026, 10, "America/Bogota", card), 100);
+});
+
+test("expenseAmountForMonth without a card ledger keeps every installment whole in its payment month", () => {
+  // Closing 15, due 4: a 3 Oct purchase is on the statement paid in Nov; installments follow in Dec and Jan.
+  const card = { statementClosingDay: 15, paymentDueDay: 4 };
+  const purchase = { type: "expense", amount: -100, installments: 3, date: "2026-10-03" };
+  for (const billing of [card, { ...card, ledger: undefined }]) {
+    assert.deepEqual(sharesFrom(purchase, billing, 2026, 9, 5), [0, 33.34, 33.33, 33.33, 0]);
+  }
+});
+
+test("workspaceCardBasis reads the owner-managed budget card basis, Consumo by default", () => {
+  assert.equal(workspaceCardBasis({ budgetCardBasis: "payment" }), "payment");
+  assert.equal(workspaceCardBasis({ budgetCardBasis: "consumption" }), "consumption");
+  for (const workspace of [{}, { budgetCardBasis: "monthly" }, { budgetCardBasis: null }, null, undefined]) {
+    assert.equal(workspaceCardBasis(workspace), "consumption");
+  }
 });

@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { test, type TestContext } from 'node:test'
+import { createPinia, disposePinia } from 'pinia'
+import ts from 'typescript'
 import {
   createGoalsBudgetActions,
   type GoalsBudgetManagementDependencies,
@@ -370,7 +374,76 @@ test('S7 archived budgets and their caps survive a settings reload', async () =>
   assert.deepEqual(reloaded?.categoryCaps, { food: 900 })
 })
 
-test('S11 legacy planner saves preserve goals, planner, category limits, exchange rates, and separate budget state', async () => {
+test('P1 S2 saves only a finite, nonnegative estimated income and leaves other settings intact', async () => {
+  const workspace = makeWorkspace({
+    budgetNeedsPercent: 55, budgetWantsPercent: 25, expenseLimit: 700,
+    exchangeRatesBaseCurrency: 'EUR', categoryBudgetCurrency: 'EUR', budgetAlertsEnabled: false
+  })
+  const budget = makeBudget('monthly-a', { totalLimit: 900 })
+  const harness = makeHarness({ workspace, budgets: [budget], caps: { 'monthly-a': { food: 80 } } })
+  await harness.actions.loadBudgetSettings()
+  const before = structuredClone(harness.state)
+
+  for (const invalid of [-1, NaN, Infinity]) {
+    await assert.rejects(harness.actions.saveBudgetIncome(invalid), /ingreso mensual/)
+  }
+  assert.deepEqual(harness.writes, [])
+  assert.deepEqual(harness.state, before)
+
+  await harness.actions.saveBudgetIncome(9000.5)
+  assert.deepEqual(harness.writes, [{ workspaceId: context.workspaceId, patch: { budgetIncome: 9000.5 } }])
+  assert.deepEqual(harness.getWorkspace(), { ...workspace, budgetIncome: 9000.5 })
+  assert.deepEqual(harness.state, { ...before, budgetIncome: 9000.5 })
+})
+
+test('P1 S2 requires the active workspace settings and does not cache an old workspace write after a switch', async () => {
+  const harness = makeHarness()
+  await assert.rejects(harness.actions.saveBudgetIncome(9000), /not ready/)
+  assert.deepEqual(harness.writes, [])
+  await harness.actions.loadBudgetSettings()
+
+  const gate = deferredVoid()
+  harness.dependencies.writeWorkspaceSettings = async (workspaceId, patch) => {
+    harness.writes.push({ workspaceId, patch })
+    await gate.promise
+  }
+  const pendingSave = harness.actions.saveBudgetIncome(9000)
+  harness.setContext({ ...context, workspaceId: 'workspace-b' })
+  await assert.rejects(harness.actions.saveBudgetIncome(12000), /not ready/)
+  harness.setWorkspace(makeWorkspace({ budgetIncome: 12000 }))
+  await harness.actions.loadBudgetSettings()
+  gate.resolve()
+  await assert.rejects(pendingSave, /context changed/)
+
+  assert.deepEqual(harness.writes, [{ workspaceId: context.workspaceId, patch: { budgetIncome: 9000 } }])
+  assert.equal(harness.state.budgetIncome, 12000)
+})
+
+test('P1 S2 does not overwrite the loaded cache when switching back before settings reload', async () => {
+  const harness = makeHarness()
+  await harness.actions.loadBudgetSettings()
+  const gate = deferredVoid()
+  harness.dependencies.writeWorkspaceSettings = async (workspaceId, patch) => {
+    harness.writes.push({ workspaceId, patch })
+    await gate.promise
+  }
+  const save = harness.actions.saveBudgetIncome(9000)
+    .then(() => undefined, (error: Error) => error.message)
+
+  harness.setContext({ ...context, workspaceId: 'workspace-b' })
+  harness.setWorkspace(makeWorkspace({ budgetIncome: 12000 }))
+  await harness.actions.loadBudgetSettings()
+  const workspaceBSnapshot = structuredClone(harness.state)
+  harness.setContext(context) // Active id changes before the sidebar reloads the settings.
+
+  gate.resolve()
+  const error = await save
+  assert.deepEqual(harness.writes, [{ workspaceId: context.workspaceId, patch: { budgetIncome: 9000 } }])
+  assert.deepEqual(harness.state, workspaceBSnapshot, 'an A save must not update the still-loaded B cache')
+  assert.match(error ?? '', /not ready/)
+})
+
+test('S11 legacy settings saves preserve goals, ratios, category limits, exchange rates, and separate budget state', async () => {
   const budget = makeBudget('monthly-a')
   const harness = makeHarness({ budgets: [budget], caps: { 'monthly-a': { food: 80 } } })
   await harness.actions.loadBudgetSettings()
@@ -478,10 +551,12 @@ test('budget mutations are rejected while the active workspace snapshot is still
   const loading = harness.actions.loadBudgetSettings()
   assert.equal(harness.state.budgetSettingsLoading, true)
   await assert.rejects(harness.actions.createOperatingBudget({ kind: 'monthly', name: 'Too early', capCurrency: 'USD' }), /not ready/)
+  await assert.rejects(harness.actions.saveBudgetIncome(9000), /not ready/)
   resolveRead(makeWorkspace() as BudgetWorkspaceLegacyData)
   await loading
   assert.equal(harness.state.budgetSettingsLoading, false)
   assert.deepEqual(harness.persistenceCalls, [])
+  assert.deepEqual(harness.writes, [])
 })
 
 test('workspace changes during an older settings read cannot overwrite the newer active workspace state', async () => {
@@ -567,4 +642,160 @@ test('S10: saveLegacySettings preserves exchangeRatesBaseCurrency when omitted, 
   })
   assert.equal(harness.state.exchangeRatesBaseCurrency, null)
   assert.equal(harness.writes.at(-1)!.patch.exchangeRatesBaseCurrency, null)
+})
+
+// S8.2: the real store with Firestore and the auth store replaced by fakes; each goals read waits
+// until the test answers it, so loads for different workspaces can resolve in any order.
+const requireModule = createRequire(import.meta.url)
+const goalsStoreScript = ts.transpile(
+  readFileSync(new URL('./goalsStore.ts', import.meta.url), 'utf8'),
+  { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }
+)
+type StoredGoal = Record<string, unknown>
+type PendingGoalsRead = { workspaceId: unknown; answer(rows: Record<string, StoredGoal>): void; fail(): void }
+// A Firestore Timestamp instance, for reads that check `instanceof Timestamp`.
+class FakeTimestamp {
+  value: Date
+  constructor(value: Date) { this.value = value }
+  toDate() { return this.value }
+}
+const flush = () => new Promise(resolve => setImmediate(resolve))
+
+const loadGoalsStore = (t: TestContext) => {
+  const authStore = { activeWorkspaceId: 'workspace-a' as string | null }
+  const auth = { currentUser: { uid: 'user-a' } as { uid: string } | null }
+  const reads: PendingGoalsRead[] = []
+  const firestore = {
+    collection: (_db: unknown, name: string) => ({ name }),
+    where: (field: string, _operator: string, value: unknown) => ({ field, value }),
+    query: (ref: { name: string }, ...constraints: Array<{ field: string; value: unknown }>) => {
+      assert.equal(ref.name, 'goals')
+      return { workspaceId: constraints.find(constraint => constraint.field === 'workspaceId')?.value }
+    },
+    getDocs: (q: { workspaceId: unknown }) => new Promise((resolve, reject) => {
+      reads.push({
+        ...q,
+        answer: rows => resolve({
+          forEach: (callback: (snap: { id: string; data(): StoredGoal }) => void) =>
+            Object.entries(rows).forEach(([id, data]) => callback({ id, data: () => ({ ...data }) }))
+        }),
+        fail: () => reject(new Error('unavailable'))
+      })
+    }),
+    Timestamp: FakeTimestamp
+  }
+  const storeModule = {} as typeof import('./goalsStore.ts')
+  new Function('exports', 'require', goalsStoreScript)(storeModule, (id: string) => {
+    if (id === '../lib/firebase.ts') return { db: {}, auth }
+    if (id === './authStore.ts') return { useAuthStore: () => authStore }
+    if (id === 'firebase/firestore') return firestore
+    return requireModule(id)
+  })
+  const pinia = createPinia()
+  t.after(() => disposePinia(pinia))
+  return { store: storeModule.useGoalsStore(pinia), authStore, auth, reads }
+}
+
+const storedGoal = (workspaceId: string, name: string, extra: StoredGoal = {}): StoredGoal => ({
+  workspaceId, userId: 'user-a', name, targetAmount: 1000, currentAmount: 250, currency: 'COP',
+  targetDate: new FakeTimestamp(new Date(2027, 5, 30)), createdAt: new Date(2026, 0, 2), ...extra
+})
+const goalRows = (workspaceId: string, name: string) => ({ [`${workspaceId}-${name}`]: storedGoal(workspaceId, name) })
+
+test('S8.2: a slow fetchGoals for the previous workspace that resolves after the switch leaves the new workspace goals', async t => {
+  const { store, authStore, reads } = loadGoalsStore(t)
+  const previous = store.fetchGoals()
+  await flush()
+  authStore.activeWorkspaceId = 'workspace-b'
+  const current = store.fetchGoals()
+  await flush()
+  assert.deepEqual(reads.map(read => read.workspaceId), ['workspace-a', 'workspace-b'])
+
+  reads[1].answer(goalRows('workspace-b', 'B'))
+  await current
+  reads[0].answer(goalRows('workspace-a', 'A'))
+  await previous
+
+  assert.deepEqual(store.goals.map(goal => goal.name), ['B'])
+  assert.equal(store.loading, false)
+})
+
+test('S8.2: after switching away and back, only the newest fetchGoals shows goals and ends loading', async t => {
+  const { store, authStore, reads } = loadGoalsStore(t)
+  const older = store.fetchGoals()
+  await flush()
+  authStore.activeWorkspaceId = 'workspace-b'
+  const other = store.fetchGoals()
+  await flush()
+  authStore.activeWorkspaceId = 'workspace-a'
+  const newest = store.fetchGoals()
+  await flush()
+
+  reads[0].answer(goalRows('workspace-a', 'older'))
+  await older
+  assert.deepEqual(store.goals, [], 'a superseded load of the same workspace changes nothing')
+  assert.equal(store.loading, true, 'the newest load is still running')
+  reads[1].answer(goalRows('workspace-b', 'B'))
+  await other
+  assert.deepEqual(store.goals, [], 'the other workspace load changes nothing')
+  assert.equal(store.loading, true, 'the newest load is still running')
+  reads[2].answer(goalRows('workspace-a', 'newest'))
+  await newest
+  assert.deepEqual(store.goals.map(goal => goal.name), ['newest'])
+  assert.equal(store.loading, false)
+})
+
+test('S8.2: a normal fetchGoals load shows the workspace goals as before', async t => {
+  const { store, reads } = loadGoalsStore(t)
+  const loading = store.fetchGoals()
+  await flush()
+  assert.equal(store.loading, true)
+  assert.deepEqual(reads.map(read => read.workspaceId), ['workspace-a'])
+
+  const createdAt = new Date(2026, 1, 3)
+  reads[0].answer({
+    trip: storedGoal('workspace-a', 'Viaje', { targetAmount: '5000', createdAt: new FakeTimestamp(createdAt) }),
+    car: storedGoal('workspace-a', 'Carro', { currentAmount: undefined, currency: undefined, linkedAccountId: 'savings' })
+  })
+  await loading
+
+  assert.deepEqual(store.goals, [
+    { id: 'trip', userId: 'user-a', name: 'Viaje', targetAmount: 5000, currentAmount: 250, currency: 'COP', targetDate: new Date(2027, 5, 30), createdAt },
+    { id: 'car', userId: 'user-a', name: 'Carro', targetAmount: 1000, currentAmount: 0, currency: 'USD', targetDate: new Date(2027, 5, 30), createdAt: new Date(2026, 0, 2), linkedAccountId: 'savings' }
+  ])
+  assert.equal(store.loading, false)
+})
+
+test('S8.2: a fetchGoals that ends after logout, or after another user signs in, shows nothing and ends loading', async t => {
+  for (const signOut of ['logout', 'other user'] as const) {
+    const { store, authStore, auth, reads } = loadGoalsStore(t)
+    const loading = store.fetchGoals()
+    await flush()
+    if (signOut === 'logout') {
+      auth.currentUser = null
+      authStore.activeWorkspaceId = null
+    } else {
+      auth.currentUser = { uid: 'user-b' }
+    }
+    reads[0].answer(goalRows('workspace-a', 'A'))
+    await loading
+    assert.deepEqual(store.goals, [], signOut)
+    assert.equal(store.loading, false, signOut)
+  }
+})
+
+test('S8.2 (current behavior): when the fetchGoals after a switch fails, the previous workspace goals stay', async t => {
+  t.mock.method(console, 'error', () => {})
+  const { store, authStore, reads } = loadGoalsStore(t)
+  const first = store.fetchGoals()
+  await flush()
+  reads[0].answer(goalRows('workspace-a', 'A'))
+  await first
+  authStore.activeWorkspaceId = 'workspace-b'
+  const failed = store.fetchGoals()
+  await flush()
+  reads[1].fail()
+  await failed
+  assert.deepEqual(store.goals.map(goal => goal.name), ['A'])
+  assert.equal(store.loading, false)
 })

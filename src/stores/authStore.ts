@@ -21,6 +21,7 @@ import { doc, getDoc, updateDoc, collection, runTransaction, serverTimestamp } f
 import type { UserProfile } from '@/types'
 import { buildPersonalWorkspace, buildUserProfile, resolveDisplayName } from '@/lib/authProfile'
 import { buildLegalConsent, type ConsentMethod } from '@/lib/legal'
+import { newWorkspaceCurrencyFields } from './workspacesStore'
 
 interface AuthUser {
   uid: string;
@@ -135,7 +136,8 @@ export const useAuthStore = defineStore('auth', {
         const now = new Date()
         const legalConsent = buildLegalConsent(consentMethod, serverTimestamp())
         const profileData = buildUserProfile({ uid, email, displayName, workspaceId: workspaceRef.id, now, legalConsent })
-        tx.set(workspaceRef, buildPersonalWorkspace(uid, workspaceRef.id, now))
+        // No main currency yet: onboarding asks for the country, then for the limit currency.
+        tx.set(workspaceRef, { ...buildPersonalWorkspace(uid, workspaceRef.id, now), ...newWorkspaceCurrencyFields(null, profileData.currency) })
         tx.set(profileRef, profileData)
         return { profile: profileData as unknown as UserProfile, created: true }
       })

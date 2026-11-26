@@ -1,8 +1,18 @@
 import { AgentToolError, buildDateContext, NameMaps } from "./agentTools";
 import { roundMoney } from "./money";
-import { CardBilling, cardBillingOf, ImputationBasis, paymentMonthIndex, YearMonth, zonedDateKey, zonedWallClockToInstant, zonedYearMonth } from "./http";
+import {
+  CardBilling,
+  expenseAmountForMonth,
+  ImputationBasis,
+  paymentMonthIndex,
+  YearMonth,
+  zonedDateKey,
+  zonedWallClockToInstant,
+  zonedYearMonth
+} from "./http";
 import {
   AlertScope,
+  BillingLookup,
   capInReportingCurrency,
   LinkedBudgetLookup,
   monthlyExpenseTotal,
@@ -13,6 +23,9 @@ import {
   SpendOptions
 } from "./budgetAlerts";
 
+// Moved to cardStatements.ts (no import cycle with budgetAlerts.ts); re-exported for existing callers.
+export { cardBillingByAccount } from "./cardStatements";
+
 // Pure period aggregation for the chat agent (getFinancialSummary /
 // getWorkspaceSettings). No firebase-admin here: callers pass plain rows.
 //
@@ -22,7 +35,10 @@ import {
 // - Expenses: `type === 'expense'`, installment purchases split per month to the
 //   cent (src/lib/installments.ts expenseAmountForMonth / prorateInstallmentCents).
 //   On a credit card with both billing days, installment i falls in the month the
-//   statement containing the purchase is paid, plus i (getPaymentBucket).
+//   statement containing the purchase is paid, plus i (getPaymentBucket). With the
+//   card's statement ledger (the Dashboard's cash flow: createCardBillingLookup
+//   'payment' with every transaction), the payments made to the card count in the
+//   month they were made and only the unpaid rest in the payment month.
 // - transfer, loan and loan_payment are neither income nor spend (Dashboard only
 //   reads 'income'/'expense'). A bridge expense's local leg is a normal expense
 //   and its mirror leg is a transfer (src/stores/transactionsStore.ts
@@ -273,12 +289,15 @@ interface Contribution {
   instant: Date;
   /** Positive amount in the transaction's currency. */
   amount: number;
-  installmentIndex: number;
+  /** Installments (0-based) the amount comes from: one, or several in a card ledger month. */
+  installmentIndexes: number[];
   installments: number;
   /** The instant is a scheduled share date (later installment or card due date), not the purchase. */
   scheduled: boolean;
   /** Imputed to a card statement payment month. */
   billed: boolean;
+  /** Weighted by the card's statement ledger (payments made to the card). */
+  ledger: boolean;
 }
 
 const installmentCount = (value: unknown) => (Number.isInteger(value) && (value as number) > 0 ? (value as number) : 1);
@@ -297,17 +316,20 @@ const daysInMonth = (year: number, month: number) => new Date(Date.UTC(year, mon
  * purchase's local day k months later (clamped to month end), so whole-month
  * periods match expenseAmountForMonth exactly and shorter periods get a date.
  * With card `billing`, share k falls at local noon of the (clamped) payment due day
- * of the statement payment month + k.
+ * of the statement payment month + k; with its `ledger`, see ledgerContributions.
  */
-function contributions(tx: SummaryTransaction, timeZone: string, billing?: CardBilling | null): Contribution[] {
+function contributions(tx: SummaryTransaction, timeZone: string, period: ResolvedPeriod, billing?: CardBilling | null): Contribution[] {
   if (Number.isNaN(tx.date.getTime())) return [];
   if (tx.type === "income") {
-    return [{ tx, kind: "income", instant: tx.date, amount: Math.abs(Number(tx.amount) || 0), installmentIndex: 0, installments: 1, scheduled: false, billed: false }];
+    return [{ tx, kind: "income", instant: tx.date, amount: Math.abs(Number(tx.amount) || 0), installmentIndexes: [0], installments: 1, scheduled: false, billed: false, ledger: false }];
   }
   if (tx.type !== "expense") return [];
   const installments = installmentCount(tx.installments);
   const local = keyParts(zonedDateKey(tx.date, timeZone));
   const paymentMonth = billing ? paymentMonthIndex(local.year, local.month, local.day, billing) : null;
+  if (paymentMonth !== null && billing?.ledger && billing.basis !== "consumption") {
+    return ledgerContributions(tx, timeZone, period, billing, billing.ledger, paymentMonth, installments);
+  }
   return Array.from({ length: installments }, (_, index) => {
     let instant = tx.date;
     if (paymentMonth !== null && billing) {
@@ -323,28 +345,101 @@ function contributions(tx: SummaryTransaction, timeZone: string, billing?: CardB
       kind: "expense" as const,
       instant,
       amount: prorateCents(Number(tx.amount) || 0, installments, index),
-      installmentIndex: index,
+      installmentIndexes: [index],
       installments,
       scheduled: paymentMonth !== null || index > 0,
-      billed: paymentMonth !== null
+      billed: paymentMonth !== null,
+      ledger: false
     };
   });
 }
 
 /**
- * Billing days by account id for the workspace's regular credit cards (see cardBillingOf),
- * tagged with the imputation basis when it is not the default "payment".
+ * A card expense with its statement ledger, like the Dashboard's cash flow: in each local month
+ * of the period, its share of that month (http.ts expenseAmountForMonth: what was paid of each
+ * installment's statement in that month, plus the unpaid rest of the statement due that month).
+ * That amount is split, to the cent, into the parts paid on each payment's day (credit the card had
+ * before its first movement: the 1st of its month) and the unpaid rest on the card's (clamped) due
+ * day; only that rest is scheduled, so money already paid never counts as upcoming. Only months
+ * inside the period are evaluated, because a payment can move a statement to any month.
  */
-export function cardBillingByAccount(
-  accounts: { id: string; [key: string]: unknown }[],
-  basis: ImputationBasis = "payment"
-): Map<string, CardBilling> {
-  const billing = new Map<string, CardBilling>();
-  for (const account of accounts) {
-    const days = cardBillingOf(account);
-    if (days) billing.set(account.id, basis === "payment" ? days : { ...days, basis });
+function ledgerContributions(
+  tx: SummaryTransaction,
+  timeZone: string,
+  period: ResolvedPeriod,
+  billing: CardBilling,
+  ledger: NonNullable<CardBilling["ledger"]>,
+  paymentMonth: number,
+  installments: number
+): Contribution[] {
+  const first = keyParts(period.start);
+  const last = keyParts(period.end);
+  const shares: Contribution[] = [];
+  for (let bucket = first.year * 12 + first.month; bucket <= last.year * 12 + last.month; bucket++) {
+    const year = Math.floor(bucket / 12);
+    const month = bucket % 12;
+    // Unrounded cents of each part, by instant and whether it is still unpaid.
+    const parts = new Map<string, { instant: Date; unpaid: boolean; cents: number; installmentIndexes: number[] }>();
+    const add = (instant: Date, unpaid: boolean, cents: number, index: number) => {
+      if (!(cents > 0)) return;
+      const key = `${instant.getTime()}|${unpaid}`;
+      const part = parts.get(key) ?? { instant, unpaid, cents: 0, installmentIndexes: [] };
+      part.cents += cents;
+      if (!part.installmentIndexes.includes(index)) part.installmentIndexes.push(index);
+      parts.set(key, part);
+    };
+    for (let index = 0; index < installments; index++) {
+      const statement = paymentMonth + index;
+      const installmentCents = Math.round(prorateCents(Number(tx.amount) || 0, installments, index) * 100);
+      for (const payment of ledger.payments(statement)) {
+        if (payment.bucket !== bucket) continue;
+        const instant = Number.isFinite(payment.time) ? new Date(payment.time) : zonedWallClockToInstant(year, month, 1, 12, timeZone);
+        add(instant, false, installmentCents * payment.share, index);
+      }
+      if (statement === bucket) {
+        const due = zonedWallClockToInstant(year, month, Math.min(billing.paymentDueDay, daysInMonth(year, month)), 12, timeZone);
+        add(due, true, installmentCents * ledger.unpaidShare(statement), index);
+      }
+    }
+    if (parts.size === 0) continue;
+    const monthCents = Math.round(expenseAmountForMonth(tx, year, month, timeZone, billing) * 100);
+    const split = splitCents(monthCents, [...parts.values()].map(part => part.cents));
+    [...parts.values()].forEach((part, index) => {
+      if (split[index] === 0) return;
+      shares.push({
+        tx,
+        kind: "expense",
+        instant: part.instant,
+        amount: split[index] / 100,
+        installmentIndexes: part.installmentIndexes,
+        installments,
+        scheduled: part.unpaid,
+        billed: true,
+        ledger: true
+      });
+    });
   }
-  return billing;
+  return shares;
+}
+
+/**
+ * Whole cents per part adding up exactly to `total`: each part's floor, then one cent at a time to
+ * the largest remainders (or back from the smallest, should the parts overshoot the total).
+ */
+function splitCents(total: number, parts: number[]): number[] {
+  const cents = parts.map(part => Math.floor(part));
+  const byRemainder = parts.map((_, index) => index)
+    .sort((a, b) => (parts[b] - cents[b]) - (parts[a] - cents[a]) || a - b);
+  let left = total - cents.reduce((sum, value) => sum + value, 0);
+  for (let step = 0; left > 0; step++, left--) cents[byRemainder[step % parts.length]]++;
+  for (let step = parts.length - 1; left < 0; step--) {
+    const index = byRemainder[((step % parts.length) + parts.length) % parts.length];
+    if (cents[index] > 0) {
+      cents[index]--;
+      left++;
+    }
+  }
+  return cents;
 }
 
 /**
@@ -470,14 +565,28 @@ export interface SummaryOptions {
   categoryId?: string;
   compareWithPrevious?: boolean;
   topN?: number;
-  /** Billing days by account id; expenses on these cards count in their payment months. */
+  /**
+   * Billing days by account id; expenses on these cards count in their payment months. With a
+   * payment-basis `ledger` (cardBillingByAccount with the cards' history, like the Dashboard's
+   * cash flow), the payments made to a card count in the month they were made.
+   */
   cardBilling?: ReadonlyMap<string, CardBilling>;
   /**
    * Adds `byBudget`: the workspace's budgets (archived included, for self-funding kinds) and
    * extra rows outside the period that event budgets need (their all-time income, expenses and
    * transfers). Extra rows never feed the existing totals.
    */
-  budgetBreakdown?: { budgets: SummaryBudget[]; extraRows?: SummaryTransaction[]; creditAccountIds?: ReadonlySet<string> };
+  budgetBreakdown?: {
+    budgets: SummaryBudget[];
+    extraRows?: SummaryTransaction[];
+    creditAccountIds?: ReadonlySet<string>;
+    /**
+     * Only when the workspace has billing cards: the card basis its owner chose for budgets and
+     * the billing it gives (budgetAlerts alertCardBilling). byBudget then counts card expenses by
+     * it instead of `cardBilling` (cash flow) and says so in its notes.
+     */
+    cards?: { basis: ImputationBasis; billingFor: BillingLookup };
+  };
 }
 
 const categoryName = (id: string | null | undefined, names: NameMaps) =>
@@ -502,6 +611,8 @@ interface Aggregate {
   missingRates: Set<string>;
   /** Some expense in the period was imputed to a card statement payment month. */
   billed: boolean;
+  /** Some of those expenses were weighted by a card's statement ledger. */
+  ledger: boolean;
 }
 
 function aggregate(rows: SummaryTransaction[], period: ResolvedPeriod, options: SummaryOptions): Aggregate {
@@ -513,13 +624,14 @@ function aggregate(rows: SummaryTransaction[], period: ResolvedPeriod, options: 
   let expenses = 0;
   let upcoming = 0;
   let billed = false;
+  let ledger = false;
   const groups = new Map<string, SummaryGroup & { ids: Set<string> }>();
   const perTx = new Map<string, { value: number; original: number; indexes: number[]; c: Contribution }>();
 
   for (const tx of rows) {
     if (options.accountId && tx.accountId !== options.accountId) continue;
     if (options.categoryId && tx.categoryId !== options.categoryId) continue;
-    for (const c of contributions(tx, timeZone, options.cardBilling?.get(tx.accountId ?? ""))) {
+    for (const c of contributions(tx, timeZone, period, options.cardBilling?.get(tx.accountId ?? ""))) {
       if (type !== "all" && c.kind !== type) continue;
       if (c.instant < period.startInstant || c.instant >= period.endExclusive) continue;
       const { value, missingRate } = convertToPrimary(c.amount, tx.currency, primaryCurrency, exchangeRates);
@@ -529,10 +641,11 @@ function aggregate(rows: SummaryTransaction[], period: ResolvedPeriod, options: 
         expenses += value;
         if (c.scheduled && c.instant > now) upcoming += value;
         if (c.billed) billed = true;
+        if (c.ledger) ledger = true;
         const entry = perTx.get(tx.id) ?? { value: 0, original: 0, indexes: [], c };
         entry.value += value;
         entry.original += c.amount;
-        entry.indexes.push(c.installmentIndex);
+        entry.indexes.push(...c.installmentIndexes);
         perTx.set(tx.id, entry);
       }
       if (groupBy !== "none") {
@@ -587,7 +700,8 @@ function aggregate(rows: SummaryTransaction[], period: ResolvedPeriod, options: 
     groups: groupList,
     top,
     missingRates,
-    billed
+    billed,
+    ledger
   };
 }
 
@@ -632,14 +746,16 @@ export function summarize(rows: SummaryTransaction[], options: SummaryOptions): 
     };
   }
 
-  if (current.billed) {
+  if (current.ledger) {
+    notes.push("Las compras con tarjeta de crédito que tiene día de corte y de pago cuentan cuando se paga su extracto, igual que en el flujo de caja del panel de control: lo abonado a la tarjeta cuenta en el mes del abono (cada abono paga primero los extractos más antiguos) y lo que falta por pagar, en el mes de pago del extracto (cada cuota un mes después).");
+  } else if (current.billed) {
     notes.push("Las compras con tarjeta de crédito que tiene día de corte y de pago cuentan en el mes en que se paga su extracto (cada cuota un mes después), no en la fecha de compra.");
   }
   if (current.totals.upcomingInstallments > 0) {
     notes.push(`Las compras a cuotas cuentan solo la cuota de cada mes; incluye ${current.totals.upcomingInstallments} ${options.primaryCurrency} en cuotas o pagos de tarjeta que vencen después de hoy dentro del periodo.`);
   }
   missing.forEach(code => {
-    notes.push(`Tasa de cambio faltante para ${code}: se usó 1:1. Configúrala en Objetivos & Presupuesto para totales exactos.`);
+    notes.push(missingRateNote(code));
   });
   const byBudget = options.budgetBreakdown && !options.accountId && !options.categoryId
     ? budgetBreakdown(rows, options, options.budgetBreakdown)
@@ -648,8 +764,23 @@ export function summarize(rows: SummaryTransaction[], options: SummaryOptions): 
   return summary;
 }
 
+/** Note for a currency converted 1:1 because its manual rate is missing. */
+export function missingRateNote(currency: string): string {
+  return `Tasa de cambio faltante para ${currency}: se usó 1:1. Configúrala en Objetivos & Presupuesto para totales exactos.`;
+}
+
+/**
+ * Note for budget figures (`fields`) that count card expenses by the workspace basis, which can
+ * differ from the period totals (cash flow: each statement in the month it is due).
+ */
+export function budgetCardBasisNote(fields: string, basis: ImputationBasis): string {
+  return basis === "payment"
+    ? `Las cifras de ${fields} cuentan las compras con tarjeta de crédito cuando se paga su extracto (base Pagos del workspace): lo abonado antes del vencimiento cuenta en el mes del abono y lo pendiente en el mes de pago.`
+    : `Las cifras de ${fields} cuentan cada compra con tarjeta de crédito en el mes del ciclo de su extracto (base Consumo del workspace); los totales del periodo la cuentan cuando se paga su extracto, como el flujo de caja del panel de control.`;
+}
+
 /** Calendar months a period covers exactly (first to last day), or null for partial months. */
-function wholeMonths(period: ResolvedPeriod): YearMonth[] | null {
+export function wholeMonths(period: ResolvedPeriod): YearMonth[] | null {
   const start = keyParts(period.start);
   const end = keyParts(period.end);
   if (start.day !== 1 || end.day !== daysInMonth(end.year, end.month)) return null;
@@ -695,7 +826,7 @@ function budgetBreakdown(
     timeZone,
     reportingCurrency: primaryCurrency,
     exchangeRates: options.exchangeRates,
-    billingFor: accountId => (accountId ? options.cardBilling?.get(accountId) ?? null : null)
+    billingFor: input.cards?.billingFor ?? (accountId => (accountId ? options.cardBilling?.get(accountId) ?? null : null))
   };
 
   const kindOf = (budgetId: string) => {
@@ -748,6 +879,7 @@ function budgetBreakdown(
   const notes = [
     "byBudget: ingresos del periodo sin los asignados a un presupuesto (son fondos de ese presupuesto) y gastos sin los de presupuestos que se financian con sus propios fondos; los presupuestos de evento suman todo su histórico y los mensuales solo el periodo."
   ];
+  if (input.cards) notes.push(budgetCardBasisNote("byBudget", input.cards.basis));
   if (incomplete) {
     const missing = new Set<string>();
     for (const tx of movements) {
@@ -784,17 +916,53 @@ export interface BudgetStatus {
   expenseLimit: { limit: number; spent: number; remaining: number; percentUsed: number; exceeded: boolean } | null;
 }
 
+/** Spending a budget comparison reads: by category key (like summarize's category groups) and in total. */
+export interface BudgetSpend {
+  groups: Pick<SummaryGroup, "key" | "expenses">[];
+  totals: Pick<SummaryTotals, "expenses">;
+}
+
 /**
- * Budget vs actual for a month summary grouped by category. Aligns with Dashboard
- * `budgetSummary`: per-row and global percents are uncapped `spent / limit`, caps are
- * converted from `capCurrency` to `primaryCurrency` via manual FX (disabled when
- * unconfirmed or rate missing), and `expenseLimit` uses all monthly expenses.
+ * Spending of one local month for budget comparisons, by category: each expense's share of the
+ * month (http.ts expenseAmountForMonth) with `billingFor`, the budget card billing, so card
+ * expenses follow the workspace basis (Consumo: statement cycle month; Pagos: when the statement
+ * is paid, by its ledger). Converted like summarize (missing rate 1:1, listed in `missingRates`).
+ * Without billing cards it equals summarize's category groups and expense total for that month.
+ */
+export function budgetMonthSpend(
+  rows: SummaryTransaction[],
+  options: { month: YearMonth; timeZone: string; primaryCurrency: string; exchangeRates: Record<string, number>; billingFor?: BillingLookup }
+): BudgetSpend & { missingRates: Set<string> } {
+  const { month, timeZone, primaryCurrency, exchangeRates, billingFor } = options;
+  const byCategory = new Map<string, number>();
+  const missingRates = new Set<string>();
+  let total = 0;
+  for (const tx of rows) {
+    const amount = expenseAmountForMonth(tx, month.year, month.month, timeZone, billingFor?.(tx.accountId) ?? null);
+    if (amount === 0) continue;
+    const { value, missingRate } = convertToPrimary(amount, tx.currency, primaryCurrency, exchangeRates);
+    if (missingRate && tx.currency) missingRates.add(tx.currency);
+    total += value;
+    const key = tx.categoryId || "sin-categoria";
+    byCategory.set(key, (byCategory.get(key) ?? 0) + value);
+  }
+  return {
+    groups: [...byCategory].map(([key, expenses]) => ({ key, expenses: round2(expenses) })),
+    totals: { expenses: round2(total) },
+    missingRates
+  };
+}
+
+/**
+ * Budget vs actual for the base monthly budget's spending by category (budgetMonthSpend, or a
+ * category summary). Per-row and category total percents are uncapped `spent / limit`.
+ * Category caps are converted from `capCurrency` to `primaryCurrency` via manual FX (disabled
+ * when unconfirmed or rate missing). The base `expenseLimit` is already in the reporting currency.
  */
 export function buildBudgetStatus({
   categoryBudgets,
   expenseLimit,
   summary,
-  allExpensesTotal,
   capCurrency,
   primaryCurrency,
   exchangeRates,
@@ -802,8 +970,7 @@ export function buildBudgetStatus({
 }: {
   categoryBudgets: Record<string, number>;
   expenseLimit: number | null | undefined;
-  summary: FinancialSummary;
-  allExpensesTotal?: number;
+  summary: BudgetSpend;
   capCurrency?: string | null;
   primaryCurrency?: string;
   exchangeRates?: Record<string, number>;
@@ -856,7 +1023,7 @@ export function buildBudgetStatus({
     .sort((a, b) => (b.percentUsed ?? -1) - (a.percentUsed ?? -1));
 
   const limit = Number(expenseLimit) || 0;
-  const monthSpent = allExpensesTotal ?? summary.totals.expenses;
+  const monthSpent = summary.totals.expenses;
   const roundedBudget = budgetTotal === null ? null : round2(budgetTotal);
   return {
     categories,

@@ -30,6 +30,35 @@ export const alignedMonthPeriods = (now: Date): { current: MonthPeriod; previous
   }
 }
 
+// A calendar month; `month` is 0-based like Date#getMonth.
+export interface CalendarMonth {
+  year: number;
+  month: number;
+}
+
+const isMonthOf = (selected: CalendarMonth, date: Date) =>
+  selected.year === date.getFullYear() && selected.month === date.getMonth()
+
+const fullMonthPeriod = (year: number, month: number): MonthPeriod =>
+  ({ year, month, uptoDay: daysInMonth(year, month) })
+
+// Month-over-month periods for the month the Dashboard shows: the current month is aligned by
+// elapsed days (alignedMonthPeriods); a past month is compared in full with the full previous month.
+export const monthComparisonPeriods = (selected: CalendarMonth, now: Date): { current: MonthPeriod; previous: MonthPeriod } => {
+  if (isMonthOf(selected, now)) return alignedMonthPeriods(now)
+  const previousDate = new Date(selected.year, selected.month - 1, 1)
+  return {
+    current: fullMonthPeriod(selected.year, selected.month),
+    previous: fullMonthPeriod(previousDate.getFullYear(), previousDate.getMonth())
+  }
+}
+
+// The instant a month's figures are measured at: `now` itself for the current month, the last
+// millisecond of a past month (every day has elapsed, so a pace/committed split adds up to the
+// month's actual total and a month-end projection equals it).
+export const monthReferenceDate = (selected: CalendarMonth, now: Date): Date =>
+  isMonthOf(selected, now) ? now : new Date(selected.year, selected.month + 1, 0, 23, 59, 59, 999)
+
 export const isDateInPeriod = (date: Date, period: MonthPeriod) =>
   date.getFullYear() === period.year &&
   date.getMonth() === period.month &&
@@ -194,17 +223,17 @@ export interface ProjectionCheck {
 }
 
 // Compare like with like: the projection of budgeted categories against the budget
-// total, and the projection of all spending against the workspace expense limit.
+// total, and the entire base monthly projection against the base expense cap.
 // A check is null when its cap is not configured.
 export const projectionChecks = (
-  { budgetedProjection, budgetTotal, totalProjection, expenseLimit }:
-  { budgetedProjection: number; budgetTotal: number; totalProjection: number; expenseLimit: number }
+  { budgetedProjection, budgetTotal, baseProjection, expenseLimit }:
+  { budgetedProjection: number; budgetTotal: number; baseProjection: number; expenseLimit: number }
 ): { budget: ProjectionCheck | null; limit: ProjectionCheck | null } => {
   const check = (projected: number, cap: number): ProjectionCheck | null =>
     cap > 0 ? { projected, cap, exceeds: projected > cap } : null
   return {
     budget: check(budgetedProjection, budgetTotal),
-    limit: check(totalProjection, expenseLimit)
+    limit: check(baseProjection, expenseLimit)
   }
 }
 

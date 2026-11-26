@@ -29,13 +29,20 @@ interface AccountsState {
   loading: boolean;
   // Workspace whose accounts were fully loaded; lets callers tell "deleted" from "not loaded yet".
   loadedWorkspaceId: string | null;
+  // Newest fetchAccounts request; an older one is superseded and changes nothing.
+  accountsLoadVersion: number;
 }
+
+// The newest fetchAccounts call of each store. A call that a newer load of the same workspace and
+// user replaced answers with that load's result, so callers still learn whether the list is fresh.
+const newestAccountsLoads = new WeakMap<object, Promise<boolean>>()
 
 export const useAccountsStore = defineStore('accounts', {
   state: (): AccountsState => ({
     accounts: [],
     loading: false,
     loadedWorkspaceId: null,
+    accountsLoadVersion: 0,
   }),
   getters: {
     getAccountById: (state) => (id: string): Account | undefined => state.accounts.find(acc => acc.id === id),
@@ -52,38 +59,49 @@ export const useAccountsStore = defineStore('accounts', {
   },
   actions: {
     // Obtener todas las cuentas del usuario
-    /** Loads the active workspace's accounts; resolves true only when the list was replaced. */
+    /**
+     * Loads the active workspace's accounts; resolves true only when the list was replaced. A call
+     * replaced by a newer load of the same workspace and user resolves with that load's result.
+     */
     async fetchAccounts(): Promise<boolean> {
       const authStore = useAuthStore()
       const workspaceId = authStore.activeWorkspaceId
       const userId = auth.currentUser?.uid
       if (!workspaceId) return false
 
-      this.loading = true
-      try {
-        const q = query(collection(db, 'accounts'), where('workspaceId', '==', workspaceId))
-        const querySnapshot = await getDocs(q)
-        const accountsList: Account[] = []
-        querySnapshot.forEach((docSnap) => {
-          const data = docSnap.data()
-          accountsList.push({ 
-            id: docSnap.id, 
-            ...data,
-            createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(data.createdAt)
-          } as Account)
-        })
-        if (authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === userId) {
+      // Results apply only while this is the newest load and its workspace is still the active one.
+      const requestVersion = ++this.accountsLoadVersion
+      const sameContext = () => authStore.activeWorkspaceId === workspaceId && auth.currentUser?.uid === userId
+      const load = (async (): Promise<boolean> => {
+        this.loading = true
+        try {
+          const q = query(collection(db, 'accounts'), where('workspaceId', '==', workspaceId))
+          const querySnapshot = await getDocs(q)
+          if (requestVersion !== this.accountsLoadVersion) {
+            return sameContext() ? await (newestAccountsLoads.get(this) ?? false) : false
+          }
+          if (!sameContext()) return false
+          const accountsList: Account[] = []
+          querySnapshot.forEach((docSnap) => {
+            const data = docSnap.data()
+            accountsList.push({
+              id: docSnap.id,
+              ...data,
+              createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(data.createdAt)
+            } as Account)
+          })
           this.accounts = accountsList
           this.loadedWorkspaceId = workspaceId
           return true
+        } catch (error) {
+          console.error('Error fetching accounts:', error)
+          return false
+        } finally {
+          if (requestVersion === this.accountsLoadVersion) this.loading = false
         }
-        return false
-      } catch (error) {
-        console.error('Error fetching accounts:', error)
-        return false
-      } finally {
-        this.loading = false
-      }
+      })()
+      newestAccountsLoads.set(this, load)
+      return load
     },
 
     // Agregar una nueva cuenta

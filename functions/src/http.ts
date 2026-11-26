@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { CardStatementLedger } from "./cardStatements";
 
 // Pure request helpers shared by the HTTP functions. Kept free of firebase-admin
 // so they can be unit tested with `node --test` without emulators.
@@ -241,9 +242,24 @@ export interface CardBilling {
    * "consumption": the month of the statement cycle that contains the purchase (budgets).
    */
   basis?: ImputationBasis;
+  /**
+   * Payment basis only: payments already made to the card (see cardStatements.ts), so each
+   * statement counts in the months it was actually paid and only its unpaid rest in its
+   * payment month. Without it, every statement counts whole in its payment month.
+   */
+  ledger?: CardStatementLedger;
 }
 
 export type ImputationBasis = "payment" | "consumption";
+
+/**
+ * Card basis the workspace owner chose for budget comparisons (`budgetCardBasis` on the
+ * workspace document): "payment" only when set so, otherwise "consumption" (port of
+ * parseBudgetBasis). Cash flow and upcoming card payments keep the payment month regardless.
+ */
+export function workspaceCardBasis(workspace: { budgetCardBasis?: unknown } | null | undefined): ImputationBasis {
+  return workspace?.budgetCardBasis === "payment" ? "payment" : "consumption";
+}
 
 const isBillingDay = (value: unknown): value is number =>
   Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 31;
@@ -281,7 +297,8 @@ export function cycleMonthIndex(year: number, month: number, day: number, billin
  * Share of an expense (installments split to the cent) that falls in the given local month.
  * With card `billing`, installment i falls in the statement payment month + i (basis
  * "payment", the default) or the statement cycle month + i (basis "consumption"); otherwise
- * in the purchase month + i.
+ * in the purchase month + i. A payment-basis `billing.ledger` weights each installment by the
+ * share of its statement paid in (or still due in) the given month.
  */
 export function expenseAmountForMonth(
   data: Record<string, any>,
@@ -294,18 +311,42 @@ export function expenseAmountForMonth(
   const transactionDate = storedDateValue(data.date, timeZone);
   if (Number.isNaN(transactionDate.getTime())) return 0;
 
-  const installments = Number.isInteger(data.installments) && data.installments > 0 ? data.installments : 1;
+  const installments = installmentCountOf(data.installments);
   const local = zonedParts(transactionDate, timeZone);
   const firstMonth = billing
     ? billing.basis === "consumption"
       ? cycleMonthIndex(local.year, local.month - 1, local.day, billing)
       : paymentMonthIndex(local.year, local.month - 1, local.day, billing)
     : local.year * 12 + local.month - 1;
-  const monthIndex = year * 12 + month - firstMonth;
+  const targetMonth = year * 12 + month;
+
+  if (billing?.ledger && billing.basis !== "consumption") {
+    let total = 0;
+    for (let index = 0; index < installments; index++) {
+      const weight = billing.ledger.weight(firstMonth + index, targetMonth);
+      if (weight > 0) total += prorateInstallmentCents(data.amount, installments, index) * weight;
+    }
+    return Math.round(total * 100) / 100;
+  }
+
+  const monthIndex = targetMonth - firstMonth;
   if (monthIndex < 0 || monthIndex >= installments) return 0;
 
-  const totalCents = Math.round(Math.abs(Number(data.amount) || 0) * 100);
+  return prorateInstallmentCents(data.amount, installments, monthIndex);
+}
+
+/** Installment count of a stored expense: a positive integer, otherwise 1. */
+export function installmentCountOf(value: unknown): number {
+  return Number.isInteger(value) && (value as number) > 0 ? (value as number) : 1;
+}
+
+/**
+ * Port of prorateInstallmentCents: installment `installmentIndex` of `totalAmount` split in
+ * `installments`, worked in cents so the installments add up to the purchase amount.
+ */
+export function prorateInstallmentCents(totalAmount: unknown, installments: number, installmentIndex: number): number {
+  const totalCents = Math.round(Math.abs(Number(totalAmount) || 0) * 100);
   const baseCents = Math.floor(totalCents / installments);
   const remainderCents = totalCents % installments;
-  return (baseCents + (monthIndex < remainderCents ? 1 : 0)) / 100;
+  return (baseCents + (installmentIndex < remainderCents ? 1 : 0)) / 100;
 }

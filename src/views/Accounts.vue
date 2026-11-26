@@ -172,7 +172,7 @@
           >
             <div class="min-w-0">
               <p class="text-xs font-semibold text-text-primary truncate">{{ getAccountDisplayLabel(pocket, accountsStore.accounts) }}</p>
-              <p class="text-[11px] text-text-muted mt-1 break-all">Ahorros · {{ pocket.currency }} · ID {{ pocket.id }}</p>
+              <p class="text-[11px] text-text-muted mt-1">Ahorros · {{ pocket.currency }}</p>
               <p class="min-w-0 text-sm font-display font-semibold text-accent-emerald mt-1 tabular-nums" :title="formatCurrency(pocket.balance, pocket.currency)"><span class="whitespace-nowrap">{{ splitMoney(formatCurrency(pocket.balance, pocket.currency))[0] }}</span> <span class="inline-block max-w-full truncate align-bottom whitespace-nowrap">{{ splitMoney(formatCurrency(pocket.balance, pocket.currency))[1] }}</span></p>
             </div>
             <div class="flex flex-wrap items-center gap-2">
@@ -647,6 +647,7 @@ import { useAccountsStore } from '@/stores/accountsStore'
 import { useWorkspacesStore } from '@/stores/workspacesStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useAuthStore } from '@/stores/authStore'
+import { useNotificationsStore } from '@/stores/notificationsStore'
 import { Account, AccountType } from '@/types'
 import { AccountSchema } from '@/schemas'
 import { getNextOccurrence, daysUntil, expenseAmountForCycle } from '@/lib/creditCycle'
@@ -680,6 +681,7 @@ const accountsStore = useAccountsStore()
 const workspacesStore = useWorkspacesStore()
 const transactionsStore = useTransactionsStore()
 const authStore = useAuthStore()
+const notifications = useNotificationsStore()
 const router = useRouter()
 
 const showAddModal = ref(false)
@@ -755,7 +757,7 @@ const openPocketMovement = async (parent: Account, pocket: Account, direction: '
   const source = direction === 'fund' ? parent : pocket
   const destination = direction === 'fund' ? pocket : parent
   if (!canTransferBetweenAccounts(source, destination, accountsStore.accounts)) {
-    alert('No se puede mover dinero entre estas cuentas: revisa el workspace, la moneda y el estado del bolsillo.')
+    notifications.error('No se puede mover dinero entre estas cuentas: revisa el workspace, la moneda y el estado del bolsillo.')
     return
   }
   await router.push({
@@ -806,6 +808,7 @@ const loadMirrorAccounts = async (workspaceId: string = editMirror.value.workspa
   } catch (err) {
     console.error('Error cargando cuentas del workspace espejo:', err)
     mirrorAccounts.value = []
+    notifications.error('No se pudieron cargar las cuentas de ese workspace. Intenta de nuevo.')
   } finally {
     loadingMirrorAccounts.value = false
   }
@@ -864,7 +867,7 @@ const openPocketModal = async (parent: Account) => {
 
 const saveAccount = async () => {
   if (pocketParent.value && (!Number.isFinite(newAcc.value.balance) || newAcc.value.balance < 0)) {
-    alert('Los fondos iniciales del bolsillo deben ser un monto válido y no negativo.')
+    notifications.error('Los fondos iniciales del bolsillo deben ser un monto válido y no negativo.')
     return
   }
 
@@ -880,7 +883,7 @@ const saveAccount = async () => {
   })
 
   if (!validation.success) {
-    alert(validation.error.errors[0].message)
+    notifications.error(validation.error.errors[0].message)
     return
   }
 
@@ -909,7 +912,7 @@ const saveAccount = async () => {
     closeAddModal()
   } catch (err) {
     console.error('Error al guardar cuenta:', err)
-    alert(err instanceof Error ? err.message : 'No se pudo guardar la cuenta.')
+    notifications.error(err instanceof Error ? err.message : 'No se pudo guardar la cuenta.')
   } finally {
     loading.value = false
   }
@@ -960,7 +963,7 @@ const saveEditedAccount = async () => {
     paymentDueDay: editAcc.value.paymentDueDay || null
   })
   if (!validation.success) {
-    alert(validation.error.errors[0].message)
+    notifications.error(validation.error.errors[0].message)
     return
   }
 
@@ -968,11 +971,11 @@ const saveEditedAccount = async () => {
   // la contrapartida en una cuenta equivocada.
   const { workspaceId, sourceAccountId, accountId } = editMirror.value
   if (workspaceId && !(sourceAccountId && accountId)) {
-    alert('Para el espejo debes elegir la cuenta que paga y la cuenta por cobrar.')
+    notifications.error('Para el espejo debes elegir la cuenta que paga y la cuenta por cobrar.')
     return
   }
   if (workspaceId && sourceAccountId === accountId) {
-    alert('La cuenta que paga y la cuenta por cobrar deben ser distintas.')
+    notifications.error('La cuenta que paga y la cuenta por cobrar deben ser distintas.')
     return
   }
 
@@ -980,7 +983,7 @@ const saveEditedAccount = async () => {
   const mirrorChanged = !accountBeingEdited?.parentAccountId &&
     !sameMirrorConfig(accountBeingEdited?.mirror ?? null, nextMirror)
   if (mirrorChanged && editMirrorLockReason.value) {
-    alert(editMirrorLockReason.value)
+    notifications.error(editMirrorLockReason.value)
     return
   }
 
@@ -998,7 +1001,7 @@ const saveEditedAccount = async () => {
     closeEditAccountModal()
   } catch (err: any) {
     console.error('Error al actualizar cuenta:', err)
-    alert(err?.message || 'No se pudo actualizar la cuenta')
+    notifications.error(err?.message || 'No se pudo actualizar la cuenta')
   } finally {
     loading.value = false
   }
@@ -1052,7 +1055,7 @@ const saveSettlement = async () => {
     settleAccount.value = null
   } catch (err: any) {
     console.error('Error al liquidar:', err)
-    alert(err?.message || 'No se pudo liquidar el puente')
+    notifications.error(err?.message || 'No se pudo liquidar el puente')
   } finally {
     loading.value = false
   }
@@ -1096,21 +1099,23 @@ const cycleChargeAmount = (account: Account) => {
 const handleDelete = async (id: string, name: string) => {
   const account = accountsStore.getAccountById(id)
   if (account?.linkedBudgetId) {
-    alert(`La cuenta "${name}" está ligada a un presupuesto. Quítala del presupuesto en Metas y Presupuestos antes de eliminarla.`)
+    notifications.error(`La cuenta "${name}" está ligada a un presupuesto. Quítala de las cuentas ligadas de ese presupuesto en Presupuestos antes de eliminarla.`)
     return
   }
-  const warning = account && isPocketAccount(account)
+  const isPocket = !!account && isPocketAccount(account)
+  const warning = isPocket
     ? `Solo se puede eliminar el bolsillo "${name}" si tiene saldo cero y no conserva movimientos; el historial no se borra.`
     : account?.childAccountIds?.length
       ? `La cuenta "${name}" tiene bolsillos vinculados. Primero elimina únicamente los bolsillos vacíos y sin movimientos; el historial no se borra.`
       : `¿Estás seguro de que deseas eliminar la cuenta "${name}"? Todas las transacciones asociadas ya no estarán vinculadas.`
-  if (confirm(warning)) {
-    try {
-      await accountsStore.deleteAccount(id)
-    } catch (err: any) {
-      console.error('Error al borrar cuenta:', err)
-      alert(err?.message || 'No se pudo borrar la cuenta')
-    }
+  const action = isPocket ? 'Eliminar bolsillo' : 'Eliminar cuenta'
+  const confirmed = await notifications.confirm({ title: action, message: warning, confirmLabel: action, tone: 'danger' })
+  if (!confirmed) return
+  try {
+    await accountsStore.deleteAccount(id)
+  } catch (err: any) {
+    console.error('Error al borrar cuenta:', err)
+    notifications.error(err?.message || 'No se pudo borrar la cuenta')
   }
 }
 

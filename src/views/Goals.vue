@@ -1,37 +1,85 @@
 <template>
   <div class="max-w-6xl mx-auto space-y-8 pb-12">
-    <!-- Header -->
-    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-      <div class="min-w-0">
-        <h2 class="font-display font-bold text-2xl sm:text-3xl text-text-primary tracking-tight">
-          Objetivos & Presupuesto
-        </h2>
-        <p class="text-text-secondary text-sm mt-1">Crea metas de ahorro a largo plazo y define la distribución de tus ingresos mensuales.</p>
-      </div>
+    <div class="space-y-5">
+      <nav aria-label="Presupuestos y metas de ahorro" class="grid grid-cols-2 sm:inline-grid gap-1.5 rounded-xl border border-border bg-slate-950/45 p-1.5">
+        <RouterLink v-for="section in sections" :key="section.id" :to="sectionLocation(section)" custom v-slot="{ href, navigate }">
+          <a
+            :href="href"
+            @click="navigate"
+            :aria-current="activeSection === section ? 'page' : undefined"
+            :class="[
+              'min-h-11 flex items-center justify-center gap-2 rounded-lg px-2.5 sm:px-4 py-2 text-center text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-emerald',
+              activeSection === section ? 'bg-accent-emerald/10 text-accent-emerald' : 'text-text-secondary hover:bg-white/5 hover:text-text-primary'
+            ]"
+          >
+            <component :is="section.icon" class="hidden min-[375px]:block w-4 h-4 shrink-0" aria-hidden="true" />
+            <span>{{ section.label }}</span>
+          </a>
+        </RouterLink>
+      </nav>
 
-      <div class="grid grid-cols-1 min-[380px]:grid-cols-2 sm:flex sm:flex-wrap items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div class="min-w-0">
+          <h2
+            :key="activeSection.id"
+            ref="sectionHeading"
+            tabindex="-1"
+            class="scroll-mt-[calc(5rem+env(safe-area-inset-top))] lg:scroll-mt-6 font-display font-bold text-2xl sm:text-3xl text-text-primary tracking-tight focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent-emerald"
+          >
+            {{ activeSection.label }}
+          </h2>
+          <p class="text-text-secondary text-sm mt-1">{{ activeSection.description }}</p>
+        </div>
+
         <button
-          @click="openBudgetModal()"
-          class="inline-flex items-center justify-center min-h-11 space-x-2 px-4 py-2.5 sm:py-3 rounded-xl bg-slate-900 border border-border text-text-primary font-display font-semibold text-sm hover:bg-slate-800 transition-all cursor-pointer"
-        >
-          <PlusIcon class="w-4 h-4 shrink-0 text-accent-emerald" />
-          <span class="truncate">Nuevo presupuesto</span>
-        </button>
-        <button 
+          v-if="isSavingsSection"
           @click="showCreateModal = true"
-          class="inline-flex items-center justify-center min-h-11 space-x-2 px-5 py-2.5 sm:py-3 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm transition-all shadow-glow-emerald cursor-pointer"
+          class="shrink-0 inline-flex items-center justify-center min-h-11 gap-2 px-5 py-2.5 sm:py-3 rounded-xl bg-accent-emerald hover:bg-accent-emerald-hover text-background font-display font-semibold text-sm transition-all shadow-glow-emerald cursor-pointer"
         >
           <PlusIcon class="w-4 h-4 shrink-0" />
-          <span class="truncate">Nuevo Objetivo</span>
+          <span>Nuevo Objetivo</span>
         </button>
+        <button
+          v-else
+          @click="openBudgetModal()"
+          class="shrink-0 inline-flex items-center justify-center min-h-11 gap-2 px-4 py-2.5 sm:py-3 rounded-xl bg-slate-900 border border-border text-text-primary font-display font-semibold text-sm hover:bg-slate-800 transition-all cursor-pointer"
+        >
+          <PlusIcon class="w-4 h-4 shrink-0 text-accent-emerald" />
+          <span>Nuevo presupuesto</span>
+        </button>
+      </div>
+
+      <!-- Month shown (S9): monthly budgets and the base budget count it; settings stay editable -->
+      <div v-if="!isSavingsSection" class="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+        <MonthPicker
+          :label="selectedMonthLabel"
+          :can-go-next="canGoNextMonth"
+          @previous="goToPreviousMonth"
+          @next="goToNextMonth"
+        />
+        <div
+          v-if="!isCurrentMonth"
+          role="status"
+          data-testid="goals-past-month-notice"
+          class="min-w-0 rounded-2xl border border-accent-violet/30 bg-accent-violet/10 px-4 py-2 text-xs text-text-secondary"
+        >
+          <p>
+            Estás viendo <strong class="font-semibold text-text-primary">{{ selectedMonthLabel }}</strong>
+            <span aria-hidden="true"> · </span>
+            <button
+              type="button"
+              class="-my-3 inline-flex items-center min-h-11 font-semibold text-accent-emerald hover:underline"
+              @click="goToCurrentMonth"
+            >Volver al mes actual</button>
+          </p>
+          <p class="text-[11px] text-text-muted">Los topes, la configuración de tarjetas y las tasas de cambio son los actuales.</p>
+        </div>
       </div>
     </div>
 
-    <!-- Main Grid layout -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-      
-      <!-- Left: Savings Goals (2 cols) -->
-      <div class="lg:col-span-2 space-y-6">
+    <div class="grid min-w-0">
+      <!-- Savings goal cards -->
+      <div v-if="isSavingsSection" class="space-y-6">
         <h3 class="font-display font-bold text-xl text-text-primary flex items-center space-x-2">
           <TargetIcon class="w-5 h-5 text-accent-emerald" />
           <span>Tus Metas de Ahorro</span>
@@ -135,124 +183,37 @@
         </div>
       </div>
 
-      <!-- Right: Budget Planner (1 col) -->
-      <div class="space-y-6">
-        <h3 class="font-display font-bold text-xl text-text-primary flex items-center space-x-2">
-          <PiggyBankIcon class="w-5 h-5 text-accent-emerald" />
-          <span>Plan de Presupuesto</span>
-        </h3>
-
-        <div class="glass-panel rounded-2xl p-4 sm:p-6 border border-white/5 space-y-6">
-          
-          <!-- Income Input -->
-          <div class="space-y-2">
-            <label class="block text-xs font-semibold text-text-secondary">Ingreso Mensual Estimado</label>
-            <div class="relative">
-              <span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-text-muted font-semibold">$</span>
-              <input 
-                v-model.number="incomeInput"
-                type="number"
-                inputmode="decimal"
-                min="0"
-                class="field pl-8 font-semibold"
-                placeholder="Ingresa tus ingresos"
-                @change="saveBudget"
-              />
-            </div>
-          </div>
-
-          <!-- Pie / Donut Chart -->
-          <div class="relative w-48 h-48 mx-auto flex items-center justify-center">
-            <canvas ref="budgetChartRef"></canvas>
-            <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none mt-2">
-              <span class="text-[10px] text-text-muted font-semibold uppercase tracking-wider">Ahorro</span>
-              <span class="max-w-[8.5rem] truncate font-display font-bold text-base text-accent-emerald tabular-nums" :title="formatCurrency(monthlySavingsAmount, userCurrency)">
-                {{ formatCompactCurrency(monthlySavingsAmount, userCurrency) }}
-              </span>
-            </div>
-          </div>
-
-          <!-- Distribution sliders -->
-          <div class="space-y-4">
-            <!-- Needs Slider (50% default) -->
-            <div class="space-y-1.5">
-              <div class="flex justify-between gap-2 text-xs font-semibold">
-                <span class="min-w-0 text-text-secondary flex items-center gap-1.5">
-                  <span class="shrink-0 w-2.5 h-2.5 rounded-full bg-accent-emerald"></span>
-                  Necesidades ({{ needsPercent }}%)
-                </span>
-                <span class="shrink-0 text-text-primary tabular-nums">{{ formatCurrency(monthlyNeedsAmount, userCurrency) }}</span>
-              </div>
-              <input 
-                v-model.number="needsPercent"
-                type="range"
-                min="0"
-                max="100"
-                class="range-slider text-accent-emerald"
-                @input="adjustSliders('needs')"
-                @change="saveBudget"
-              />
-            </div>
-
-            <!-- Wants Slider (30% default) -->
-            <div class="space-y-1.5">
-              <div class="flex justify-between gap-2 text-xs font-semibold">
-                <span class="min-w-0 text-text-secondary flex items-center gap-1.5">
-                  <span class="shrink-0 w-2.5 h-2.5 rounded-full bg-accent-violet"></span>
-                  Deseos ({{ wantsPercent }}%)
-                </span>
-                <span class="shrink-0 text-text-primary tabular-nums">{{ formatCurrency(monthlyWantsAmount, userCurrency) }}</span>
-              </div>
-              <input 
-                v-model.number="wantsPercent"
-                type="range"
-                min="0"
-                max="100"
-                class="range-slider text-accent-violet"
-                @input="adjustSliders('wants')"
-                @change="saveBudget"
-              />
-            </div>
-
-            <!-- Savings Slider (20% default) -->
-            <div class="space-y-1.5">
-              <div class="flex justify-between gap-2 text-xs font-semibold">
-                <span class="min-w-0 text-text-secondary flex items-center gap-1.5">
-                  <span class="shrink-0 w-2.5 h-2.5 rounded-full bg-accent-amber"></span>
-                  Ahorro ({{ savingsPercent }}%)
-                </span>
-                <span class="shrink-0 text-text-primary tabular-nums">{{ formatCurrency(monthlySavingsAmount, userCurrency) }}</span>
-              </div>
-              <input 
-                v-model.number="savingsPercent"
-                type="range"
-                min="0"
-                max="100"
-                class="range-slider text-accent-amber"
-                @input="adjustSliders('savings')"
-                @change="saveBudget"
-              />
-            </div>
-          </div>
-
-          <!-- Total Allocation indicator -->
-          <div class="p-3 bg-slate-950/45 border border-white/5 rounded-xl text-center text-xs flex justify-between gap-2">
-            <span class="text-text-secondary">Suma total porcentajes:</span>
-            <span :class="[isPercentSumValid ? 'text-accent-emerald font-bold' : 'text-accent-rose font-bold']">
-              {{ needsPercent + wantsPercent + savingsPercent }}%
-            </span>
-          </div>
+      <div v-else class="w-full max-w-lg glass-panel rounded-2xl p-4 sm:p-5 border border-white/5 space-y-2">
+        <label for="estimated-monthly-income" class="block font-display font-semibold text-sm text-text-primary">Ingreso mensual estimado</label>
+        <div class="flex items-center gap-3">
+          <input
+            id="estimated-monthly-income"
+            v-model.number="incomeInput"
+            type="number"
+            inputmode="decimal"
+            min="0"
+            step="any"
+            :disabled="!canEditBudgetIncome"
+            aria-describedby="estimated-income-currency estimated-income-hint"
+            class="field min-w-0 font-semibold disabled:opacity-60"
+            @change="saveBudgetIncome"
+          />
+          <span id="estimated-income-currency" class="shrink-0 text-xs font-semibold text-text-muted">{{ userCurrency }}</span>
         </div>
+        <p id="estimated-income-hint" class="text-xs text-text-secondary">
+          Las alertas de gasto mensual usan el mayor entre este monto y los ingresos del mes sin presupuesto asignado. Se guarda al salir del campo.
+        </p>
+        <p v-if="incomeSaveError" role="alert" class="text-xs text-accent-rose">{{ incomeSaveError }}</p>
       </div>
     </div>
 
     <!-- Additional operating budgets; the protected legacy baseline remains below. -->
-    <section class="glass-panel rounded-2xl p-4 sm:p-5 border border-white/5 space-y-3" data-testid="goals-budget-basis" aria-labelledby="budget-basis-heading">
+    <section v-if="!isSavingsSection" class="glass-panel rounded-2xl p-4 sm:p-5 border border-white/5 space-y-3" data-testid="goals-budget-basis" aria-labelledby="budget-basis-heading">
       <h3 id="budget-basis-heading" class="font-display font-semibold text-sm text-text-primary">Cómo se cuentan los gastos en tus presupuestos</h3>
       <BudgetBasisSwitch />
     </section>
 
-    <section class="space-y-5" aria-labelledby="additional-budgets-heading">
+    <section v-if="!isSavingsSection" class="space-y-5" aria-labelledby="additional-budgets-heading">
       <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div class="min-w-0">
           <h3 id="additional-budgets-heading" class="font-display font-bold text-lg sm:text-xl text-text-primary flex items-center gap-2">
@@ -260,7 +221,7 @@
             <span>Presupuestos adicionales</span>
           </h3>
           <p class="text-xs text-text-muted mt-1 max-w-3xl">
-            Se administran separados de las metas, sus asignaciones, el plan 50/30/20 y los límites base por categoría.
+            Se administran separados de las metas, sus asignaciones y los límites base por categoría.
             Los límites se conservan en su moneda guardada; la moneda de visualización no cambia la moneda guardada.
           </p>
         </div>
@@ -412,19 +373,54 @@
       </div>
     </section>
 
-    <!-- Category Budgets (presupuesto mensual recurrente) -->
-    <div class="space-y-6">
+    <!-- Recurring monthly category budgets -->
+    <div v-if="!isSavingsSection" class="space-y-6">
       <h3 class="font-display font-bold text-lg sm:text-xl text-text-primary flex items-center space-x-2">
         <WalletIcon class="w-5 h-5 shrink-0 text-accent-emerald" />
-        <span>Presupuesto Mensual por Categoría · Presupuesto base mensual protegido</span>
+        <span>Presupuesto mensual base por categoría</span>
       </h3>
+
+      <form id="base-expense-limit-form" class="glass-panel rounded-2xl p-4 sm:p-6 border border-white/5 space-y-2" @submit.prevent="saveExpenseLimit">
+        <label for="base-expense-limit" class="block font-display font-semibold text-sm text-text-primary">Tope total del presupuesto mensual base</label>
+        <p id="base-expense-limit-hint" class="text-xs text-text-secondary">
+          Incluye los gastos sin presupuesto asignado y excluye los de otros presupuestos. Déjalo vacío o en 0 para desactivarlo.
+        </p>
+        <div class="flex flex-col sm:flex-row gap-3">
+          <div class="flex items-center gap-3 w-full sm:max-w-xs">
+            <input
+              id="base-expense-limit"
+              v-model.number="expenseLimitInput"
+              type="number"
+              inputmode="decimal"
+              min="0"
+              step="any"
+              placeholder="Sin tope"
+              :disabled="!canEditExpenseLimit"
+              aria-describedby="base-expense-limit-currency base-expense-limit-hint"
+              class="field min-w-0 font-semibold disabled:opacity-60"
+            />
+            <span id="base-expense-limit-currency" class="shrink-0 text-xs font-semibold text-text-muted">{{ userCurrency }}</span>
+          </div>
+          <button
+            type="submit"
+            :disabled="!canEditExpenseLimit"
+            class="sm:w-36 min-h-11 px-5 py-2.5 rounded-xl border border-accent-emerald/40 text-accent-emerald hover:bg-accent-emerald/10 font-display font-semibold text-sm cursor-pointer disabled:opacity-50"
+          >
+            {{ savingExpenseLimit ? 'Guardando…' : 'Guardar tope' }}
+          </button>
+        </div>
+        <p v-if="workspacesStore.loading" role="status" class="text-xs text-text-muted">Cargando el espacio de trabajo…</p>
+        <p v-else-if="!expenseLimitWorkspace" role="status" class="text-xs text-text-muted">No se pudo cargar el espacio de trabajo activo.</p>
+        <p v-else-if="expenseLimitError" role="alert" class="text-xs text-accent-rose">{{ expenseLimitError }}</p>
+        <p v-else-if="expenseLimitMessage" role="status" class="text-xs text-accent-emerald">{{ expenseLimitMessage }}</p>
+      </form>
 
       <div class="glass-panel rounded-2xl p-4 sm:p-6 border border-white/5 space-y-4">
         <div class="rounded-xl bg-slate-950/45 border border-white/5 p-3 sm:p-4 space-y-3">
           <div v-if="goalsStore.categoryBudgetCurrency.status === 'confirmed'" class="flex flex-wrap items-center justify-between gap-2 text-xs">
             <span class="text-text-secondary">
-              Moneda confirmada para los límites heredados: <strong class="text-accent-emerald">{{ goalsStore.categoryBudgetCurrency.code }}</strong>.
-              Sus importes no se convierten ni se renombran al cambiar la moneda de visualización.
+              Moneda de los límites por categoría: <strong class="text-accent-emerald">{{ goalsStore.categoryBudgetCurrency.code }}</strong>.
+              Si cambias la moneda de visualización, los importes no se convierten ni cambian de moneda.
             </span>
           </div>
           <div v-else class="space-y-2">
@@ -434,7 +430,7 @@
             </p>
             <div class="flex flex-col sm:flex-row sm:items-end gap-3">
               <label class="space-y-1.5 sm:w-56">
-                <span class="block text-[11px] font-semibold text-text-secondary">Moneda real de los límites heredados</span>
+                <span class="block text-[11px] font-semibold text-text-secondary">Moneda real de los límites por categoría</span>
                 <select
                   v-model="legacyCategoryBudgetCurrencyInput"
                   class="field font-semibold cursor-pointer"
@@ -448,7 +444,7 @@
                 class="w-full sm:w-auto min-h-11 px-4 py-2.5 rounded-xl bg-accent-emerald text-background font-display font-bold text-xs hover:bg-accent-emerald-hover disabled:opacity-50 cursor-pointer"
                 @click="confirmLegacyCategoryBudgetCurrency"
               >
-                Confirmar moneda de límites heredados
+                Confirmar moneda de los límites
               </button>
             </div>
           </div>
@@ -456,14 +452,14 @@
         </div>
 
         <p class="text-xs text-text-muted">
-          Este presupuesto base conserva los límites heredados en <code>categoryBudgets</code>. Los gastos sin presupuesto asignado permanecen aquí.
+          Los gastos sin presupuesto asignado cuentan en este presupuesto mensual base, con sus límites por categoría.
           El gasto se cuenta según la vista «{{ BUDGET_BASIS_LABELS[budgetBasis] }}» elegida arriba.
           Cuando la moneda de los límites está confirmada, el gasto se compara en {{ userCurrency }} usando las tasas manuales actuales; si falta una tasa, no se muestra una comparación incompleta.
           Tip: también puedes pedirle al <span class="text-accent-emerald font-semibold">Asesor IA</span> que analice tus gastos y te proponga presupuestos.
         </p>
 
         <div v-if="baselineCategories.length === 0" class="text-center py-6 text-text-muted text-sm">
-          Todavía no hay categorías con límite o gasto este mes.
+          Todavía no hay categorías con límite o gasto {{ monthPhrase }}.
         </div>
 
         <div
@@ -540,42 +536,10 @@
           @select="addBaselineCategory"
         />
       </div>
-
-      <!-- 50/30/20 vs realidad del mes -->
-      <div class="glass-panel rounded-2xl p-4 sm:p-6 border border-white/5 space-y-4">
-        <h4 class="font-display font-semibold text-sm text-text-primary">Tu plan {{ needsPercent }}/{{ wantsPercent }}/{{ savingsPercent }} vs este mes (real)</h4>
-        <!-- ponytail: no sabemos qué categorías son "necesidad" vs "deseo"; comparamos gasto total y ahorro reales contra el plan -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-          <div class="space-y-1.5">
-            <div class="flex justify-between gap-2 font-semibold">
-              <span class="min-w-0 text-text-secondary">Gasto (plan necesidades+deseos)</span>
-              <span class="shrink-0 text-right text-text-primary tabular-nums">{{ formatCurrency(monthlyNeedsAmount + monthlyWantsAmount, userCurrency) }}</span>
-            </div>
-            <div class="flex justify-between gap-2 font-semibold">
-              <span class="min-w-0 text-text-secondary">Gasto real del mes ({{ BUDGET_BASIS_LABELS[budgetBasis] }})</span>
-              <span class="shrink-0 text-right tabular-nums" :class="realMonthExpense > (monthlyNeedsAmount + monthlyWantsAmount) ? 'text-accent-rose' : 'text-accent-emerald'">
-                {{ formatCurrency(realMonthExpense, userCurrency) }}
-              </span>
-            </div>
-          </div>
-          <div class="space-y-1.5">
-            <div class="flex justify-between gap-2 font-semibold">
-              <span class="min-w-0 text-text-secondary">Ahorro (plan)</span>
-              <span class="shrink-0 text-right text-text-primary tabular-nums">{{ formatCurrency(monthlySavingsAmount, userCurrency) }}</span>
-            </div>
-            <div class="flex justify-between gap-2 font-semibold">
-              <span class="min-w-0 text-text-secondary">Ahorro real del mes</span>
-              <span class="shrink-0 text-right tabular-nums" :class="realMonthSavings >= monthlySavingsAmount ? 'text-accent-emerald' : 'text-accent-amber'">
-                {{ formatCurrency(realMonthSavings, userCurrency) }}
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
 
     <!-- Sheet: Create or edit an additional operating budget -->
-    <BaseSheet :open="showBudgetModal" :title="editingOperatingBudget ? 'Editar presupuesto' : 'Nuevo presupuesto'" :close-on-backdrop="false" @close="showBudgetModal = false">
+    <BaseSheet :open="!isSavingsSection && showBudgetModal" :title="editingOperatingBudget ? 'Editar presupuesto' : 'Nuevo presupuesto'" :close-on-backdrop="false" @close="showBudgetModal = false">
         <p class="text-[11px] text-text-muted mb-4">Los límites son nominales en la moneda indicada; no se convierten al cambiar la moneda de visualización.</p>
         <form id="operating-budget-form" class="space-y-4" @submit.prevent="handleSaveOperatingBudget">
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -598,7 +562,7 @@
               <select v-model="budgetCapCurrencyInput" required :disabled="!!editingOperatingBudget" class="field font-semibold cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed">
                 <option v-for="option in currencyOptionsWith(editingOperatingBudget?.budget.capCurrency)" :key="option.code" :value="option.code">{{ option.label }}</option>
               </select>
-              <span v-if="editingOperatingBudget" class="block text-[10px] text-text-muted">La moneda guardada {{ editingOperatingBudget.budget.capCurrency }} es fija; no se relabelan límites existentes.</span>
+              <span v-if="editingOperatingBudget" class="block text-[10px] text-text-muted">La moneda guardada {{ editingOperatingBudget.budget.capCurrency }} no se puede cambiar; los límites existentes siguen en esa moneda.</span>
             </label>
             <label class="space-y-1.5">
               <span class="block text-xs font-semibold text-text-secondary">Límite total (opcional)</span>
@@ -647,7 +611,7 @@
           <div class="space-y-2 rounded-xl bg-slate-950/40 border border-white/5 p-3">
             <div>
               <h4 class="text-xs font-semibold text-text-primary">Límites por categoría · {{ budgetCapCurrencyInput || 'moneda seleccionada' }}</h4>
-              <p class="text-[10px] text-text-muted mt-1">Agrega sólo las categorías que quieres limitar. Quitar una elimina sólo ese límite; el presupuesto base y sus categoryBudgets no cambian.</p>
+              <p class="text-[10px] text-text-muted mt-1">Agrega sólo las categorías que quieres limitar. Quitar una elimina sólo ese límite; los límites del presupuesto mensual base no cambian.</p>
             </div>
             <p v-if="budgetSelectedCategoryIds.length === 0" class="text-[11px] text-text-muted">Todavía no hay límites por categoría.</p>
             <div v-for="categoryId in budgetSelectedCategoryIds" :key="categoryId" class="flex items-center gap-2 border-t border-white/5 pt-2.5">
@@ -692,7 +656,7 @@
     </BaseSheet>
 
     <!-- Sheet: Create Savings Goal -->
-    <BaseSheet :open="showCreateModal" title="Nuevo Objetivo de Ahorro" :close-on-backdrop="false" @close="showCreateModal = false">
+    <BaseSheet :open="isSavingsSection && showCreateModal" title="Nuevo Objetivo de Ahorro" :close-on-backdrop="false" @close="showCreateModal = false">
         <form id="create-goal-form" @submit.prevent="handleCreateGoal" class="space-y-4">
           <!-- Goal Name -->
           <div class="space-y-1.5">
@@ -731,9 +695,7 @@
                 v-model="newGoalCurrency"
                 class="field font-semibold cursor-pointer"
               >
-                <option value="USD">USD ($)</option>
-                <option value="COP">COP ($)</option>
-                <option value="EUR">EUR (€)</option>
+                <option v-for="option in SUPPORTED_CURRENCIES" :key="option.code" :value="option.code">{{ option.label }}</option>
               </select>
             </div>
           </div>
@@ -796,7 +758,7 @@
     </BaseSheet>
 
     <!-- Sheet: Contribute funds -->
-    <BaseSheet :open="showContributeModal" :title="`Aportar a: ${selectedGoal?.name ?? ''}`" :close-on-backdrop="false" @close="showContributeModal = false">
+    <BaseSheet :open="isSavingsSection && showContributeModal" :title="`Aportar a: ${selectedGoal?.name ?? ''}`" :close-on-backdrop="false" @close="showContributeModal = false">
         <form id="contribute-goal-form" @submit.prevent="handleContribute" class="space-y-4">
           <div v-if="selectedGoal && hasGoalAccountLink(selectedGoal)" class="space-y-1.5" data-testid="goal-contribution-source">
             <label for="contribute-account" class="block text-xs font-semibold text-text-secondary">Transferir desde</label>
@@ -831,7 +793,7 @@
             <label for="contribute-amount" class="block text-xs font-semibold text-text-secondary">Monto a Aportar</label>
             <div class="relative">
               <span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-text-muted font-semibold pointer-events-none">
-                {{ selectedGoal ? (selectedGoal.currency === 'COP' ? '$' : selectedGoal.currency) : '$' }}
+                {{ contributeCurrencySymbol }}
               </span>
               <input 
                 id="contribute-amount"
@@ -840,7 +802,7 @@
                 inputmode="decimal"
                 required
                 min="1"
-                :class="['field font-semibold', selectedGoal && selectedGoal.currency !== 'COP' ? 'pl-14' : 'pl-8']"
+                :class="['field font-semibold', contributeCurrencySymbol.length > 1 ? 'pl-14' : 'pl-8']"
                 placeholder="0"
               />
             </div>
@@ -863,7 +825,7 @@
     </BaseSheet>
 
     <!-- Move existing default-budget movements into an event budget -->
-    <BaseSheet :open="!!moveSheetBudget" :title="'Mover movimientos'" :close-on-backdrop="!movingMovements" @close="closeMoveSheet">
+    <BaseSheet :open="!isSavingsSection && !!moveSheetBudget" :title="'Mover movimientos'" :close-on-backdrop="!movingMovements" @close="closeMoveSheet">
       <div class="space-y-3" data-testid="budget-move-sheet">
         <p class="text-[11px] text-text-secondary">
           Elige qué movimientos pasan a <strong class="text-text-primary">«{{ moveSheetBudget?.name }}»</strong>. Están en el presupuesto mensual predeterminado y salen de una cuenta ligada o son de una categoría con tope<span v-if="moveSheetBudget?.startDate || moveSheetBudget?.endDate">, dentro del periodo del presupuesto</span>. Desmarca los que no quieras mover.
@@ -914,26 +876,31 @@
 
 <script setup lang="ts">
 import { track } from '@/lib/analytics'
-import { ref, reactive, onMounted, computed, watch, nextTick } from 'vue'
+import { ref, shallowRef, reactive, onMounted, onScopeDispose, computed, watch, nextTick, useTemplateRef } from 'vue'
+import { RouterLink, useRoute } from 'vue-router'
 import { useGoalsStore } from '@/stores/goalsStore'
 import { useAccountsStore } from '@/stores/accountsStore'
 import { useTransactionsStore } from '@/stores/transactionsStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useAuthStore } from '@/stores/authStore'
+import { useWorkspacesStore } from '@/stores/workspacesStore'
+import { useNotificationsStore } from '@/stores/notificationsStore'
 import { SUPPORTED_CURRENCIES, currencyOptionsWith, defaultCurrencyCode } from '@/lib/currencies'
 import type { Goal, OperatingBudgetDraft, OperatingBudgetPatch } from '@/types'
 import BaseSheet from '@/components/ui/BaseSheet.vue'
 import CategoryPicker from '@/components/CategoryPicker.vue'
 import { suggestCategoriesBySpending, visibleBaselineCategories } from '@/lib/categoryPicker'
 import { getCategoryIconComponent } from '@/lib/categoryIcons'
-import { DEFAULT_MONTHLY_BUDGET_ID, budgetMoveCandidates, budgetScopedMonthFilter, canAssignBudget, linkedAccountConflicts, linkedBudgetForAccount } from '@/lib/budgets'
+import { DEFAULT_MONTHLY_BUDGET_ID, budgetMoveCandidates, canAssignBudget, linkedAccountConflicts, linkedBudgetForAccount } from '@/lib/budgets'
 import { budgetCardFigures } from '@/lib/dashboardMetrics'
 import { isReservedBudgetName } from '@/schemas'
 import { reportBudgetScope } from '@/lib/budgetReporting'
 import type { BudgetWorkspaceBudgetSnapshot } from '@/lib/budgetWorkspaceAdapter'
-import { createCardBillingLookup, expenseAmountForDate } from '@/lib/installments'
-import { BUDGET_BASIS_LABELS, budgetBasis } from '@/lib/budgetBasis'
+import { createCardBillingLookup } from '@/lib/installments'
+import { BUDGET_BASIS_LABELS } from '@/lib/budgetBasis'
 import BudgetBasisSwitch from '@/components/BudgetBasisSwitch.vue'
+import MonthPicker from '@/components/MonthPicker.vue'
+import { SELECTED_MONTH_QUERY_KEY, formatMonthKey, useSelectedMonth } from '@/composables/useSelectedMonth'
 import { parseDateOnly, toDateValue, toLocalDateKey } from '@/lib/dates'
 import { effectiveExchangeRates } from '@/lib/fx'
 import { canTransferBetweenAccounts, getAccountDisplayLabel, isPocketRelatedAccount } from '@/lib/pockets'
@@ -949,15 +916,48 @@ import {
   Check as CheckIcon,
   ArrowRightLeft as MoveIcon
 } from 'lucide-vue-next'
-import { Chart, registerables } from 'chart.js'
-
-Chart.register(...registerables)
 
 const goalsStore = useGoalsStore()
 const accountsStore = useAccountsStore()
 const transactionsStore = useTransactionsStore()
 const settingsStore = useSettingsStore()
 const authStore = useAuthStore()
+const workspacesStore = useWorkspacesStore()
+const notifications = useNotificationsStore()
+const route = useRoute()
+
+const sections = [
+  { id: 'budgets', to: '/goals', label: 'Presupuestos', description: 'Organiza tus gastos con presupuestos mensuales y de eventos.', icon: WalletIcon },
+  { id: 'savings', to: '/goals?tab=savings', label: 'Metas de ahorro', description: 'Crea metas de ahorro y sigue el progreso hacia tus objetivos.', icon: TargetIcon }
+] as const
+const activeSection = computed(() => route.query.tab === 'savings' ? sections[1] : sections[0])
+const isSavingsSection = computed(() => activeSection.value.id === 'savings')
+const sectionHeading = useTemplateRef<HTMLHeadingElement>('sectionHeading')
+const focusSectionHeading = () => sectionHeading.value?.focus()
+
+// Month the budget figures show (?mes=YYYY-MM, shared with the Dashboard). Monthly budgets and
+// the base budget count that month; event budgets keep their lifetime totals. Budget settings
+// are not per month, so every editor stays available. Savings goals have no month.
+const {
+  selectedMonth,
+  isCurrentMonth,
+  label: selectedMonthLabel,
+  canGoNext: canGoNextMonth,
+  goToPreviousMonth,
+  goToNextMonth,
+  goToCurrentMonth
+} = useSelectedMonth()
+const monthPhrase = computed(() => isCurrentMonth.value ? 'este mes' : `en ${selectedMonthLabel.value}`)
+// A past month stays in the section links, so visiting the savings goals and coming back keeps it.
+const sectionLocation = (section: (typeof sections)[number]) => isCurrentMonth.value
+  ? section.to
+  : {
+      path: '/goals',
+      query: {
+        ...(section.id === 'savings' ? { tab: 'savings' } : {}),
+        [SELECTED_MONTH_QUERY_KEY]: formatMonthKey(selectedMonth.value)
+      }
+    }
 
 // State
 const showCreateModal = ref(false)
@@ -1006,7 +1006,12 @@ const legacyCurrencyError = ref('')
 const newGoalName = ref('')
 const newGoalTargetAmount = ref<number | null>(null)
 const newGoalCurrentAmount = ref(0)
-const newGoalCurrency = ref('USD')
+// A new goal starts in the user's main currency (it may load after this view) until they pick another.
+const newGoalCurrencyChoice = ref<string | null>(null)
+const newGoalCurrency = computed({
+  get: () => newGoalCurrencyChoice.value ?? defaultCurrencyCode(settingsStore.currency),
+  set: (code: string) => { newGoalCurrencyChoice.value = code }
+})
 const newGoalTargetDate = ref('')
 const newGoalLinkedAccountId = ref('')
 const activeWorkspaceId = computed(() => authStore.activeWorkspaceId)
@@ -1044,18 +1049,87 @@ const goalContributionSources = computed(() => {
   )
 })
 
-// Budget Planner inputs
-const incomeInput = ref(0)
-const needsPercent = ref(50)
-const wantsPercent = ref(30)
-const savingsPercent = ref(20)
+const incomeInput = shallowRef<number | string>('')
+const incomeSaveError = shallowRef('')
+const budgetIncomeContextKey = computed(() => {
+  const uid = authStore.user?.uid
+  const workspaceId = activeWorkspaceId.value
+  return uid && workspaceId ? JSON.stringify([uid, workspaceId]) : null
+})
+const canEditBudgetIncome = computed(() =>
+  budgetIncomeContextKey.value !== null &&
+  goalsStore.budgetSettingsContextKey === budgetIncomeContextKey.value &&
+  !goalsStore.budgetSettingsLoading && !goalsStore.budgetSettingsError
+)
+watch([budgetIncomeContextKey, canEditBudgetIncome, () => goalsStore.budgetIncome], () => {
+  incomeInput.value = canEditBudgetIncome.value ? goalsStore.budgetIncome : ''
+  incomeSaveError.value = ''
+}, { immediate: true })
+
+// The workspace store owns the saved amount. A local draft exists only for this visit
+// to the budget section and never follows a switch to another workspace.
+const expenseLimitWorkspace = computed(() => authStore.user
+  ? workspacesStore.workspaces.find(w => w.id === activeWorkspaceId.value)
+  : undefined)
+const expenseLimitDraft = shallowRef<number | string | null>(null)
+const expenseLimitMessage = shallowRef('')
+const expenseLimitError = shallowRef('')
+const savingExpenseLimit = computed(() => workspacesStore.pendingExpenseLimitWrites.has(expenseLimitWorkspace.value?.id ?? ''))
+const canEditExpenseLimit = computed(() => Boolean(expenseLimitWorkspace.value) && !workspacesStore.loading && !savingExpenseLimit.value)
+const expenseLimitInput = computed({
+  get() {
+    const workspace = expenseLimitWorkspace.value
+    if (!workspace) return ''
+    const saved = workspace.expenseLimit ?? 0
+    return expenseLimitDraft.value ?? (saved > 0 ? saved : '')
+  },
+  set(value: number | string) {
+    if (!canEditExpenseLimit.value || isSavingsSection.value) return
+    expenseLimitDraft.value = value
+    expenseLimitMessage.value = ''
+    expenseLimitError.value = ''
+  }
+})
+let expenseLimitEditorGeneration = 0
+watch([() => authStore.user?.uid, activeWorkspaceId, isSavingsSection], () => {
+  expenseLimitEditorGeneration++
+  expenseLimitDraft.value = null
+  expenseLimitMessage.value = ''
+  expenseLimitError.value = ''
+}, { flush: 'sync' })
+watch(expenseLimitMessage, (message, _previous, onCleanup) => {
+  if (!message) return
+  const timer = setTimeout(() => { expenseLimitMessage.value = '' }, 2500)
+  onCleanup(() => clearTimeout(timer))
+})
+onScopeDispose(() => { expenseLimitEditorGeneration++ })
+
+const saveExpenseLimit = async () => {
+  const workspaceId = expenseLimitWorkspace.value?.id
+  if (!workspaceId || !canEditExpenseLimit.value || isSavingsSection.value) return
+  expenseLimitMessage.value = ''
+  expenseLimitError.value = ''
+  const amount = Number(String(expenseLimitInput.value).trim()) // blank disables the cap, like 0
+  if (!Number.isFinite(amount) || amount < 0) {
+    expenseLimitError.value = 'Ingresa un monto válido mayor o igual a 0.'
+    return
+  }
+
+  const editorGeneration = expenseLimitEditorGeneration
+  try {
+    await workspacesStore.updateWorkspaceLimit(workspaceId, amount)
+    if (editorGeneration !== expenseLimitEditorGeneration) return
+    expenseLimitDraft.value = null
+    expenseLimitMessage.value = amount > 0 ? 'Tope mensual actualizado.' : 'Tope mensual desactivado.'
+  } catch (err) {
+    if (editorGeneration === expenseLimitEditorGeneration) {
+      expenseLimitError.value = err instanceof Error && err.message ? err.message : 'No se pudo actualizar el tope.'
+    }
+  }
+}
 
 // Category budgets: copia local editable de goalsStore.categoryBudgets
 const categoryBudgetInputs = reactive<Record<string, number | null>>({})
-
-// Chart reference
-const budgetChartRef = ref<HTMLCanvasElement | null>(null)
-let budgetChart: Chart | null = null
 
 // Computed
 const userCurrency = computed(() => settingsStore.currency || 'COP')
@@ -1079,14 +1153,15 @@ const linkedBudgetOfAccount = (accountId: string) => {
 }
 
 // Card view of each active budget: spending vs its funds (assigned income and transfers into its
-// linked accounts) and vs its total cap.
+// linked accounts) and vs its total cap. Monthly budgets count the shown month; event budgets
+// report lifetime totals, which do not depend on the month.
 const budgetCards = computed(() => {
-  const now = new Date()
+  const { year, month } = selectedMonth.value
   return new Map(activeOperatingBudgets.value.map(entry => {
     const figures = budgetCardFigures(entry, {
       linkedBudgetOf: linkedBudgetOfAccount,
       transactions: transactionsStore.transactions,
-      period: { year: now.getFullYear(), month: now.getMonth() },
+      period: { year, month },
       reportingCurrency: userCurrency.value,
       exchangeRates: activeExchangeRates.value,
       cardBilling: cardBillingFor.value
@@ -1115,13 +1190,15 @@ const budgetSuggestedCategories = computed(() => suggestCategoriesBySpending({
 }))
 // Card expenses count in their statement cycle month ("Consumo del mes") or when their
 // statement is paid ("Pagos del mes": payments already made count in their month, the unpaid
-// rest in the statement payment month), as chosen with the budget basis switch.
+// rest in the statement payment month), as the workspace owner set with the basis switch.
+const budgetBasis = computed(() => workspacesStore.activeBudgetCardBasis)
 const cardBillingFor = computed(() => createCardBillingLookup(accountsStore.accounts, budgetBasis.value, {
   transactions: transactionsStore.transactions
 }))
 
+// The base monthly budget and its category limits in the shown month.
 const baselineBudgetReport = computed(() => {
-  const now = new Date()
+  const { year, month } = selectedMonth.value
   return reportBudgetScope({
     scope: {
       id: DEFAULT_MONTHLY_BUDGET_ID,
@@ -1132,96 +1209,42 @@ const baselineBudgetReport = computed(() => {
     },
     categoryCaps: goalsStore.categoryBudgets,
     transactions: transactionsStore.transactions,
-    period: { year: now.getFullYear(), month: now.getMonth() },
+    period: { year, month },
     reportingCurrency: userCurrency.value,
     exchangeRates: activeExchangeRates.value,
     cardBilling: cardBillingFor.value
   })
 })
 
-// Gasto/ingreso/ahorro real del mes (monedas convertidas a la principal)
-const realMonthTotals = computed(() => {
-  const now = new Date()
-  let income = 0, expense = 0
-  const kinds = new Map(goalsStore.operatingBudgets.map(({ budget }) => [budget.id, budget.kind]))
-  // Income assigned to another budget funds only that budget, and spending of a budget with its
-  // own income is paid by that income, so neither counts against the month.
-  const scoped = budgetScopedMonthFilter(transactionsStore.transactions, {
-    year: now.getFullYear(), month: now.getMonth(), kindOf: budgetId => kinds.get(budgetId),
-    linkedBudgetOf: linkedBudgetOfAccount,
-    convert: (amount, currency) => goalsStore.convertToPrimary(amount, currency, userCurrency.value)
-  })
-  transactionsStore.transactions.forEach(t => {
-    if (t.type === 'income') {
-      if (!scoped.countsIncome(t)) return
-      if (t.date.getMonth() !== now.getMonth() || t.date.getFullYear() !== now.getFullYear()) return
-      income += goalsStore.convertToPrimary(Math.abs(t.amount), t.currency, userCurrency.value)
-    } else if (t.type === 'expense') {
-      if (!scoped.countsExpense(t)) return
-      const amount = expenseAmountForDate(t, now, cardBillingFor.value(t.accountId))
-      expense += goalsStore.convertToPrimary(amount, t.currency, userCurrency.value)
-    }
-  })
-  return { income, expense }
-})
-const realMonthExpense = computed(() => realMonthTotals.value.expense)
-const realMonthSavings = computed(() => Math.max(realMonthTotals.value.income - realMonthTotals.value.expense, 0))
-
-const monthlyNeedsAmount = computed(() => (incomeInput.value * needsPercent.value) / 100)
-const monthlyWantsAmount = computed(() => (incomeInput.value * wantsPercent.value) / 100)
-const monthlySavingsAmount = computed(() => (incomeInput.value * savingsPercent.value) / 100)
-
-const isPercentSumValid = computed(() => {
-  return (needsPercent.value + wantsPercent.value + savingsPercent.value) === 100
-})
-
 onMounted(async () => {
+  focusSectionHeading()
   await goalsStore.fetchGoals()
   await goalsStore.loadBudgetSettings()
   await accountsStore.fetchAccounts()
   await transactionsStore.fetchCategories()
   await transactionsStore.fetchTransactions()
 
-  // Sincronizar inputs locales con store
-  incomeInput.value = goalsStore.budgetIncome
-  needsPercent.value = goalsStore.budgetNeedsPercent
-  wantsPercent.value = goalsStore.budgetWantsPercent
-  savingsPercent.value = goalsStore.budgetSavingsPercent
   Object.assign(categoryBudgetInputs, goalsStore.categoryBudgets)
-
-  renderBudgetChart()
-})
-
-// Listen to percent changes to rerender chart
-watch([needsPercent, wantsPercent, savingsPercent], () => {
-  renderBudgetChart()
 })
 
 // Methods
+// Same regional format as the rest of the app (es-CO); a missing currency falls back to the main one.
 const formatDate = (date: any) => {
   if (!date) return ''
-  const d = new Date(date)
-  return d.toLocaleDateString('es-ES', { year: 'numeric', month: 'short', day: 'numeric' })
+  return new Intl.DateTimeFormat('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(date))
 }
 
-const formatCurrency = (val: number, currency: string) => {
-  return new Intl.NumberFormat('es-ES', {
-    style: 'currency',
-    currency: currency || 'USD',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0
-  }).format(val)
-}
-
-// Compact form for tight spots (donut centre), e.g. "1,2 M US$".
-const formatCompactCurrency = (val: number, currency: string) => {
-  return new Intl.NumberFormat('es-ES', {
-    style: 'currency',
-    currency: currency || 'USD',
-    notation: 'compact',
-    maximumFractionDigits: 1
-  }).format(val)
-}
+const moneyFormat = (currency: string) => new Intl.NumberFormat('es-CO', {
+  style: 'currency',
+  currency: currency || userCurrency.value,
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 2
+})
+const formatCurrency = (val: number, currency: string) => moneyFormat(currency).format(val)
+const contributeCurrencySymbol = computed(() => {
+  const currency = selectedGoal.value?.currency || userCurrency.value
+  return moneyFormat(currency).formatToParts(0).find(part => part.type === 'currency')?.value ?? currency
+})
 
 const baselineCategoryReport = (categoryId: string) =>
   Object.hasOwn(baselineBudgetReport.value.categories, categoryId)
@@ -1229,12 +1252,12 @@ const baselineCategoryReport = (categoryId: string) =>
     : undefined
 const baselineCategoryAmount = (categoryId: string): number =>
   baselineCategoryReport(categoryId)?.monthlyAllocation.amount ?? 0
-// Spending this month, including amounts that cannot be converted yet for lack of a rate.
+// Spending in the shown month, including amounts that cannot be converted yet for lack of a rate.
 const baselineHasSpending = (categoryId: string): boolean => {
   const report = baselineCategoryReport(categoryId)
   return report?.monthlyAllocation.complete === false || baselineCategoryAmount(categoryId) > 0
 }
-// Only categories in use: a limit, spending this month, or just added from the picker.
+// Only categories in use: a limit, spending in the shown month, or just added from the picker.
 const baselineCategories = computed(() => visibleBaselineCategories({
   categories: expenseCategories.value,
   limits: categoryBudgetInputs,
@@ -1242,6 +1265,7 @@ const baselineCategories = computed(() => visibleBaselineCategories({
   addedIds: baselineAddedCategoryIds.value
 }))
 const baselineCategoryIds = computed(() => baselineCategories.value.map(category => category.id))
+// Suggestions guide setting up limits today, so they follow today's spending, not the shown month.
 const baselineSuggestedCategories = computed(() => suggestCategoriesBySpending({
   categories: expenseCategories.value,
   transactions: transactionsStore.transactions,
@@ -1304,6 +1328,18 @@ const closeMoveSheet = () => {
   moveSelectedIds.value = new Set()
   moveError.value = ''
 }
+// History navigation can leave a section while one of its sheets is open.
+watch(isSavingsSection, savings => {
+  if (savings) {
+    showBudgetModal.value = false
+    closeMoveSheet()
+  } else {
+    showCreateModal.value = false
+    showContributeModal.value = false
+  }
+})
+watch(isSavingsSection, focusSectionHeading, { flush: 'post' })
+
 const toggleMoveCandidate = (transactionId: string) => {
   const next = new Set(moveSelectedIds.value)
   if (next.has(transactionId)) next.delete(transactionId)
@@ -1515,7 +1551,13 @@ const handleSaveOperatingBudget = async () => {
 }
 
 const handleArchiveBudget = async (budgetId: string) => {
-  if (!confirm('¿Eliminar este presupuesto? Se conservarán sus asignaciones, historial y cuotas pendientes.')) return
+  const confirmed = await notifications.confirm({
+    title: '¿Eliminar este presupuesto?',
+    message: 'Se conservarán sus asignaciones, historial y cuotas pendientes.',
+    confirmLabel: 'Eliminar',
+    tone: 'danger'
+  })
+  if (!confirmed) return
   try {
     await goalsStore.archiveOperatingBudget(budgetId)
   } catch (error) {
@@ -1559,92 +1601,6 @@ const getDaysRemainingText = (targetDate: any) => {
   return `${diffDays} ${diffDays === 1 ? 'día' : 'días'} rest.`
 }
 
-// Sliders auto-balancing logic
-const adjustSliders = (changed: 'needs' | 'wants' | 'savings') => {
-  let needs = needsPercent.value
-  let wants = wantsPercent.value
-  let savings = savingsPercent.value
-
-  const sum = needs + wants + savings
-  const diff = sum - 100
-
-  if (diff !== 0) {
-    if (changed === 'needs') {
-      // Ajustar proporcionalmente los otros dos
-      const remainder = 100 - needs
-      if (remainder <= 0) {
-        wantsPercent.value = 0
-        savingsPercent.value = 0
-      } else {
-        const factor = wants + savings === 0 ? 0.5 : wants / (wants + savings)
-        wantsPercent.value = Math.round(remainder * factor)
-        savingsPercent.value = 100 - needs - wantsPercent.value
-      }
-    } else if (changed === 'wants') {
-      const remainder = 100 - wants
-      if (remainder <= 0) {
-        needsPercent.value = 0
-        savingsPercent.value = 0
-      } else {
-        const factor = needs + savings === 0 ? 0.5 : needs / (needs + savings)
-        needsPercent.value = Math.round(remainder * factor)
-        savingsPercent.value = 100 - wants - needsPercent.value
-      }
-    } else if (changed === 'savings') {
-      const remainder = 100 - savings
-      if (remainder <= 0) {
-        needsPercent.value = 0
-        wantsPercent.value = 0
-      } else {
-        const factor = needs + wants === 0 ? 0.5 : needs / (needs + wants)
-        needsPercent.value = Math.round(remainder * factor)
-        wantsPercent.value = 100 - savings - needsPercent.value
-      }
-    }
-  }
-}
-
-// Chart.js initialization
-const renderBudgetChart = () => {
-  if (budgetChart) budgetChart.destroy()
-  if (!budgetChartRef.value) return
-
-  const ctx = budgetChartRef.value.getContext('2d')
-  if (!ctx) return
-
-  budgetChart = new Chart(ctx, {
-    type: 'doughnut',
-    data: {
-      labels: ['Necesidades', 'Deseos', 'Ahorro'],
-      datasets: [{
-        data: [needsPercent.value, wantsPercent.value, savingsPercent.value],
-        backgroundColor: [
-          '#10b981', // emerald
-          '#8b5cf6', // violet
-          '#fbbf24'  // amber
-        ],
-        borderWidth: 1,
-        borderColor: '#080c14'
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          display: false
-        },
-        tooltip: {
-          callbacks: {
-            label: (context) => ` ${context.label}: ${context.raw}%`
-          }
-        }
-      },
-      cutout: '80%'
-    }
-  })
-}
-
 // Create new Goal
 const handleCreateGoal = async () => {
   if (!newGoalName.value || !newGoalTargetAmount.value || !newGoalTargetDate.value) return
@@ -1665,22 +1621,27 @@ const handleCreateGoal = async () => {
     newGoalName.value = ''
     newGoalTargetAmount.value = null
     newGoalCurrentAmount.value = 0
-    newGoalCurrency.value = 'USD'
+    newGoalCurrencyChoice.value = null
     newGoalTargetDate.value = ''
     newGoalLinkedAccountId.value = ''
   } catch (err) {
-    alert('Error al crear objetivo de ahorro')
+    notifications.error('No se pudo crear la meta de ahorro. Inténtalo de nuevo.')
   }
 }
 
 // Delete Goal
 const handleDeleteGoal = async (id: string) => {
-  if (confirm('¿Estás seguro de que deseas eliminar este objetivo?')) {
-    try {
-      await goalsStore.deleteGoal(id)
-    } catch (err) {
-      alert('Error al eliminar objetivo de ahorro')
-    }
+  const confirmed = await notifications.confirm({
+    title: '¿Eliminar esta meta?',
+    message: 'Esta acción no se puede deshacer. Tus cuentas y movimientos no cambian.',
+    confirmLabel: 'Eliminar',
+    tone: 'danger'
+  })
+  if (!confirmed) return
+  try {
+    await goalsStore.deleteGoal(id)
+  } catch (err) {
+    notifications.error('No se pudo eliminar la meta de ahorro. Inténtalo de nuevo.')
   }
 }
 
@@ -1706,16 +1667,22 @@ const handleContribute = async () => {
       if (!source || !target || getGoalProgressAmount(goal) === null ||
           !isSavingsGoalAccountLinkable(source, accountsStore.accounts, activeWorkspaceId.value, goal.currency) ||
           !canTransferBetweenAccounts(source, target, accountsStore.accounts)) {
-        alert('La cuenta vinculada o la cuenta de origen no están disponibles para esta transferencia.')
+        notifications.error('La cuenta vinculada o la cuenta de origen no están disponibles para esta transferencia.')
         return
       }
 
       if (source.balance < amount) {
         if (isPocketRelatedAccount(source)) {
-          alert('El saldo disponible de esta cuenta no alcanza para el aporte. No se registró ningún movimiento.')
+          notifications.error('El saldo disponible de esta cuenta no alcanza para el aporte. No se registró ningún movimiento.')
           return
         }
-        if (!confirm('El saldo de la cuenta es menor que el aporte. ¿Deseas continuar de todos modos?')) return
+        const confirmed = await notifications.confirm({
+          title: 'Saldo insuficiente',
+          message: 'El saldo de la cuenta es menor que el aporte. ¿Deseas continuar de todos modos?',
+          confirmLabel: 'Aportar igualmente',
+          tone: 'default'
+        })
+        if (!confirmed) return
       }
 
       await transactionsStore.addTransaction({
@@ -1730,36 +1697,38 @@ const handleContribute = async () => {
     }
 
     showContributeModal.value = false
-    alert(hasGoalAccountLink(goal)
+    notifications.success(hasGoalAccountLink(goal)
       ? '¡Aporte registrado como transferencia entre tus cuentas!'
       : '¡Aporte virtual registrado sin modificar los saldos de tus cuentas!')
   } catch (err) {
     console.error(err)
-    alert('Error al realizar el aporte de ahorro.')
+    notifications.error('No se pudo registrar el aporte. Inténtalo de nuevo.')
   }
 }
 
-// Save budget
-const saveBudget = async () => {
+// Save budget income
+const saveBudgetIncome = async (event: Event) => {
+  if (!canEditBudgetIncome.value) return
+  const contextKey = budgetIncomeContextKey.value
+  incomeSaveError.value = ''
+  if (!(event.target as HTMLInputElement).validity.valid) {
+    incomeSaveError.value = 'Ingresa un monto mayor o igual a 0.'
+    return
+  }
+  // Clearing the input still stores zero, just as with the original field.
   try {
-    await goalsStore.saveBudgetSettings({
-      budgetIncome: incomeInput.value,
-      budgetNeedsPercent: needsPercent.value,
-      budgetWantsPercent: wantsPercent.value,
-      budgetSavingsPercent: savingsPercent.value,
-      budgetAllocations: goalsStore.budgetAllocations,
-      categoryBudgets: goalsStore.categoryBudgets,
-      exchangeRates: goalsStore.exchangeRates
-    })
+    await goalsStore.saveBudgetIncome(Number(incomeInput.value))
   } catch (err) {
-    console.error('Error al guardar presupuesto:', err)
+    if (budgetIncomeContextKey.value !== contextKey) return
+    incomeSaveError.value = 'No se pudo guardar el ingreso. Revisa el monto e inténtalo de nuevo.'
+    console.error('Error al guardar el ingreso mensual estimado:', err)
   }
 }
 
 // Presupuesto por categoría
 const saveCategoryBudget = async (categoryId: string, rawValue: string) => {
   if (goalsStore.categoryBudgetCurrency.status !== 'confirmed') {
-    legacyCurrencyError.value = 'Confirma primero la moneda real de los límites heredados.'
+    legacyCurrencyError.value = 'Confirma primero la moneda de los límites por categoría.'
     return
   }
   const value = rawValue === '' ? null : Math.max(0, Number(rawValue))
@@ -1781,6 +1750,7 @@ const saveCategoryBudget = async (categoryId: string, rawValue: string) => {
     })
   } catch (err) {
     console.error('Error al guardar presupuesto de categoría:', err)
+    notifications.error(`No se pudo guardar el límite de ${categoryName(categoryId)}. Inténtalo de nuevo.`)
   }
 }
 
