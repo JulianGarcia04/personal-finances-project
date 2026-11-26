@@ -169,8 +169,7 @@
               </th>
               <th class="py-4 px-3">Detalles / Comercio</th>
               <th class="py-4 px-3">Cuenta</th>
-              <th class="py-4 px-3">Categoría</th>
-              <th class="py-4 px-3">Presupuesto</th>
+              <th class="py-4 px-3">Categoría / Presupuesto</th>
               <th class="py-4 px-3 whitespace-nowrap">Fecha</th>
               <th class="py-4 px-3 text-right">Monto</th>
               <th class="py-4 px-3 text-center w-24">Acciones</th>
@@ -193,7 +192,7 @@
                 />
               </td>
               <!-- Description -->
-              <td class="py-4 px-3 font-medium min-w-[10rem] max-w-[14rem] xl:max-w-[18rem] 2xl:max-w-md">
+              <td class="py-4 px-3 font-medium min-w-[10rem] max-w-[14rem] 2xl:max-w-md">
                 <div class="truncate" :title="tx.description">{{ tx.description }}</div>
                 <div v-if="tx.notes" class="text-[11px] text-text-muted mt-0.5 whitespace-pre-wrap break-words">{{ tx.notes }}</div>
                 <div v-if="tx.reversedBy" class="mt-1 text-[10px] font-semibold text-accent-amber">Liquidación revertida en Lynor Finanzas</div>
@@ -209,9 +208,9 @@
               <td class="py-4 px-3 text-text-secondary max-w-[10rem]">
                 <div class="truncate" :title="getAccountName(tx.accountId, tx.workspaceId)">{{ getAccountName(tx.accountId, tx.workspaceId) }}</div>
               </td>
-              <!-- Category -->
+              <!-- Category and budget -->
               <td class="py-4 px-3">
-                <span 
+                <span
                   v-if="getCategory(tx.categoryId)"
                   class="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap"
                   :style="{ backgroundColor: (getCategory(tx.categoryId)?.color || '#94a3b8') + '15', color: getCategory(tx.categoryId)?.color || '#94a3b8' }"
@@ -220,11 +219,11 @@
                   <span>{{ getCategory(tx.categoryId)?.name }}</span>
                 </span>
                 <span v-else class="text-text-muted text-xs">-</span>
-              </td>
-              <!-- Budget (expenses and income; "—" for the rest) -->
-              <td class="py-4 px-3 max-w-[11rem]" data-testid="budget-cell">
+                <!-- Budget (expenses and income; "—" for the rest). Zero intrinsic width so a long
+                     budget name truncates instead of widening the column. -->
                 <span
-                  :class="['block truncate text-xs', budgetOfTransaction(tx) === null ? 'text-text-muted' : 'text-text-secondary']"
+                  data-testid="budget-cell"
+                  :class="['mt-1 block w-0 min-w-full truncate text-[11px]', budgetOfTransaction(tx) === null ? 'text-text-muted' : 'text-text-secondary']"
                   :title="budgetLabelOf(tx)"
                 >{{ budgetLabelOf(tx) }}</span>
               </td>
@@ -278,7 +277,7 @@
               </td>
             </tr>
             <tr v-if="displayedTransactions.length === 0">
-              <td colspan="8" class="text-center py-12 text-text-muted text-sm">
+              <td colspan="7" class="text-center py-12 text-text-muted text-sm">
                 No hay transacciones registradas que coincidan con los filtros.
               </td>
             </tr>
