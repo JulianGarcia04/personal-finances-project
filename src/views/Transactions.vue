@@ -167,8 +167,10 @@
                   class="rounded border-border bg-slate-900/50 text-accent-emerald focus:ring-accent-emerald cursor-pointer"
                 />
               </th>
-              <th class="py-4 px-3">Detalles / Comercio</th>
-              <th class="py-4 px-3">Cuenta</th>
+              <!-- Description and account split the free width by percentage and their text
+                   truncates, so long names never make the table wider than its container. -->
+              <th class="py-4 px-3 w-[36%]">Detalles / Comercio</th>
+              <th class="py-4 px-3 w-[14%]">Cuenta</th>
               <th class="py-4 px-3">Categoría / Presupuesto</th>
               <th class="py-4 px-3 whitespace-nowrap">Fecha</th>
               <th class="py-4 px-3 text-right">Monto</th>
@@ -192,8 +194,8 @@
                 />
               </td>
               <!-- Description -->
-              <td class="py-4 px-3 font-medium min-w-[10rem] max-w-[14rem] 2xl:max-w-md">
-                <div class="truncate" :title="tx.description">{{ tx.description }}</div>
+              <td class="py-4 px-3 font-medium min-w-[10rem]">
+                <div class="w-0 min-w-full truncate" :title="tx.description">{{ tx.description }}</div>
                 <div v-if="tx.notes" class="text-[11px] text-text-muted mt-0.5 whitespace-pre-wrap break-words">{{ tx.notes }}</div>
                 <div v-if="tx.reversedBy" class="mt-1 text-[10px] font-semibold text-accent-amber">Liquidación revertida en Lynor Finanzas</div>
                 <div v-if="tx.settlementType === 'reversal'" class="mt-1 text-[10px] font-semibold text-accent-amber">Ajuste contable · sin movimiento bancario</div>
@@ -205,8 +207,8 @@
                 </div>
               </td>
               <!-- Account -->
-              <td class="py-4 px-3 text-text-secondary max-w-[10rem]">
-                <div class="truncate" :title="getAccountName(tx.accountId, tx.workspaceId)">{{ getAccountName(tx.accountId, tx.workspaceId) }}</div>
+              <td class="py-4 px-3 text-text-secondary min-w-[7rem] max-w-[10rem]">
+                <div class="w-0 min-w-full truncate" :title="getAccountName(tx.accountId, tx.workspaceId)">{{ getAccountName(tx.accountId, tx.workspaceId) }}</div>
               </td>
               <!-- Category and budget -->
               <td class="py-4 px-3">
