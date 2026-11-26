@@ -264,3 +264,13 @@ Selected labels (verbatim): “Una sola PR (recomendado)” and “Reglas, Funct
 **L71 — Firestore rules released:** `firebase deploy --project vault-41b34 --only firestore:rules --non-interactive` from clean `df5ba29`: compiled and released. The compiler's five warnings sit on lines outside this branch's rule hunks (pre-existing). Functions deploy running; PR #4 preview build pending before the merge.
 
 **L72 — Functions deployed:** `firebase deploy --project vault-41b34 --only functions --non-interactive` exit 0: predeploy build passed and all nine functions updated (`bridgeSettlement`, `saveUserApiKey`, `inviteToWorkspace`, `chatWithAgent`, `parseStatement`, `deleteAccount`, `notifyBudgetThreshold`, `syncTransactionEmbedding`, `importPocketStatement`); no deletions. PR #4 checks passed (`build_and_preview`, Deploy Preview). Next: merge PR #4 so the merge workflow deploys Hosting from `main`.
+
+**L73 — P1 released and verified live (2026-11-26):** PR #4 merged into `main` as `27a491b` (merge commit; branch kept). `Deploy to Firebase Hosting on merge` run 45830042183 succeeded. Both `app.finances.lynor.cloud` and `vault-41b34.web.app` moved from `index-DkuQbAKY.js` to `index-BGFYiiRj.js`; the live entry contains "Cargando Lynor Finanzas" and no "Bóveda"; live chunks contain "Volver al mes actual" (Dashboard), "Mes anterior" (MonthPicker) and "Editar selección" (Transactions). Release order kept: rules (L71) → functions (L72) → Hosting. No login or user data was used; no manual browser check of the signed-in app. This entry is local; it lands with the next change to `main`.
+
+**L74 — user, verbatim (2026-11-26):** screenshot of the Transactions table cut off at the amount column, with:
+
+> hay un daño en la UI
+>
+> hay un scroll horizontal en el contenedor de los items de los movimientos
+
+Cause: T7c's separate "Presupuesto" column made the desktop table eight columns; at the 1152 px content width it overflowed by 143–157 px and hid the amounts. Fix on `fix/transactions-table-overflow` (from `main` `27a491b`): the budget line sits under the category in the same cell with zero intrinsic width (`w-0 min-w-full truncate`), header "Categoría / Presupuesto", `colspan="7"`; the details column keeps `max-w-[14rem]` until `2xl`. RED: the revised test counted 8 header columns instead of 7. GREEN 34/34, suite 632/632, build 0 warnings, diff clean. Headless Chrome with the built CSS and the screenshot's rows: overflow 0 at 1366/1440/1920 px (before: 143/157 px at 1440/1920); 1280 px still overflows 41 px, which predates P1 (same seven columns). Mobile cards unchanged. Not published yet.
