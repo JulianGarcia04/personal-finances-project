@@ -660,10 +660,15 @@ test('S9: the budget column shows the budget of expenses and income and "—" fo
   assert.equal(label(false)({ type: 'expense', budgetId: 'viaje' }), '…')
   assert.equal(label(false)({ type: 'expense' }), 'Presupuesto mensual base')
 
-  assert.match(template, /<th[^>]*>Presupuesto<\/th>/)
-  assert.match(template, /data-testid="budget-cell"[\s\S]{0,300}budgetLabelOf\(tx\)/)
+  // The budget sits under the category in the same column, so the desktop table keeps the seven
+  // columns that fit without a horizontal scroll, and the budget line can't widen that column.
+  const desktopTable = template.slice(template.indexOf('<table'), template.indexOf('</table>'))
+  assert.equal(desktopTable.match(/<th\b/g)?.length, 7)
+  assert.match(desktopTable, /<th[^>]*>Categoría \/ Presupuesto<\/th>/)
+  assert.doesNotMatch(desktopTable, /<th[^>]*>Presupuesto<\/th>/)
+  assert.match(desktopTable, /<!-- Category and budget -->[\s\S]{0,1200}data-testid="budget-cell"[^>]*class="[^"]*\bw-0 min-w-full truncate\b[\s\S]{0,300}budgetLabelOf\(tx\)/)
   assert.match(template, /v-if="budgetOfTransaction\(tx\) !== null"\s+data-testid="budget-badge"[\s\S]{0,600}budgetLabelOf\(tx\)/)
-  assert.match(template, /colspan="8"/)
+  assert.match(desktopTable, /colspan="7"/)
 })
 
 test('S9: the budget filter offers every budget, starting with the base monthly budget', () => {
