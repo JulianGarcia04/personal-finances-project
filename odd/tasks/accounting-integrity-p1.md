@@ -274,3 +274,19 @@ Selected labels (verbatim): “Una sola PR (recomendado)” and “Reglas, Funct
 > hay un scroll horizontal en el contenedor de los items de los movimientos
 
 Cause: T7c's separate "Presupuesto" column made the desktop table eight columns; at the 1152 px content width it overflowed by 143–157 px and hid the amounts. Fix on `fix/transactions-table-overflow` (from `main` `27a491b`): the budget line sits under the category in the same cell with zero intrinsic width (`w-0 min-w-full truncate`), header "Categoría / Presupuesto", `colspan="7"`; the details column keeps `max-w-[14rem]` until `2xl`. RED: the revised test counted 8 header columns instead of 7. GREEN 34/34, suite 632/632, build 0 warnings, diff clean. Headless Chrome with the built CSS and the screenshot's rows: overflow 0 at 1366/1440/1920 px (before: 143/157 px at 1440/1920); 1280 px still overflows 41 px, which predates P1 (same seven columns). Mobile cards unchanged. Not published yet.
+
+**L75 — Table fix released (2026-11-26):** User chose “Sí: push, PR y merge (recomendado)”. PR #5 checks passed and it merged as `289767e`; the Hosting run 45832932234 succeeded. Both domains serve `index-C-Roi3uX.js` with `Transactions-D_TcVdao.js`, which contains the "Categoría / Presupuesto" header and the non-widening budget line. No signed-in browser check. This entry is local; it lands with the next change to `main`.
+
+**L76 — user, verbatim (2026-11-26):** screenshot of the old eight-column table, then:
+
+> ya arreglaste el tema del scroll
+>
+> El problema sigue
+
+> abre con chrome-devtool-mcp
+>
+> https://app.finances.lynor.cloud/transactions
+>
+> y valida porque sigo viendolo igual
+
+Finding: the screenshot showed the pre-`289767e` bundle (a separate "Presupuesto" header); `index.html` is served with `cache-control: max-age=3600`. Signed in by the user in the DevTools Chrome, the live page loaded `Transactions-D_TcVdao.js` (seven columns), yet the container still scrolled: at 1920 px the table's min-content was 1150.83 px in a 1150 px container (a 6 px scrollbar, 1 px of scroll), and 84.39 px at 1280 px. Cause: the description and account text still set their columns' intrinsic width, so real data (a 314 px description, the "Regalos y compromisos" badge) left no slack; L74's synthetic rows hid it. Fix on `fix/transactions-table-fit`: description and account text use `w-0 min-w-full truncate`; their headers take `w-[36%]`/`w-[14%]`; the description cell drops `max-w-[14rem] 2xl:max-w-md` (at 1440 px it sent the leftover width to the amount column) and keeps `min-w-[10rem]`; the account cell gets `min-w-[7rem]`. RED: the new layout test found no `w-[36%]` header. GREEN 35/35, suite 633/633, build 0 warnings; built CSS has the three new classes. Same classes and rules applied to the live signed-in page: scroll 0 at 1280/1366/1920 px (1440 px with equivalent inline styles), columns at 1920 px 45/349/149/202/148/129/128 versus 45/338/160/202/148/129/128 before. Not published yet.

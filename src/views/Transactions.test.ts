@@ -671,6 +671,21 @@ test('S9: the budget column shows the budget of expenses and income and "—" fo
   assert.match(desktopTable, /colspan="7"/)
 })
 
+test('the desktop table width does not depend on how long a description or account name is', () => {
+  // Measured on production data: a 314px description made the table 0.83px wider than its
+  // 1150px container at 1920px, and 84px wider at 1280px, so the container always scrolled.
+  const desktopTable = template.slice(template.indexOf('<table'), template.indexOf('</table>'))
+  // Description and account split the free width by percentage instead of by text length.
+  assert.match(desktopTable, /<th class="[^"]*\bw-\[36%\][^"]*">Detalles \/ Comercio<\/th>/)
+  assert.match(desktopTable, /<th class="[^"]*\bw-\[14%\][^"]*">Cuenta<\/th>/)
+  // Their text truncates instead of widening the column, down to a readable minimum.
+  assert.match(desktopTable, /<!-- Description -->\s*<td class="[^"]*\bmin-w-\[10rem\][^"]*">\s*<div class="w-0 min-w-full truncate" :title="tx\.description">/)
+  assert.match(desktopTable, /<!-- Account -->\s*<td class="[^"]*\bmin-w-\[7rem\][^"]*">\s*<div class="w-0 min-w-full truncate" :title="getAccountName/)
+  // A max width on the description cell sent the leftover width to the amount column instead.
+  const descriptionCell = desktopTable.match(/<!-- Description -->\s*<td class="([^"]*)"/)?.[1] ?? ''
+  assert.doesNotMatch(descriptionCell, /max-w-/)
+})
+
 test('S9: the budget filter offers every budget, starting with the base monthly budget', () => {
   assert.match(template, /id="tx-filter-budget"[\s\S]{0,200}v-model="filters\.budgetId"/)
   assert.match(template, /<option value="">Todos los presupuestos<\/option>/)
